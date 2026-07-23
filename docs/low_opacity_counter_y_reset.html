@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>El low_opacity_counter y por qué opacity_reset lo neutralizaba</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  ol{margin:.5em 0;padding-left:1.3em} ol li{margin:.4em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700} .hl3{color:var(--accent);font-weight:700}
+  .center{text-align:center}
+  figcaption{color:var(--muted);font-size:.85rem;text-align:center;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>El <span class="hl3">low_opacity_counter</span> y por qué <span class="hl">opacity_reset</span> lo neutralizaba</h1>
+<p class="sub">Anatomía del bug que dejó la poda en <code>PRUNE=0</code> durante todo el run14. El repo había reemplazado la poda inmediata del 2DGS original por un <b>filtro de "muerte sostenida"</b> basado en un contador. La intención era buena; la interacción con <code>opacity_reset</code> lo volvió <b>código muerto</b>. Aquí, paso a paso y con un dibujo, por qué.</p>
+
+<div class="note warn-box"><b>Estado del código.</b> Este mecanismo es el que corrió en <b>run14</b>. En <b>run15</b> ya está <b>eliminado</b> y sustituido por la poda inmediata del original (<code>opacity &lt; min_opacity</code> cada densify). Este doc explica <b>por qué fallaba</b> el diseño anterior. Docs hermanos: <code>parametros_debug.html</code> (el log <code>[DENSIFY]</code>/<code>[RESET]</code> que lo destapó), <code>densificacion_clasica_antes_de_mcmc.html</code> (rol del reset), <code>clone_split_logica_huecos.html</code>.</p></div>
+
+<h2>1. Qué pretendía hacer el contador</h2>
+<p>La poda normal del 2DGS elimina un splat <b>en cuanto</b> su opacidad cae por debajo del umbral de cull (<code>min_opacity = opacity_cull = 0.005</code>). El repo quiso ser más conservador: <i>«no podes un splat solo porque esté flojo un instante; pódalo si lleva <b>mucho tiempo</b> muerto»</i>. Para eso introdujo un <b>contador por splat</b>, <code>low_opacity_counter</code>, que cuenta <b>cuántas evaluaciones de densificación seguidas</b> lleva ese splat por debajo del cull. Solo se poda si el contador supera <code>N_sustain = 50</code>.</p>
+
+<div class="eq">podar splat ⟺ lleva &gt; 50 densifies <b>consecutivos</b> con opacidad &lt; 0.005</div>
+
+<p>La idea de fondo: un splat que parpadea bajo el umbral por azar del entrenamiento se salva; solo muere el que está <b>sostenidamente</b> muerto. El contador se evalúa <b>una vez por llamada a <code>densify_and_prune</code></b>, es decir cada <code>densification_interval = 100</code> iteraciones.</p>
+
+<h2>2. El mecanismo, en 3 líneas</h2>
+<p>Este era el corazón del prune (run14, <code>gaussian_model.py</code>):</p>
+<pre><code>alpha = self.get_opacity.squeeze()
+low_alpha = alpha &lt; min_opacity                    # ¿está por debajo del cull AHORA?
+
+self.low_opacity_counter[low_alpha]  += 1          # (A) los muertos: +1
+self.low_opacity_counter[~low_alpha]  = 0          # (B) los vivos: REINICIAR a 0
+
+N_sustain = 50
+prune_alpha_mask = self.low_opacity_counter &gt; N_sustain   # podar si aguantó &gt;50</code></pre>
+
+<div class="grid2">
+  <div class="card card2"><span class="tag ok">línea (A)</span> Si la opacidad está <b>por debajo</b> de 0.005, el contador de ese splat <b>sube en 1</b>. Acumula "tiempo muerto".</div>
+  <div class="card card2"><span class="tag warn">línea (B)</span> Si la opacidad está <b>en o por encima</b> de 0.005, el contador se <b>pone a CERO</b>. Cualquier signo de vida borra todo el historial acumulado.</div>
+</div>
+
+<p><b>La línea (B) es la trampa.</b> El contador no decrece poco a poco: se <b>resetea de golpe a 0</b> en cuanto el splat asoma por encima del umbral aunque sea una vez. Esto, por sí solo, es razonable. El problema aparece cuando <b>algo sube la opacidad de TODA la nube a la vez</b>.</p>
+
+<h2>3. Qué hace <code>opacity_reset</code></h2>
+<p><code>reset_opacity</code> (en run14, cada <code>opacity_reset_interval = 3000</code> iters) hace literalmente esto:</p>
+<pre><code>opacities_new = inverse_sigmoid( min(opacidad_actual, 0.01) )   # techo de 0.01 a TODOS</code></pre>
+<p>Es decir: baja a <code>0.01</code> a todos los que estuvieran por encima, y deja igual a los que ya estaban por debajo. El efecto neto para el contador es demoledor:</p>
+
+<div class="eq">tras el reset, casi toda la nube queda en opacidad = <span class="hl2">0.01</span></div>
+
+<p>Y aquí está el choque de números:</p>
+<div class="card" style="border-color:#a33">
+<div class="center" style="font-family:'JetBrains Mono',monospace;font-size:1.05rem">
+opacidad tras reset = <span class="hl2">0.010</span> &nbsp;&gt;&nbsp; cull = <span class="hl">0.005</span>
+</div>
+<p class="center" style="margin:.6em 0 0">→ <code>low_alpha = (0.010 &lt; 0.005) = <b>False</b></code> para (casi) todos<br>
+→ se ejecuta la línea (B): <code>low_opacity_counter[~low_alpha] = 0</code><br>
+→ <span class="hl">el contador de toda la nube se borra a 0</span></p>
+</div>
+
+<p>El reset sube la opacidad <b>por encima</b> del cull, así que el mecanismo lo interpreta como «todos vivos» y <b>reinicia el reloj de la muerte para toda la nube</b>, cada 3000 iteraciones.</p>
+
+<h2>4. La aritmética que lo mata</h2>
+<p>¿Cuánto puede acumular el contador entre dos reinicios? El reset llega cada 3000 iters; el contador sube cada 100 iters:</p>
+<div class="eq">3000 iters ÷ 100 (densification_interval) = <b>30 densifies</b> entre resets &nbsp;&nbsp;⟶&nbsp;&nbsp; tope del contador ≈ <span class="hl">30</span></div>
+<p>Pero el umbral para podar es <code>N_sustain = 50</code>. Y <b>30 &lt; 50</b>. El contador <b>nunca</b> llega a 50 porque el reset lo borra cuando va por ~30. Resultado:</p>
+
+<div class="eq" style="color:var(--danger);font-size:1.1rem"><code>prune_alpha_mask = (counter &gt; 50)</code> es <b>SIEMPRE False</b> → <code>PRUNE total = 0</code></div>
+
+<figure>
+<svg viewBox="0 0 860 330" role="img" aria-label="El contador sube en diente de sierra hasta ~30 y el reset lo borra antes de cruzar el umbral 50">
+  <rect x="0" y="0" width="860" height="330" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+  <text x="430" y="26" fill="#e6e8ee" font-size="14" text-anchor="middle">El contador en <tspan fill="#7ee787">diente de sierra</tspan>: cada reset lo borra antes de cruzar el umbral de poda</text>
+
+  <!-- ejes -->
+  <line x1="70" y1="270" x2="800" y2="270" stroke="#3a4150" stroke-width="1.5"/>
+  <line x1="70" y1="60" x2="70" y2="270" stroke="#3a4150" stroke-width="1.5"/>
+  <text x="40" y="65" fill="#9aa3b2" font-size="11" text-anchor="end">50</text>
+  <text x="40" y="148" fill="#9aa3b2" font-size="11" text-anchor="end">30</text>
+  <text x="40" y="274" fill="#9aa3b2" font-size="11" text-anchor="end">0</text>
+  <text x="55" y="48" fill="#9aa3b2" font-size="11" text-anchor="end">counter</text>
+  <text x="800" y="290" fill="#9aa3b2" font-size="11" text-anchor="end">iteración →</text>
+
+  <!-- umbral N_sustain=50 -->
+  <line x1="70" y1="60" x2="800" y2="60" stroke="#ff7b72" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="500" y="52" fill="#ff7b72" font-size="12">N_sustain = 50  →  umbral de poda · NUNCA se cruza</text>
+
+  <!-- zona alcanzable -->
+  <rect x="70" y="144" width="730" height="126" fill="#10331f" fill-opacity="0.35"/>
+  <text x="120" y="200" fill="#7ee787" font-size="11">zona que el contador SÍ alcanza (tope ≈30)</text>
+
+  <!-- diente de sierra: sube a 30, reset a 0, repite -->
+  <polyline points="70,270 216,144 216,270 362,144 362,270 508,144 508,270 654,144 654,270 800,144"
+            fill="none" stroke="#6ea8fe" stroke-width="2.5"/>
+
+  <!-- marcas de reset -->
+  <g font-size="10" fill="#ffb454" text-anchor="middle">
+    <line x1="216" y1="60" x2="216" y2="270" stroke="#ffb454" stroke-width="1" stroke-dasharray="3 4"/>
+    <line x1="362" y1="60" x2="362" y2="270" stroke="#ffb454" stroke-width="1" stroke-dasharray="3 4"/>
+    <line x1="508" y1="60" x2="508" y2="270" stroke="#ffb454" stroke-width="1" stroke-dasharray="3 4"/>
+    <line x1="654" y1="60" x2="654" y2="270" stroke="#ffb454" stroke-width="1" stroke-dasharray="3 4"/>
+    <text x="216" y="285">reset 3k</text>
+    <text x="362" y="285">reset 6k</text>
+    <text x="508" y="285">reset 9k</text>
+    <text x="654" y="285">reset 12k</text>
+    <text x="800" y="300" fill="#9aa3b2">15k: densify OFF</text>
+  </g>
+  <text x="430" y="318" fill="#9aa3b2" font-size="11" text-anchor="middle">cada subida = +1 por densify (cada 100 iters) · cada caída vertical = reset borra el contador</text>
+</svg>
+<figcaption>El contador acumula ~30 entre resets y se desploma a 0. La línea roja (50) queda siempre por encima de los picos → la máscara de poda nunca se activa.</figcaption>
+</figure>
+
+<div class="note danger-box"><b>Doble golpe del reset.</b> Aunque subieras <code>N_sustain</code> no ayudaría: cada reset <b>vacía</b> el contador, así que da igual el umbral — entre resets solo caben 30 cuentas. Y tras el último reset (iter 12000) solo quedan 3000 iters hasta que la densificación se apaga del todo (<code>densify_until=15000</code>) = otras 30 cuentas. <b>El contador no llega a 50 en ningún tramo del run.</b></p></div>
+
+<h2>5. La consecuencia medida en el log de run14</h2>
+<p>Con la poda inerte, nada frena el crecimiento ni recicla los splats muertos. El log <code>[DENSIFY]</code> lo muestra crudo:</p>
+<table>
+  <tr><th>iter</th><th>N (splats)</th><th><code>opac&lt;0.005</code> (muertos)</th><th>% muerto</th><th>PRUNE</th></tr>
+  <tr><td>3600</td><td>2.90 M</td><td>282 k</td><td>9.7%</td><td><span class="hl">0</span></td></tr>
+  <tr><td>9000</td><td>8.50 M</td><td>1.82 M</td><td>21%</td><td><span class="hl">0</span></td></tr>
+  <tr><td>14900</td><td>13.91 M</td><td><b>4.37 M</b></td><td><b>31%</b></td><td><span class="hl">0</span></td></tr>
+</table>
+<p>Los splats muertos (<code>opac&lt;0.005</code>) se acumulan sin parar — <b>4.37 millones, el 31% de la nube</b> — pero jamás se eliminan. Son lastre transparente que ocupa memoria y, sobre todo, <b>no se reciclan</b> hacia donde harían falta (el fondo). Mientras tanto, el original los habría podado cada densify, liberando capacidad para reposicionar al fondo.</p>
+
+<h2>6. Por qué la poda inmediata (run15) sí convive con el reset</h2>
+<p>El fix vuelve al criterio del original: <b>sin contador, sin "sostenido"</b>.</p>
+<pre><code>prune_mask = (self.get_opacity &lt; min_opacity).squeeze()        # poda AHORA, cada densify
+if max_screen_size:
+    big_points_vs = self.max_radii2D &gt; max_screen_size          # grande en pantalla
+    big_points_ws = self.get_scaling.max(dim=1).values &gt; 0.1*extent   # grande en mundo
+    prune_mask = prune_mask | big_points_vs | big_points_ws</code></pre>
+<p>¿No vuelve a chocar con el reset? <b>No</b>, y por una razón limpia:</p>
+<ul>
+  <li>Justo <b>después</b> de un reset, todos están a 0.01 &gt; 0.005 → <code>prune_mask</code> no toca a nadie. <span class="hl2">El reset y la poda inmediata no se pisan.</span></li>
+  <li>En los ~3000 iters siguientes, los splats que de verdad están muertos <b>vuelven a caer</b> por debajo de 0.005 con el entrenamiento → en el siguiente densify se podan <b>de inmediato</b>, sin esperar 50 cuentas que el reset nunca dejaría completar.</li>
+</ul>
+<p>El reset y la poda inmediata forman el <b>ciclo nativo</b> del 2DGS: el reset baja a todos a una opacidad pequeña y obliga a cada splat a "ganarse" su opacidad de nuevo vía gradiente; los que no la recuperan caen bajo el cull y la poda los retira. El contador rompía ese ciclo porque exigía una permanencia (&gt;50 densifies) que el propio reset hacía imposible.</p>
+
+<div class="note ok-box"><b>Resumen en una frase.</b> <code>opacity_reset</code> sube la opacidad de toda la nube por encima del cull cada 3000 iters; el <code>low_opacity_counter</code> interpreta eso como «todos vivos» y se reinicia, así que <b>nunca acumula los 50 densifies</b> que necesitaba para podar → poda muerta → 31% de basura transparente. La poda inmediata no cuenta tiempo, así que el reset no la puede sabotear.</p></div>
+
+<p class="meta center" style="margin-top:40px">Doc del proyecto 2DGS→Beta Splatting · diagnóstico run14 → fix run15 · 2026-06-16.</p>
+
+</div>
+</body>
+</html>

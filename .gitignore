@@ -1,0 +1,19 @@
+*.pyc
+.vscode
+output
+build
+data
+datasets
+*.ply
+**/PKG-INFO
+# submodules
+**__pycache__**
+*.png
+*.out
+eval
+*.npz
+**/tmp
+CLAUDE.md
+output/m360/cpsh_results.sh
+logs/cpsh.sh
+logs

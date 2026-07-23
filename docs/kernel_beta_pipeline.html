@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline del kernel Beta en 2DGS — código + ecuaciones</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:1020px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:1rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto;display:block;margin:8px auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700} .hl3{color:var(--accent);font-weight:700}
+  .center{text-align:center}
+  .big{font-size:1.3rem;font-weight:700}
+  .figcap{color:var(--muted);font-size:.85rem;text-align:center;margin:2px 0 14px}
+  .step{display:inline-block;font-size:.78rem;font-weight:700;background:#10131b;border:1px solid var(--line);
+    border-radius:20px;padding:3px 11px;margin-right:8px;color:var(--accent)}
+  .tag{display:inline-block;font-size:.72rem;padding:2px 8px;border-radius:20px;border:1px solid var(--line);margin-left:6px;vertical-align:middle}
+  .tag.cuda{background:#101a22;color:var(--accent);border-color:#264055}
+  .tag.py{background:#0f1f14;color:var(--accent2);border-color:#274a2f}
+  .tag.bug{background:#2a1416;color:var(--danger);border-color:#5a2a2a}
+  .fp{color:var(--muted);font-size:.8rem;font-family:"JetBrains Mono",monospace}
+  .riskhi{color:var(--danger);font-weight:700}
+  .riskmd{color:var(--warn);font-weight:700}
+  .risklo{color:var(--accent2);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Pipeline del kernel <span class="hl2">Beta</span> en 2DGS</h1>
+<p class="sub">Recorrido <b>ordenado y autocontenido</b> de cada punto del código donde interviene el parámetro <code>β</code> (Deformable Beta Splatting portado sobre esta base 2DGS), con el <b>fragmento real</b> (<span class="fp">archivo:línea</span>), su <b>explicación</b> y su <b>ecuación matemática</b>. Al final, una sección de <span class="hl3">palancas del kernel aún sin explorar</span> para decidir la próxima modificación.</p>
+
+<div class="note"><b>Todo verificado contra el código en su estado actual</b> (no estimado): <code>scene/gaussian_model.py</code>, <code>gaussian_renderer/__init__.py</code>, <code>train.py</code>, <code>arguments/__init__.py</code> y el rasterizer CUDA <code>submodules/diff-surfel-rasterization/cuda_rasterizer/{forward.cu, backward.cu}</code>. Las líneas citadas son las reales a fecha 2026-06-23.</p></div>
+
+<h2>0 · La idea en una ecuación</h2>
+<p>En 2DGS clásico, la opacidad de un splat sobre un píxel decae con una <b>gaussiana</b> de la distancia de Mahalanobis al cuadrado <code>ρ</code>. El kernel Beta sustituye esa gaussiana por una <b>potencia con exponente aprendible <code>β</code> por splat</b>:</p>
+
+<div class="grid2">
+  <div class="card"><b>2DGS clásico (gaussiana)</b>
+    <div class="eq">α = opa · exp(−½ρ)</div>
+    <p class="meta">Cola infinita (nunca llega a 0). Forma fija. <code>forward.cu:397,412</code> (ahora comentado como <code>OLD CODE</code>).</p>
+  </div>
+  <div class="card ok-box" style="border-left:3px solid var(--accent2)"><b>Beta Splatting</b>
+    <div class="eq">α = opa · (1 − ρ)<sup>β</sup></div>
+    <p class="meta"><b>Soporte compacto</b> (vale 0 exacto en ρ≥1). <code>β</code> deforma la curva: <code>β</code> grande = pico estrecho casi-gaussiano; <code>β</code> pequeño = meseta plana que cubre todo el disco. <code>forward.cu:405,416</code>.</p>
+  </div>
+</div>
+
+<p>Comparación visual del kernel <code>(1−ρ)<sup>β</sup></code> según <code>β</code> frente a la gaussiana:</p>
+<svg viewBox="0 0 720 280" role="img" aria-label="Curvas del kernel beta">
+  <!-- ejes -->
+  <line x1="70" y1="240" x2="690" y2="240" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="70" y1="240" x2="70" y2="30" stroke="#2a2f3c" stroke-width="1.5"/>
+  <text x="380" y="270" fill="#9aa3b2" font-size="13" text-anchor="middle">ρ  (distancia² normalizada)</text>
+  <text x="34" y="135" fill="#9aa3b2" font-size="13" text-anchor="middle" transform="rotate(-90 34 135)">kernel</text>
+  <text x="64" y="244" fill="#9aa3b2" font-size="11" text-anchor="end">0</text>
+  <text x="64" y="40"  fill="#9aa3b2" font-size="11" text-anchor="end">1</text>
+  <text x="664" y="256" fill="#9aa3b2" font-size="11" text-anchor="middle">1</text>
+  <!-- gaussiana exp(-0.5*rho) sobre rho in [0,1], escalada a ancho 620 -->
+  <path d="M70,40 C 200,70 330,120 450,158 C 540,186 620,205 690,217" fill="none" stroke="#ff7b72" stroke-width="2.2" stroke-dasharray="6 4"/>
+  <!-- beta = 4 (pico) -->
+  <path d="M70,40 C 150,95 230,150 330,195 C 430,228 540,238 690,240" fill="none" stroke="#6ea8fe" stroke-width="2.2"/>
+  <!-- beta = 1 (lineal-ish, (1-rho)^1) -->
+  <path d="M70,40 L690,240" fill="none" stroke="#7ee787" stroke-width="2.2"/>
+  <!-- beta = 0.13 (meseta plana) -->
+  <path d="M70,40 C 250,55 430,70 560,95 C 620,110 660,150 690,240" fill="none" stroke="#ffb454" stroke-width="2.2"/>
+  <!-- leyenda -->
+  <g font-size="12">
+    <rect x="470" y="40" width="14" height="3" fill="#ff7b72"/><text x="490" y="46" fill="#e6e8ee">gaussiana exp(−½ρ)</text>
+    <rect x="470" y="60" width="14" height="3" fill="#6ea8fe"/><text x="490" y="66" fill="#e6e8ee">β = 4 (pico)</text>
+    <rect x="470" y="80" width="14" height="3" fill="#7ee787"/><text x="490" y="86" fill="#e6e8ee">β = 1 (lineal)</text>
+    <rect x="470" y="100" width="14" height="3" fill="#ffb454"/><text x="490" y="106" fill="#e6e8ee">β ≈ 0.13 (meseta)</text>
+  </g>
+</svg>
+<p class="figcap">Curvas esquemáticas. Clave: con <code>β</code> bajo (naranja, el valor al que converge el entrenamiento) el kernel es casi <b>plano</b> — cubre el disco entero con opacidad casi uniforme y cae a plomo en el borde. Con <code>β</code> alto (azul) concentra la masa en el centro como la gaussiana pero con corte limpio.</p>
+
+<h2>El pipeline, paso a paso</h2>
+<svg viewBox="0 0 980 120" role="img" aria-label="Diagrama del pipeline beta">
+  <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#6ea8fe"/></marker></defs>
+  <g font-size="12" text-anchor="middle">
+    <rect x="10"  y="40" width="120" height="44" rx="8" fill="#0f1f14" stroke="#274a2f"/><text x="70"  y="60" fill="#7ee787">1 · init</text><text x="70" y="76" fill="#9aa3b2" font-size="10">_beta = 0</text>
+    <rect x="150" y="40" width="120" height="44" rx="8" fill="#0f1f14" stroke="#274a2f"/><text x="210" y="60" fill="#7ee787">2 · activación</text><text x="210" y="76" fill="#9aa3b2" font-size="10">4·exp(b)</text>
+    <rect x="290" y="40" width="120" height="44" rx="8" fill="#0f1f14" stroke="#274a2f"/><text x="350" y="60" fill="#7ee787">3 · render</text><text x="350" y="76" fill="#9aa3b2" font-size="10">→ rasterizer</text>
+    <rect x="430" y="40" width="120" height="44" rx="8" fill="#101a22" stroke="#264055"/><text x="490" y="60" fill="#6ea8fe">4 · forward</text><text x="490" y="76" fill="#9aa3b2" font-size="10">(1−ρ)^β</text>
+    <rect x="570" y="40" width="120" height="44" rx="8" fill="#101a22" stroke="#264055"/><text x="630" y="60" fill="#6ea8fe">5 · backward</text><text x="630" y="76" fill="#9aa3b2" font-size="10">∂α/∂β, ∂α/∂ρ</text>
+    <rect x="710" y="40" width="120" height="44" rx="8" fill="#0f1f14" stroke="#274a2f"/><text x="770" y="60" fill="#7ee787">6 · optim+clamp</text><text x="770" y="76" fill="#9aa3b2" font-size="10">Adam, [−4,2]</text>
+    <rect x="850" y="40" width="120" height="44" rx="8" fill="#0f1f14" stroke="#274a2f"/><text x="910" y="60" fill="#7ee787">7 · densify</text><text x="910" y="76" fill="#9aa3b2" font-size="10">split −logN…</text>
+    <line x1="130" y1="62" x2="150" y2="62" stroke="#6ea8fe" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="270" y1="62" x2="290" y2="62" stroke="#6ea8fe" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="410" y1="62" x2="430" y2="62" stroke="#6ea8fe" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="550" y1="62" x2="570" y2="62" stroke="#6ea8fe" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="690" y1="62" x2="710" y2="62" stroke="#6ea8fe" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="830" y1="62" x2="850" y2="62" stroke="#6ea8fe" stroke-width="1.5" marker-end="url(#ar)"/>
+  </g>
+</svg>
+<p class="figcap">Pasos 1-2-6-7 en Python (<span class="tag py">PY</span>), 4-5 en CUDA (<span class="tag cuda">CUDA</span>), 3 es el puente.</p>
+
+<!-- ───────────────────────────── 1 ───────────────────────────── -->
+<h2><span class="step">1</span>Inicialización del parámetro <span class="tag py">PY</span></h2>
+<p class="fp">scene/gaussian_model.py:67 · :192-193</p>
+<pre><code>self._beta = torch.empty(0)                       # declaración (l.67)
+...
+betas = torch.zeros((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
+self._beta = nn.Parameter(betas.requires_grad_(True))   # (l.192-193)</code></pre>
+<p><code>_beta</code> es el <b>parámetro crudo</b> (raw, en log-espacio), entrenable, con shape <code>(N,1)</code> — <b>un β por gaussiana</b>. Se inicializa a <b>0</b>.</p>
+<div class="note">Como la activación es <code>4·exp(b)</code>, el valor crudo <code>0</code> arranca en <b>β = 4</b> (un pico bastante concentrado, casi gaussiano). El entrenamiento luego lo <b>baja</b> hasta una media cruda ≈ <code>−3.45</code> → <b>β ≈ 0.13</b> (mesetas planas). <span class="hl">El modelo prefiere kernels casi planos</span>: dato clave para la sección de mejoras.</p>
+
+<!-- ───────────────────────────── 2 ───────────────────────────── -->
+<h2><span class="step">2</span>Activación: de crudo a β efectivo <span class="tag py">PY</span></h2>
+<p class="fp">scene/gaussian_model.py:144-147</p>
+<pre><code>@property
+def get_beta(self):
+    b = self._beta.clamp(min=-6.0, max=2.0)
+    return (4.0 * torch.exp(b)).contiguous()</code></pre>
+<div class="eq">β = 4 · exp( clamp(b, −6, 2) )</div>
+<p>El kernel CUDA nunca ve el crudo <code>b</code>, ve siempre el <b>β activado</b>. La exponencial garantiza <code>β &gt; 0</code> (necesario: el exponente de <code>(1−ρ)<sup>β</sup></code> debe ser positivo) y el clamp acota el rango antes de exponenciar.</p>
+<table>
+  <tr><th>crudo <code>b</code></th><th>β = 4·exp(b)</th><th>forma del kernel</th></tr>
+  <tr><td>−6 (mín. clamp)</td><td class="fp">0.0099</td><td>meseta extrema (casi constante en el disco)</td></tr>
+  <tr><td>−3.45 (media observada)</td><td class="fp">0.127</td><td>meseta plana</td></tr>
+  <tr><td>0 (init)</td><td class="fp">4.0</td><td>pico (≈ gaussiana)</td></tr>
+  <tr><td>2 (máx. clamp)</td><td class="fp">29.6</td><td>spike muy estrecho</td></tr>
+</table>
+
+<!-- ───────────────────────────── 3 ───────────────────────────── -->
+<h2><span class="step">3</span>Render: paso al rasterizer <span class="tag py">PY</span></h2>
+<p class="fp">gaussian_renderer/__init__.py:58 · :128</p>
+<pre><code>beta = pc.get_beta.contiguous().to(pc.get_xyz.device)   # (l.58) activado, (N,1)
+...
+rendered_image, radii, allmap = rasterizer(
+    means3D = means3D, ... ,
+    beta = beta,                                        # (l.128) entra al kernel CUDA
+    ... )</code></pre>
+<p>Se extrae el β activado y se pasa como argumento al <code>GaussianRasterizer</code>. De aquí cruza la frontera Python→C++→CUDA (<code>diff_surfel_rasterization/__init__.py:27,68</code> → <code>rasterize_points.cu</code> → <code>rasterizer_impl.cu</code> → <code>geomState.beta</code>), y en el render por tiles cada hilo lee <code>collected_beta[j]</code> para su splat.</p>
+
+<!-- ───────────────────────────── 4 ───────────────────────────── -->
+<h2><span class="step">4</span>Forward CUDA: el corazón del kernel <span class="tag cuda">CUDA</span></h2>
+<p class="fp">submodules/diff-surfel-rasterization/cuda_rasterizer/forward.cu:378-417</p>
+<pre><code>float2 s = {p.x / p.z, p.y / p.z};            // intersección rayo–splat, Eq.(10) 2DGS
+float rho3d = (s.x * s.x + s.y * s.y);        // ρ en el plano local del surfel
+float2 d = {xy.x - pixf.x, xy.y - pixf.y};
+float rho2d = FilterInvSquare * (d.x*d.x + d.y*d.y);   // filtro paso-bajo (2·‖d‖²)
+float rho = min(rho3d, rho2d);                // ρ = min(3D, 2D)
+
+float r2 = rho;
+float beta_j = collected_beta[j];
+if(r2 >= 1.0f) continue;                      // soporte compacto: fuera del disco
+float one_minus_r2 = max(1.0f - r2, 1e-6f);   // guard anti log(0)/pow
+float kernel = powf(one_minus_r2, beta_j);    // ★ K = (1 − ρ)^β
+...
+float alpha = min(0.99f, opa * kernel);       // ★ α = min(0.99, opa·(1−ρ)^β)
+if (alpha < 1.0f / 255.0f) continue;</code></pre>
+<div class="eq">ρ = min(ρ<sub>3D</sub>, ρ<sub>2D</sub>) &nbsp;∈ [0,1) &nbsp;&nbsp;|&nbsp;&nbsp; K(ρ,β) = (1 − ρ)<sup>β</sup> &nbsp;&nbsp;|&nbsp;&nbsp; α = min(0.99, opa · K)</div>
+<ul>
+  <li><b>ρ</b> es la distancia de Mahalanobis al cuadrado: <code>ρ=0</code> en el centro del splat, crece hacia el borde. El <code>min</code> con <code>ρ2d</code> es el filtro paso-bajo que evita aliasing en splats diminutos.</li>
+  <li><b>Soporte compacto</b> (<code>if(r2&gt;=1.0f) continue</code>): a diferencia de la gaussiana, el kernel Beta vale <b>0 exacto</b> fuera del disco <code>ρ&lt;1</code>. No hay cola.</li>
+  <li>El <b>OLD CODE</b> comentado justo encima (l.396-414) es la gaussiana original <code>exp(−½ρ)</code> — útil para A/B futuro.</li>
+</ul>
+
+<!-- ───────────────────────────── 5 ───────────────────────────── -->
+<h2><span class="step">5</span>Backward CUDA: los tres gradientes <span class="tag cuda">CUDA</span></h2>
+<p class="fp">submodules/diff-surfel-rasterization/cuda_rasterizer/backward.cu:319-421 · :496 · :437-460</p>
+<p>De <code>α = opa·(1−ρ)<sup>β</sup></code> salen tres derivadas. El código usa formas <b>estables</b> (reescritas en términos de <code>α</code> para no recalcular potencias):</p>
+
+<h3>5.1 · Gradiente respecto a β</h3>
+<p class="fp">backward.cu:406-415</p>
+<pre><code>if (beta_j >= 0.1f) {                          // ← umbral anti-NaN (solo afecta a β)
+    float d_alpha_d_beta = alpha * logf(one_minus);      // ∂α/∂β = α·log(1−ρ)
+    float grad_beta = dL_dalpha * d_alpha_d_beta;
+    grad_beta = fminf(fmaxf(grad_beta, -1e-3f), 1e-3f);  // ← clamp ±0.001
+    atomicAdd(&dL_dbeta[global_id], grad_beta);
+}</code></pre>
+<div class="eq">∂α/∂β = α · log(1 − ρ)</div>
+<p>Como <code>log(1−ρ) &lt; 0</code> siempre, subir β <b>baja</b> α (más pico = menos cobertura en los bordes). <b>Dos diques de contención</b> que limitan cuánto se entrena β: (1) el <span class="hl">umbral <code>β≥0.1</code></span> congela el gradiente por debajo (evita <code>log(1−ρ)→−∞</code> con NaN), y (2) el <span class="hl">clamp <code>±1e-3</code></span> recorta el paso. Ambos son candidatos de la sección de mejoras.</p>
+
+<h3>5.2 · Gradiente respecto a ρ (geometría)</h3>
+<p class="fp">backward.cu:417-421 · :437-460</p>
+<pre><code>// dα/dρ = −β·α/(1−ρ)   (forma estable, equivale a −opa·β·(1−ρ)^{β−1})
+float d_alpha_d_rho = (-beta_j) * alpha / one_minus;
+...
+float dL_d_rho = dL_dalpha * d_alpha_d_rho;
+const float2 dL_ds = { dL_d_rho*2.0f*s.x + dL_dz*Tw.x,
+                       dL_d_rho*2.0f*s.y + dL_dz*Tw.y };   // ∂ρ/∂s = 2s</code></pre>
+<div class="eq">∂α/∂ρ = −β · α / (1 − ρ) &nbsp;&nbsp;|&nbsp;&nbsp; ∂ρ/∂s = 2s</div>
+<p>Este gradiente empuja la <b>posición/escala/rotación</b> del surfel (vía <code>T</code>). El factor <code>2s</code> es la derivada de <code>ρ=s·s</code> — en la gaussiana iba implícito en <code>−G·s</code>; con Beta hay que ponerlo explícito (FIX #1 de run9).</p>
+
+<h3>5.3 · Gradiente respecto a la opacidad</h3>
+<p class="fp">backward.cu:327 · :496</p>
+<pre><code>const float G = kernel;                        // G = (1−ρ)^β
+...
+atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);   // ∂α/∂opa = (1−ρ)^β</code></pre>
+<div class="eq">∂α/∂opa = (1 − ρ)<sup>β</sup> = K</div>
+<div class="note warn-box"><b>Por qué β≥0.1 NO congela el resto:</b> el FIX #2 (run9) movió el umbral para que <i>solo</i> salte el <code>atomicAdd</code> de β. Antes un <code>continue</code> con β&lt;0.1 saltaba todo el cuerpo del bucle y congelaba posición/escala/opacidad de ese splat. Hoy esos tres gradientes (5.2, 5.3) se calculan siempre. Detalle: <code>docs/backward_logica_y_diagnostico_run7_run8.html</code>.</div>
+
+<!-- ───────────────────────────── 6 ───────────────────────────── -->
+<h2><span class="step">6</span>Optimizador y clamps <span class="tag py">PY</span></h2>
+<p class="fp">scene/gaussian_model.py:209 · arguments/__init__.py:92 · train.py:397-399</p>
+<pre><code># grupo propio en Adam (gaussian_model.py:209)
+{'params': [self._beta], 'lr': training_args.beta_lr, "name": "beta"}
+# arguments/__init__.py:92
+self.beta_lr = 0.001
+# train.py:397-399  — clamp suave del CRUDO tras cada step
+with torch.no_grad():
+    gaussians._beta.data.clamp_(min=-4.0, max=2.0)</code></pre>
+<p>β se entrena con Adam, <code>lr=0.001</code>, <b>sin regularización explícita</b> (solo el L1 indirecto de la foto-loss). Hay <b>dos clamps distintos</b>: el de entrenamiento <code>[−4, 2]</code> (train.py) y el de lectura <code>[−6, 2]</code> (<code>get_beta</code>). El efectivo es el más estrecho: <b><code>β ∈ [0.073, 29.6]</code></b>.</p>
+<div class="note danger-box"><b>Coincidencia importante:</b> el clamp inferior de entrenamiento es <code>b=−4</code> → <code>β=0.073</code>, que está <b>por debajo</b> del umbral de gradiente <code>β=0.1</code> (<code>b≈−3.69</code>). Es decir, hay una franja <code>β∈[0.073, 0.1]</code> donde β <b>puede estar pero no recibe gradiente</b> → queda congelado ahí. Y la media observada (<code>β≈0.13</code>) está pegada a esa franja.</p></div>
+
+<!-- ───────────────────────────── 7 ───────────────────────────── -->
+<h2><span class="step">7</span>Densificación: cómo se hereda β <span class="tag py">PY</span></h2>
+<table>
+  <tr><th>operación</th><th>línea</th><th>regla sobre β</th><th>por qué</th></tr>
+  <tr><td><b>split</b> (clásico)</td><td class="fp">:531</td><td><code>new_beta = _beta[sel] − log(N)</code></td><td>conserva cobertura: N hijos con <code>β−logN</code> ≈ el padre (ver abajo)</td></tr>
+  <tr><td><b>clone</b> (clásico)</td><td class="fp">:556</td><td><code>new_beta = _beta[sel]</code></td><td>copia idéntica</td></tr>
+  <tr><td><b>relocate_gs</b> (MCMC)</td><td class="fp">:725</td><td><code>_beta[dead] = _beta[src]</code></td><td>el muerto hereda el β del vivo muestreado</td></tr>
+  <tr><td><b>add_new_gs</b> (MCMC)</td><td class="fp">:792</td><td><code>new_beta = _beta[src].clone()</code></td><td>el nuevo clona el β de su fuente</td></tr>
+  <tr><td><b>postfix / prune</b></td><td class="fp">:432 · :395</td><td>concat / filtra con el resto</td><td>β viaja con cada splat siempre</td></tr>
+  <tr><td><b>sanitize NaN</b></td><td class="fp">:823 · :844</td><td>fila mala → <code>_beta=0</code> (β=4)</td><td>repara explosiones numéricas</td></tr>
+</table>
+<p>El <code>−log(N)</code> del split (l.531) no es arbitrario: con la activación exponencial, <code>4·exp(b−logN) = (4·exp b)/N</code>, así <b>N hijos suman el β del padre</b> y la opacidad acumulada del disco se conserva tras partir.</p>
+<div class="note">Existe además un <b>filtro de densificación por β</b> opcional y <b>desactivado por defecto</b> (<code>gaussian_model.py:473-488</code>, flags <code>beta_densify_threshold=0.0</code> / <code>beta_densify_mode="split_wide"</code> en <code>arguments/__init__.py:132-133</code>): permitiría splitear solo splats por encima/debajo de un β umbral. Nunca se ha usado en un run.</p>
+
+<!-- ───────────────────────────── persistencia ───────────────────────────── -->
+<h2><span class="step">+</span>Persistencia en el .ply <span class="tag py">PY</span> <span class="tag bug">bug histórico</span></h2>
+<p class="fp">scene/gaussian_model.py:240,256,263 (save) · :337-347 (load)</p>
+<pre><code># save: beta va como columna 'beta' del ply, entre opacities y scale
+# load (FIX run15):
+if "beta" in prop_names:
+    beta = np.asarray(plydata.elements[0]["beta"])[..., np.newaxis]   # ← lee el entrenado
+else:
+    beta = np.ones((xyz.shape[0], 1), dtype=np.float32)               # fallback ply antiguo</code></pre>
+<div class="note danger-box"><b>El bug que contaminó las métricas ≤ run14:</b> <code>load_ply</code> reiniciaba <b>todos los β a 1.0</b> al cargar, ignorando el entrenado (media cruda ≈ −3.45 → β≈0.13). Render/metrics/visor pintaban con β uniforme → fondo negro → PSNR ~11.3 idéntico para <b>cualquier</b> modelo. No era el modelo, era la carga. El FIX (mostrado arriba) lee el β del ply; el fallback a 1.0 solo aplica a plys antiguos sin el campo.</p></div>
+
+<!-- ───────────────────────────── spherical betas ───────────────────────────── -->
+<h2><span class="step">SB</span>Spherical Betas — el otro β <span class="tag py">PY</span></h2>
+<p class="fp">gaussian_renderer/__init__.py:86-116 · gaussian_model.py:37-41,150-152 · arguments/__init__.py:57,90</p>
+<p>Cuidado con no confundir: además del β <b>geométrico</b> del kernel (el de toda esta página), existe un β <b>de color</b> dentro de los <i>Spherical Betas</i> (feature portada del oficial, <code>sb_number=0</code> = <b>off por defecto</b>). Añade lóbulos especulares view-dependent al color:</p>
+<div class="eq">C = SH(dir) + Σ<sub>i</sub> c<sub>i</sub> · max(⟨μ<sub>i</sub>, dir⟩, 0)<sup>4·exp(b<sub>i</sub>)</sup></div>
+<p>Se evalúa en Python antes de rasterizar (l.94-116). Cada lóbulo = 6 params <code>[r,g,b,θ,φ,b]</code>; el <code>b</code> aprendible va de casi-difuso a spike especular. <b>Abandonado por resultado</b> (run6: los lóbulos memorizaban, PSNR peor), el código queda inerte. Su <code>b</code> no es el β del kernel — son exponentes en dominios distintos (ángulo de vista vs. distancia radial).</p>
+
+<!-- ───────────────────────────── guards ───────────────────────────── -->
+<h2><span class="step">⚠</span>Estabilidad numérica — resumen de guards</h2>
+<table>
+  <tr><th>guard</th><th>dónde</th><th>qué evita</th></tr>
+  <tr><td><code>if(ρ ≥ 1) continue</code></td><td class="fp">forward.cu:403 · backward.cu:320</td><td>exponente de base ≤0; define el soporte compacto</td></tr>
+  <tr><td><code>max(1−ρ, 1e-6)</code></td><td class="fp">forward.cu:404 · backward.cu:323</td><td><code>log(0)</code> y división por cero en <code>∂α/∂ρ</code></td></tr>
+  <tr><td><code>β ≥ 0.1</code> para grad β</td><td class="fp">backward.cu:406</td><td><code>log(1−ρ)·</code> con β→0 explotando a NaN</td></tr>
+  <tr><td><code>clamp(grad_β, ±1e-3)</code></td><td class="fp">backward.cu:412</td><td>pasos de β desbocados</td></tr>
+  <tr><td><code>clamp(b, [−4,2])</code> / <code>[−6,2]</code></td><td class="fp">train.py:399 · gaussian_model.py:146</td><td>β fuera de <code>[0.073, 29.6]</code></td></tr>
+  <tr><td><code>min(0.99, ·)</code> y <code>α&lt;1/255</code></td><td class="fp">forward.cu:416-417</td><td>saturación y splats invisibles</td></tr>
+</table>
+
+<!-- ───────────────────────────── mejoras ───────────────────────────── -->
+<h2>Palancas del kernel aún sin explorar</h2>
+<p class="sub">Los 5 sweeps fallidos del historial (cap / gate / opacity_reg / scale_reg / gate-medio) <b>nunca tocaron β directamente</b>. Estas son palancas <b>del propio kernel</b>, ordenadas por relación coste/novedad. Recordatorio del diagnóstico: el velo del MCMC = floaters translúcidos <b>sobre-brillantes</b> de fondo; β bajo = mesetas planas que cubren el disco entero con opacidad casi uniforme → <b>sospechoso directo del velo</b>.</p>
+
+<div class="card">
+  <h3>A · Soltar los diques de β <span class="risklo">riesgo bajo · barato</span></h3>
+  <p>Hoy β apenas se entrena: clamp de gradiente <code>±1e-3</code> (backward.cu:412) + <code>beta_lr=0.001</code>. Quizá β no ha <i>elegido</i> la meseta, sino que <b>no ha podido moverse</b> de su arrastre inicial. <b>Prueba:</b> subir <code>beta_lr</code> (0.001→0.005) y/o aflojar el clamp (±1e-3→±5e-3). Mide si la media cruda se aleja de −3.45 y si el velo cede. Requiere recompilar el rasterizer solo si tocas el clamp CUDA.</p>
+</div>
+
+<div class="card">
+  <h3>B · Regularización de β hacia picos <span class="riskmd">riesgo medio · barato</span></h3>
+  <p>No existe término que regule β. Si el velo viene de mesetas (β bajo), añadir en <code>train.py</code> (junto a opacity_reg/scale_reg, l.156-157) un <code>beta_reg · relu(β_target − β).mean()</code> que <b>empuje β hacia arriba</b> (kernels más concentrados, menos cobertura translúcida de borde). Es la versión "kernel" del anti-velo, frente a los reg de opacidad/escala ya agotados. Riesgo: empujar demasiado endurece bordes y reabre huecos (modo de error del clásico).</p>
+</div>
+
+<div class="card">
+  <h3>C · Revisar el umbral <code>β≥0.1</code> y el clamp inferior <span class="riskmd">riesgo medio</span></h3>
+  <p>Hay una franja muerta <code>β∈[0.073, 0.1]</code> donde β existe pero no recibe gradiente (§6), y la media está pegada a ella. Posible <b>trampa unidireccional</b>: β cae a la franja y se congela plano. <b>Prueba:</b> subir el clamp inferior de entrenamiento a <code>b=−3.5</code> (β≥0.12, fuera de la franja) o bajar el umbral CUDA a <code>0.05</code> con un guard <code>log</code> más robusto. Recompila rasterizer.</p>
+</div>
+
+<div class="card">
+  <h3>D · Init de β menos agresivo <span class="risklo">riesgo bajo · barato</span></h3>
+  <p>Arranca en β=4 (pico) y el entrenamiento lo <i>desploma</i> a 0.13. Si la dinámica de descenso es el problema, <b>inicializar el crudo</b> en, p.ej., <code>−1.4</code> (β≈1, lineal) podría evitar el sobre-disparo a meseta. Cambio de una línea (gaussian_model.py:192).</p>
+</div>
+
+<div class="card">
+  <h3>E · Activar el filtro de densificación por β <span class="riskmd">riesgo medio</span></h3>
+  <p>Ya está cableado pero a 0 (§7, gaussian_model.py:473-488). <code>beta_densify_mode="split_wide"</code> + <code>threshold≈0.2</code> splitearía solo las mesetas anchas — densificar donde el kernel es plano para reemplazar un velo grande por varios splats más definidos. Solo aplica al modo clásico.</p>
+</div>
+
+<div class="card">
+  <h3>F · Acoplar β a la escala del surfel <span class="riskhi">riesgo alto · estructural</span></h3>
+  <p>El techo del rasterizer (run21): los gigantes del fondo están clavados en <code>s(max)=extent</code> y siguen translúcidos. Un β que <b>dependa del tamaño</b> (forzar β alto en surfels grandes → su meseta se vuelve pico, menos translucidez de borde) atacaría justo a esos gigantes que <code>scale_reg</code> no pudo mover. Requiere lógica nueva en forward/backward; es la palanca más cara pero la única que apunta al techo identificado.</p>
+</div>
+
+<div class="note ok-box"><b>Recomendación de orden:</b> empezar por <b>A</b> y <b>D</b> (baratos, una línea, sin recompilar en el caso de <code>beta_lr</code>) para ver si β se mueve cuando le quitas los frenos. Si moverlo cambia el velo, escalar a <b>B</b> (regularización dirigida). <b>F</b> solo si A/B confirman que β <i>es</i> la palanca del fondo. Todo medido honesto-vs-honesto contra run16 (0.339 / 0.597 / 20.21).</p></div>
+
+<p class="meta" style="margin-top:40px">Documento generado el 2026-06-23 · líneas verificadas contra el código actual · companion de <code>backward_logica_y_diagnostico_run7_run8.html</code> y <code>comparativa_runs.html</code>.</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Propuesta: atacar el fondo por PERFIL (kernel β) y ORIENTACIÓN, no por tamaño</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c; --purple:#c792ea;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  .p1{color:var(--accent2);border-color:#2c5} .p2{color:var(--accent);border-color:#35a} .p3{color:var(--purple);border-color:#849}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .hl{color:var(--danger);font-weight:700}
+  .hl2{color:var(--accent2);font-weight:700}
+  .hl3{color:var(--warn);font-weight:700}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0 .5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .lgd{font-family:"JetBrains Mono",monospace;font-size:12px}
+  .q{background:#141a26;border:1px solid #2c3a52;border-radius:10px;padding:14px 18px;margin:14px 0}
+  .q b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Propuesta de exploración: el fondo por <em>perfil</em> (β) y <em>orientación</em>, no por tamaño</h1>
+<p class="sub">Tras cerrar el clamp de escala (run64 = callejón), esta es mi propuesta para el pivote. La idea central: el velo "grande + translúcido" no se ataca encogiendo el disco (ya probado, falla), sino cambiando <b>cómo cae su opacidad</b> (el kernel β) y <b>cómo se orienta</b> al fondo rasante — que es exactamente lo que <b>Beta Splatting</b> explota. <b>Revísalo antes de que implemente nada.</b></p>
+<p class="meta">Base de código verificada: <code>forward.cu:442</code> (kernel β), <code>scene/gaussian_model.py:154</code> (<code>get_beta</code>), <code>train.py:137-157</code> (regularizadores). NO existe hoy ningún regularizador de β. Meta del proyecto: replicar Beta Splatting con surfels 2D y superar al 3D.</p>
+
+<h2>1. Por qué este pivote (y por qué NO es otro cheap-sweep)</h2>
+<div class="card">
+<p>Todo lo probado hasta ahora mueve <b>cantidad</b> (cap, gate, nº splats) o <b>tamaño/masa</b> (scale_reg, opacity_reg, clamp). El resultado consolidado:</p>
+<ul>
+<li><b>opacity_reg 0.06</b> (run36) ya casi anuló el <b>sobre-brillo</b> del velo: <code>dmean(render−gt)</code> +1.00 → +0.12.</li>
+<li>Pero <b>PSNR/SSIM/LPIPS no siguen mejorando</b> (run61/62) → <span class="hl2">el error residual ya NO es velo translúcido, es detalle estructural del fondo.</span></li>
+<li>El clamp de escala (run64) confirmó que tocar el <b>tamaño</b> solo cambia velo por huecos.</li>
+</ul>
+<p>Queda un eje que <b>nunca hemos tocado con un regularizador</b>: el <b>perfil del kernel (β)</b> y la <b>orientación</b> del surfel. Y no es un dial cualquiera — <b>β ES la primitiva de Beta Splatting.</b> Atacar por aquí es, literalmente, avanzar en la tesis del proyecto en vez de dar vueltas a los diales del 2DGS.</p>
+</div>
+
+<h2>2. Qué es β y por qué alimenta el velo</h2>
+<p>En el rasterizer, la opacidad de un surfel en un píxel es <code>alpha = opacidad · kernel</code>, con (<code>forward.cu:442</code>):</p>
+<pre><code>float kernel = powf(one_minus_r2, beta_j);   // kernel = (1 − r²)^β
+// r² ∈ [0,1) = distancia² normalizada al centro del surfel (se descarta si r²≥1)</code></pre>
+<p>β se aprende por-primitiva: <code>get_beta = 4·exp(clamp(b, −6, 2))</code> → <b>β ∈ [0.0099, 29.56]</b>. β controla <b>la forma de la caída de opacidad</b> del centro al borde del disco:</p>
+
+<svg viewBox="0 0 900 300" role="img" aria-label="Kernel (1-r²)^beta para varios beta">
+  <!-- ejes -->
+  <line x1="60" y1="40" x2="60" y2="240" stroke="#3a4152" stroke-width="1.5"/>
+  <line x1="60" y1="240" x2="860" y2="240" stroke="#3a4152" stroke-width="1.5"/>
+  <text x="18" y="46" fill="#9aa3b2" font-size="12">α=1</text>
+  <text x="30" y="244" fill="#9aa3b2" font-size="12">0</text>
+  <text x="52" y="262" fill="#9aa3b2" font-size="12">centro (r²=0)</text>
+  <text x="790" y="262" fill="#9aa3b2" font-size="12">borde (r²=1)</text>
+  <text x="300" y="288" fill="#9aa3b2" font-size="13">distancia² normalizada al centro del disco →</text>
+  <!-- curvas -->
+  <path d="M60.0,40.0 L200.0,41.9 L400.0,45.5 L560.0,49.6 L680.0,54.4 L760.0,59.7 L800.0,64.3 L833.3,71.3 L846.7,77.0 L853.3,82.6 L860.0,169.0" fill="none" stroke="#ff7b72" stroke-width="2.6"/>
+  <path d="M60.0,40.0 L260.0,90.0 L460.0,140.0 L660.0,190.0 L860.0,240.0" fill="none" stroke="#ffb454" stroke-width="2.2"/>
+  <path d="M60.0,40.0 L133.3,103.9 L200.0,147.3 L280.0,184.7 L360.0,209.5 L460.0,227.5 L560.0,236.0 L680.0,239.5 L860.0,240.0" fill="none" stroke="#7ee787" stroke-width="2.2"/>
+  <path d="M60.0,40.0 L86.7,138.5 L113.3,189.7 L146.7,219.8 L180.0,232.2 L220.0,237.7 L260.0,239.4 L320.0,239.9 L860.0,240.0" fill="none" stroke="#6ea8fe" stroke-width="2.2"/>
+  <!-- leyenda -->
+  <g class="lgd">
+    <rect x="640" y="52" width="14" height="4" fill="#ff7b72"/><text x="660" y="58" fill="#ff7b72">β=0.05 (colas pesadas)</text>
+    <rect x="640" y="72" width="14" height="4" fill="#ffb454"/><text x="660" y="78" fill="#ffb454">β=1</text>
+    <rect x="640" y="92" width="14" height="4" fill="#7ee787"/><text x="660" y="98" fill="#7ee787">β=4 (default)</text>
+    <rect x="640" y="112" width="14" height="4" fill="#6ea8fe"/><text x="660" y="118" fill="#6ea8fe">β=20 (compacto)</text>
+  </g>
+</svg>
+
+<div class="card danger-box">
+<p><b>La firma del velo, leída en la curva:</b> un surfel <b>grande</b> con <b>β bajo</b> (rojo) mantiene la opacidad <b>casi plana ~0.9 por todo el disco</b> y solo se desploma pegado al borde. Es decir: un disco enorme que aporta opacidad <b>en toda su área</b> → apilados, son la <b>manta translúcida del fondo</b>. Con <b>β alto</b> (azul) el mismo disco solo aporta <b>en un núcleo diminuto</b> y el resto es ~0 → coberturas compactas, sin manta.</p>
+<p><b>Por eso el velo es "grande + translúcido + β BAJO".</b> El <code>opacity_reg</code> atacó el "translúcido" (bajó la opacidad de pico), el clamp atacó el "grande" (y falló). <span class="hl2">Nadie ha atacado el "β bajo" — las colas pesadas que reparten la manta.</span></p>
+</div>
+
+<h2>3. Experimento 1 (PRINCIPAL): regularizador de β acoplado al tamaño</h2>
+<div class="card">
+<span class="tag p1">Prioridad 1 · el más alineado con la tesis</span>
+<p><b>Hipótesis:</b> penalizar las <b>colas pesadas (β bajo) en los surfels grandes</b> obliga a esos gigantes a caer más rápido (β↑ → núcleo compacto) o a morir — adelgazando la manta del fondo <b>sin encoger el disco</b> (evita el modo "huecos" del clamp) y <b>sin subir la opacidad de pico</b> (complementa <code>opacity_reg</code> en vez de repetirlo).</p>
+<p><b>Por qué acoplado y no global:</b> β bajo es <b>legítimo</b> en superficies suaves (cielo, degradados). Un empujón global de β↑ mataría eso (y ya vimos con <code>--freeze_low_beta</code>/run30 que tocar los low-β a lo bruto empeora). La clave es penalizar β bajo <b>solo donde coincide con escala grande</b> — la firma del velo, no la del cielo.</p>
+</div>
+
+<h3>Implementación (a revisar)</h3>
+<p>Un término nuevo en el bloque de regularizadores ya existente (<code>train.py:155-157</code>, donde viven <code>opacity_reg</code> y <code>scale_reg</code>), más un flag <code>--beta_reg</code> en <code>OptimizationParams</code>:</p>
+<pre><code># train.py, dentro de  if densify_from_iter < iteration < densify_until_iter:
+#   s = escala media por surfel (N,)   ·   β = get_beta (N,)
+if opt.beta_reg &gt; 0:
+    s_mean = gaussians.get_scaling.mean(dim=1)              # tamaño del disco
+    inv_beta = 1.0 / gaussians.get_beta.flatten().clamp(min=1e-3)
+    # penaliza colas pesadas (1/β grande) PONDERADO por el tamaño:
+    total_loss = total_loss + opt.beta_reg * (s_mean * inv_beta).mean()</code></pre>
+<p>Variantes que también quiero considerar contigo (elegimos una para el primer test):</p>
+<table>
+<thead><tr><th>Variante</th><th>Término</th><th>Efecto</th></tr></thead>
+<tbody>
+<tr><td>A · acoplada (recomendada)</td><td><code>s_mean · (1/β)</code></td><td>solo aprieta gigantes de cola pesada = firma del velo</td></tr>
+<tr><td>B · umbral duro</td><td><code>relu(s−s₀) · relu(β₀−β)</code></td><td>ignora surfels normales; actúa solo pasado un tamaño/β</td></tr>
+<tr><td>C · global suave</td><td><code>(1/β).mean()</code></td><td>empuja β↑ en todos; simple pero arriesga el cielo (probable fallo, útil como control)</td></tr>
+</tbody>
+</table>
+<div class="note">Referencia a chequear antes de fijar la fórmula: cómo maneja β el <b>Beta Splatting oficial</b> (<code>/home/jesus/Documents/Gaussian_splatting/beta-splatting</code>: init de β, lr, si tiene algún prior/reg). Si portamos su tratamiento exacto, más fiel a la tesis. Lo reviso al implementar.</div>
+
+<h3>Barrido y medición</h3>
+<ul>
+<li><b>Base:</b> run36 (<code>opacity_reg</code>=0.06, cap 7.5M) — el techo de PSNR y el régimen donde el velo brillante ya está adelgazado, para aislar el efecto de β sobre el <b>detalle estructural</b> residual.</li>
+<li><b>Barrer</b> <code>--beta_reg</code> ∈ {0 (control=run36), pequeño, medio, alto} — como hicimos con <code>opacity_reg</code>.</li>
+<li><b>Instrumentar:</b> histograma de β de los surfels <b>grandes</b> del fondo (¿sube β donde toca?), <code>dmean(render−gt)</code>, y sobre todo <b>SSIM/LPIPS honestos</b> (el detalle estructural es perceptual → SSIM/LPIPS lo captan mejor que PSNR).</li>
+</ul>
+
+<div class="grid2">
+  <div class="card ok-box"><b class="hl2">Éxito =</b> SSIM↑ y/o LPIPS↓ vs run36 sin desplomar PSNR. Señal de que las colas de β eran parte del error estructural → <b>β es palanca</b> y abrimos un frente nuevo (el de la tesis).</div>
+  <div class="card danger-box"><b class="hl">Fallo honesto =</b> β sube pero las métricas no se mueven (β no era el residual) o aparecen huecos (apretamos de más). Cerraríamos β como dial, igual que los otros. <b>Riesgo real</b> — el fondo es estructural; hay que aceptarlo si pasa.</div>
+</div>
+
+<h2>4. Experimento 2 (SECUNDARIO, barato): orientación al fondo rasante</h2>
+<div class="card">
+<span class="tag p2">Prioridad 2 · casi gratis (flag existente)</span>
+<p>El fondo rasante impone una tensión que el disco 2D no puede ganar del todo (por eso el 3D lo resuelve con volumen):</p>
+</div>
+
+<svg viewBox="0 0 900 210" role="img" aria-label="Tensión de orientación del surfel rasante">
+  <defs><marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 Z" fill="#9aa3b2"/></marker></defs>
+  <line x1="40" y1="160" x2="520" y2="120" stroke="#3a4152" stroke-width="2" stroke-dasharray="4 4"/>
+  <text x="380" y="150" fill="#9aa3b2" font-size="12">fondo (suelo)</text>
+  <circle cx="60" cy="55" r="9" fill="#6ea8fe"/><text x="42" y="40" fill="#9aa3b2" font-size="11">cámara</text>
+  <line x1="70" y1="60" x2="300" y2="138" stroke="#6ea8fe" stroke-width="1.2" marker-end="url(#a2)" opacity=".8"/>
+  <!-- acostado -->
+  <g transform="translate(280,132) rotate(-5)"><ellipse cx="0" cy="0" rx="70" ry="6" fill="#7ee787" opacity=".4" stroke="#7ee787"/></g>
+  <text x="210" y="185" fill="#7ee787" font-size="12.5">ACOSTADO: normal≈correcta, pero de canto → huella fina → gigante</text>
+  <!-- billboard -->
+  <g transform="translate(660,110) rotate(60)"><ellipse cx="0" cy="0" rx="46" ry="10" fill="#ffb454" opacity=".45" stroke="#ffb454"/></g>
+  <text x="560" y="60" fill="#ffb454" font-size="12.5">DE CARA (billboard): cubre bien, normal MAL → rompe geometría</text>
+</svg>
+
+<div class="card">
+<p>Ya existe la <b>pérdida de consistencia de normal</b> (<code>train.py:143</code>, <code>lambda_normal=0.05</code> tras iter 7000): empuja la normal del surfel hacia la normal de la superficie (derivada de la profundidad). Es la que fuerza "acostado". <b>Test barato (flag existente, sin tocar código):</b></p>
+<ul>
+<li><b>Barrer <code>lambda_normal</code></b> {0.05 (actual), 0.10, 0.20}. ¿Forzar más el "acostado" limpia floaters mal orientados del fondo, o solo agrava los gigantes? Es un A/B directo de la tensión del dibujo.</li>
+<li><b>Diagnóstico:</b> comparar <code>rend_normal</code> vs <code>surf_normal</code> en las vistas de fondo — ¿los gigantes están de verdad mal orientados (floaters) o ya acostados (y el problema es puramente la huella rasante)?</li>
+</ul>
+<p><b>Por qué secundario:</b> es un dial existente (riesgo de ser otro cheap-sweep), y la tensión de fondo es real — forzar el "acostado" probablemente <b>agranda</b> los gigantes (huella más rasante). Pero cuesta ~0 probarlo y el <b>diagnóstico</b> de orientación es informativo <b>aunque el barrido falle</b>: nos dice si el residual estructural es de <b>orientación</b> (floaters) o de <b>cobertura</b> (huella), y eso decide el Experimento 3.</p>
+</div>
+
+<h2>5. Experimento 3 (condicional): β + orientación, según lo que digan 1 y 2</h2>
+<div class="card card2">
+<span class="tag p3">Prioridad 3 · solo si 1 o 2 dan señal</span>
+<p>Si el Exp 1 muestra que β es palanca <b>y</b> el diagnóstico del Exp 2 dice que los gigantes están <b>mal orientados</b>, la combinación natural es: <b>β-reg acoplado</b> (compacta las colas) <b>+</b> <code>lambda_normal</code> ajustado (endereza la orientación) sobre la base run36. Es el candidato más parecido a "un surfel que se comporta como el elipsoide 3D en el fondo": compacto donde debe y orientado a la superficie. No lo detallo hasta ver 1 y 2 — dependería de sus números.</p>
+</div>
+
+<h2>6. Plan propuesto y orden</h2>
+<table>
+<thead><tr><th>#</th><th>Qué</th><th>Coste</th><th>Requiere código</th><th>Qué decide</th></tr></thead>
+<tbody>
+<tr><td>2</td><td>Diagnóstico de orientación + barrido <code>lambda_normal</code></td><td>bajo (flag existente)</td><td>No</td><td>si el residual es orientación o cobertura</td></tr>
+<tr><td>1</td><td>Regularizador <code>--beta_reg</code> (variante A) sobre run36</td><td>medio (1 término + 1 flag)</td><td>Sí (pequeño)</td><td>si β es palanca del detalle estructural</td></tr>
+<tr><td>3</td><td>β-reg + orientación combinados</td><td>medio</td><td>reutiliza 1+2</td><td>—</td></tr>
+</tbody>
+</table>
+<p class="meta">Sugiero <b>empezar por el 2</b> (gratis y da diagnóstico), luego el <b>1</b> (el importante, el de la tesis). El 3 solo si hay señal. Cada uno con <code>--eval</code>, medido honesto (<code>metrics.py</code>), fila al historial + <code>comparativa_runs.html</code>, como siempre.</p>
+
+<div class="note ok-box"><b>TL;DR de la propuesta.</b> Dejamos de mover el <b>tamaño</b> del surfel (agotado: velo↔huecos) y atacamos el <b>perfil de opacidad (β)</b> y la <b>orientación</b> — el terreno propio de Beta Splatting. El velo es "grande + translúcido + <b>β bajo</b>"; ya apretamos los dos primeros, nunca el tercero. <b>Exp 1</b> = regularizador de β acoplado al tamaño (aprieta colas pesadas solo en gigantes), el frente nuevo y el de la tesis. <b>Exp 2</b> = diagnóstico + barrido de orientación (<code>lambda_normal</code>), casi gratis, informativo aunque falle. Honesto: el fondo es estructural y esto también puede cerrarse como dial — pero es la única dirección que queda que <b>avanza la tesis</b> (ganar al 3D <em>con</em> la primitiva 2D) en vez de darle vueltas a los diales del 2DGS.</p></div>
+
+<div class="q"><b>Para que decidas antes de implementar:</b> (1) ¿arrancamos por el Exp 2 (diagnóstico+lambda_normal, gratis) o vas directo al Exp 1 (β-reg)? (2) para el β-reg, ¿variante A (acoplada s·1/β, recomendada), B (umbral duro) o C (global, control)? (3) ¿reviso primero el tratamiento de β del Beta Splatting oficial para copiar su fórmula, o tiramos con la variante A propia?</div>
+
+<p class="meta">Doc generado 2026-07-13 · propuesta, sin implementar aún · refs: <code>forward.cu:442</code>, <code>gaussian_model.py:154</code>, <code>train.py:137-157</code>, <code>docs/beta_kernel_y_freeze_low_beta.html</code>, <code>docs/clamp_escala_gigantes_fondo.html</code>.</p>
+
+</div>
+</body>
+</html>

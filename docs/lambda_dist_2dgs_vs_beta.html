@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>¿Por qué lambda_dist en 2DGS y por qué NO en Beta Splatting?</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700}
+  .center{text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>¿Por qué <code>lambda_dist</code> en 2DGS y por qué <span class="hl">NO</span> en Beta Splatting?</h1>
+<p class="sub">La pérdida de <b>distorsión</b> (<code>lambda_dist</code>) no es una arbitrariedad: viene de Mip-NeRF360, sirve para <b>reconstruir superficies</b>, y por eso aparece en 2DGS pero <b>no existe</b> en Beta Splatting. Aquí el porqué, número a número, con el matiz importante: en 2DGS su <b>default es 0.0</b> — está apagada salvo que quieras malla.</p>
+
+<div class="note warn-box"><b>Aclaración previa.</b> La pregunta "por qué no se usa en 2DGS" tiene truco: 2DGS <b>sí la implementa</b>, pero su valor por defecto es <code>0.0</code> (<code>arguments/__init__.py:88</code>). Se enciende a mano (100, 1000…) <b>solo</b> para extracción de superficie. En Beta, en cambio, <b>ni siquiera está en el código</b>.</p></div>
+
+<h2>1. ¿Qué penaliza la distorsión?</h2>
+<p>Cuando renderizas un píxel, atraviesas una <b>fila de splats</b> a distintas profundidades <code>z<sub>i</sub></code>, cada uno con un <b>peso de mezcla</b> <code>w<sub>i</sub></code> (cuánto contribuye al color final). La distorsión penaliza que esos pesos estén <b>repartidos en profundidad</b>: quiere que toda la masa de peso se concentre en <b>un único punto</b> — la superficie real.</p>
+
+<div class="eq">L<sub>dist</sub> = &Sigma;<sub>i,j</sub> &nbsp; w<sub>i</sub> &middot; w<sub>j</sub> &middot; |z<sub>i</sub> &minus; z<sub>j</sub>|</div>
+
+<p>Es 0 cuando todo el peso está a una sola profundidad (no hay pares con <code>z</code> distinto), y crece cuanto más "esparcida en el aire" está la contribución. En este repo es <code>rend_dist</code>, que calcula el rasterizer y entra en <code>train.py:102</code> como <code>dist_loss = lambda_dist · rend_dist.mean()</code>.</p>
+
+<div class="card card2">
+<svg viewBox="0 0 900 260" width="900" height="260" role="img" aria-label="Distribución de pesos a lo largo del rayo: esparcida vs concentrada">
+  <!-- ejes -->
+  <text x="20" y="24" fill="#9aa3b2" font-size="13" font-family="monospace">peso w(z) a lo largo del rayo</text>
+  <!-- panel izq: esparcido -->
+  <line x1="60" y1="210" x2="410" y2="210" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="60" y1="60" x2="60" y2="210" stroke="#2a2f3c" stroke-width="1.5"/>
+  <text x="235" y="236" fill="#9aa3b2" font-size="12" text-anchor="middle" font-family="monospace">profundidad z &rarr;</text>
+  <!-- curva ancha (esparcida) -->
+  <path d="M60,210 C 140,80 330,80 410,210" fill="none" stroke="#ff7b72" stroke-width="2.5"/>
+  <path d="M60,210 C 140,80 330,80 410,210 L410,210 L60,210 Z" fill="#ff7b72" opacity="0.12"/>
+  <text x="235" y="50" fill="#ff7b72" font-size="14" text-anchor="middle" font-weight="700">L_dist ALTA</text>
+  <text x="235" y="200" fill="#ff7b72" font-size="11" text-anchor="middle" font-family="monospace">superficie "gruesa"/flotante</text>
+  <!-- panel der: concentrado -->
+  <line x1="500" y1="210" x2="850" y2="210" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="500" y1="60" x2="500" y2="210" stroke="#2a2f3c" stroke-width="1.5"/>
+  <text x="675" y="236" fill="#9aa3b2" font-size="12" text-anchor="middle" font-family="monospace">profundidad z &rarr;</text>
+  <!-- pico estrecho (concentrado) -->
+  <path d="M500,210 L660,210 C 668,210 670,70 675,70 C 680,70 682,210 690,210 L850,210" fill="none" stroke="#7ee787" stroke-width="2.5"/>
+  <path d="M660,210 C 668,210 670,70 675,70 C 680,70 682,210 690,210 Z" fill="#7ee787" opacity="0.15"/>
+  <text x="675" y="50" fill="#7ee787" font-size="14" text-anchor="middle" font-weight="700">L_dist &asymp; 0</text>
+  <text x="675" y="200" fill="#7ee787" font-size="11" text-anchor="middle" font-family="monospace">superficie fina y nítida</text>
+</svg>
+<p class="meta center">Izquierda: contribuciones repartidas en profundidad &rarr; geometría ambigua. Derecha: todo el peso en un plano &rarr; superficie limpia. La distorsión empuja de izquierda a derecha.</p>
+</div>
+
+<h2>2. El matiz del "default": 2DGS la tiene, pero apagada</h2>
+<p>Defaults reales de este repo (heredados de 2DGS oficial), en <code>arguments/__init__.py</code>:</p>
+
+<table>
+  <tr><th>Parámetro</th><th>Default</th><th>Para qué</th></tr>
+  <tr><td><code>lambda_dssim</code></td><td>0.2</td><td>Fidelidad fotométrica (SSIM). Siempre activo.</td></tr>
+  <tr><td><code>lambda_normal</code></td><td>0.05</td><td>Consistencia de normales (alinea el surfel con la superficie). Activo desde iter 7000.</td></tr>
+  <tr><td><code class="hl">lambda_dist</code></td><td><span class="hl">0.0</span></td><td><b>Apagado por defecto.</b> Se sube a 100/1000 SOLO para extraer malla.</td></tr>
+</table>
+
+<p>Es decir: 2DGS para <b>novel-view synthesis a secas</b> normalmente corre con <code>lambda_dist=0</code>. El <code>100</code> que tenías en <code>train.sh</code> es la receta de <b>reconstrucción de superficie</b> del paper (escenas acotadas / DTU), no la de calidad de imagen. De ahí que aplastara tu PSNR (train 15.46 vs bonsai1 33.60).</p>
+
+<h2>3. ¿Por qué 2DGS la incluye?</h2>
+<p>Porque el objetivo de 2DGS es <b>doble</b>: renderizar <i>y</i> extraer una <b>malla de superficie</b> (TSDF sobre los mapas de profundidad). Para que la malla salga limpia, cada rayo tiene que cruzar la geometría en un <b>punto bien definido</b>, no en una nube difusa. La distorsión es exactamente la herramienta para eso.</p>
+
+<div class="card card2">
+<svg viewBox="0 0 900 220" width="900" height="220" role="img" aria-label="Surfels flotantes vs colapsados sobre la superficie">
+  <!-- superficie objetivo -->
+  <text x="20" y="22" fill="#9aa3b2" font-size="13" font-family="monospace">surfels vistos de lado contra la superficie real (línea punteada)</text>
+  <!-- izquierda: sin dist -->
+  <line x1="60" y1="150" x2="400" y2="120" stroke="#6ea8fe" stroke-dasharray="6 5" stroke-width="2"/>
+  <g stroke="#ff7b72" stroke-width="3">
+    <line x1="100" y1="95" x2="140" y2="108"/>
+    <line x1="170" y1="170" x2="205" y2="150"/>
+    <line x1="240" y1="100" x2="280" y2="120"/>
+    <line x1="300" y1="165" x2="345" y2="140"/>
+  </g>
+  <text x="230" y="205" fill="#ff7b72" font-size="13" text-anchor="middle" font-weight="700">lambda_dist = 0: flotan, distintas z</text>
+  <!-- derecha: con dist -->
+  <line x1="500" y1="150" x2="840" y2="120" stroke="#6ea8fe" stroke-dasharray="6 5" stroke-width="2"/>
+  <g stroke="#7ee787" stroke-width="3">
+    <line x1="540" y1="147" x2="580" y2="143"/>
+    <line x1="610" y1="142" x2="650" y2="137"/>
+    <line x1="680" y1="135" x2="720" y2="131"/>
+    <line x1="750" y1="129" x2="790" y2="125"/>
+  </g>
+  <text x="670" y="205" fill="#7ee787" font-size="13" text-anchor="middle" font-weight="700">lambda_dist alto: pegados a la superficie</text>
+</svg>
+<p class="meta center">La distorsión (+ la normal) es lo que hace que los surfels dejen de flotar y se aplanen sobre la superficie real, condición necesaria para mallar.</p>
+</div>
+
+<h2>4. Entonces, ¿por qué está apagada por defecto?</h2>
+<p>Porque <b>concentrar todo el peso en un plano tiene un coste</b>: le quita al modelo la libertad de representar lo que <b>no es</b> una superficie dura y opaca. Y eso es justo donde más duele:</p>
+<ul>
+  <li><b>Volumen y semitransparencia</b> — follaje, hierba, ramas finas, humo, vidrio: su apariencia correcta es <i>varias contribuciones a varias profundidades</i>. La distorsión las castiga.</li>
+  <li><b>Fondos</b> — cielo/pared lejana: la distorsión empuja a colapsar profundidad donde la geometría es pobre, favoreciendo el <b>colapso de splats</b> y agravando huecos.</li>
+  <li><b>PSNR</b> — al sacrificar grados de libertad fotométricos, la imagen pierde detalle. Por eso el default es 0 para NVS y se sube solo cuando la <b>malla</b> importa más que el PSNR.</li>
+</ul>
+<div class="note">Regla práctica para este proyecto: si la meta es <b>calidad de imagen y cerrar huecos</b>, <code>lambda_dist</code> debe ser <b>bajo</b> (0–10), no 100. Coherente con el aprendizaje "lambda_dist alto desestabiliza".</div>
+
+<h2>5. ¿Por qué Beta Splatting <span class="hl">no</span> la tiene?</h2>
+<p>Beta no extrae malla y no es un método de superficie: optimiza <b>solo calidad de novela vista</b> con elipsoides 3D (gsplat). Verificado en el repo oficial — no hay <code>lambda_dist</code>, <code>lambda_normal</code>, <code>rend_dist</code> ni "distortion" en ninguna parte. Su pérdida completa es:</p>
+<div class="eq">L = (1&minus;&lambda;)&middot;L1 + &lambda;&middot;(1&minus;SSIM) + 0.01&middot;|opacidad| + 0.01&middot;|escala|</div>
+<p>Las tres razones de fondo:</p>
+<table>
+  <tr><th>Motivo</th><th>2DGS (surfel)</th><th>Beta (elipsoide 3D)</th></tr>
+  <tr><td><b>Objetivo</b></td><td>NVS <b>+ malla</b> &rarr; necesita geometría nítida</td><td><b>Solo NVS</b> &rarr; no necesita regularizar profundidad</td></tr>
+  <tr><td><b>Primitiva</b></td><td>Surfel plano: tiene una <b>normal</b> y un concepto de "superficie" que regularizar</td><td>Elipsoide volumétrico: no hay superficie que aplanar</td></tr>
+  <tr><td><b>Expresividad</b></td><td>SH + regularizadores geométricos</td><td>Núcleo <b>beta</b> aprendible (caída nítida↔suave) + <b>Spherical Betas</b> para color view-dependent</td></tr>
+</table>
+<p>Beta consigue nitidez por <b>otra vía</b>: en vez de forzar geometría con una pérdida, deja que cada primitiva aprenda su <b>perfil de caída</b> (el parámetro <code>beta</code>: de Gaussiano suave a casi-caja dura). Añadir distorsión solo le costaría PSNR sin ningún beneficio de mallado — por eso ni se plantea.</p>
+
+<h2>6. Resumen en una tabla</h2>
+<table>
+  <tr><th>Método</th><th>¿Distorsión?</th><th>Default</th><th>Razón</th></tr>
+  <tr><td><b>3DGS</b> (vanilla)</td><td class="hl">No</td><td>—</td><td>NVS puro, elipsoides; nunca tuvo objetivo de superficie.</td></tr>
+  <tr><td><b>2DGS</b></td><td class="hl2">Sí (implementada)</td><td><b>0.0</b></td><td>Surfels + objetivo de malla; se enciende (100/1000) solo para extraer superficie.</td></tr>
+  <tr><td><b>Beta Splatting</b></td><td class="hl">No</td><td>—</td><td>NVS puro, elipsoides 3D; nitidez vía núcleo beta + Spherical Betas, no vía regularización.</td></tr>
+</table>
+
+<div class="note ok-box"><b>Conclusión para tu run de bonsai.</b> "Mantener <code>lambda_dist=100</code> como en beta" es un malentendido doble: beta no tiene distorsión, y en 2DGS el 100 es la receta de <i>malla</i>, no de imagen. Para calidad + huecos, mantenlo bajo (lo dejamos en 10) o pruébalo en 0 como el default 2DGS. Los huecos del fondo no los cierra la distorsión: se atacan sembrando el fondo y con el muestreo MCMC menos sesgado al foreground.</div>
+
+<p class="meta">Fuentes en código: este repo <code>arguments/__init__.py:87-89</code>, <code>train.py:88-105</code>; oficial <code>beta-splatting/train.py:109-114</code> y <code>arguments/__init__.py</code> (sin distorsión). Compañeros: <code>ruido_isotropico_vs_covarianza.html</code>, <code>clamp_radio_y_techo_rasterizer.html</code>.</p>
+
+</div>
+</body>
+</html>

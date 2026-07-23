@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resumen mejores resultados · 2DGS→Beta</title>
+<style>
+  :root{
+    --bg:#0f1419; --card:#1a212b; --ink:#e6edf3; --mut:#9aa7b4; --line:#2b3744;
+    --mcmc:#7aa2f7; --classic:#bb9af7; --orig:#e0af68; --good:#9ece6a; --bad:#f7768e; --warn:#e0af68;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:32px 20px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px} h2{font-size:18px;margin:34px 0 6px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .sub{color:var(--mut);margin:0 0 22px}
+  .sub2{color:var(--mut);margin:0 0 12px;font-size:13.5px}
+  table{border-collapse:collapse;width:100%;background:var(--card);border-radius:10px;overflow:hidden;font-size:14px}
+  th,td{padding:11px 12px;text-align:center;border-bottom:1px solid var(--line)}
+  th{background:#222b38;font-weight:600;color:#cdd9e5}
+  td.l,th.l{text-align:left}
+  tr:last-child td{border-bottom:none}
+  .run{font-weight:700}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11.5px;font-weight:600}
+  .tMCMC{background:rgba(122,162,247,.16);color:var(--mcmc)}
+  .tCLA{background:rgba(187,154,247,.16);color:var(--classic)}
+  .tORIG{background:rgba(224,175,104,.16);color:var(--orig)}
+  .best{color:var(--good);font-weight:700}
+  .worst{color:var(--bad)}
+  .pend{color:var(--warn);font-style:italic}
+  .note{color:var(--mut);font-size:12.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:16px 0}
+  code{background:#222b38;padding:1px 6px;border-radius:5px;font-size:12.5px;color:#cdd9e5}
+  ul{margin:8px 0;padding-left:20px} li{margin:4px 0}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 0;color:var(--mut);font-size:12.5px}
+  .win{color:var(--good);font-weight:700} .lose{color:var(--bad);font-weight:700}
+  .champ td{background:rgba(158,206,106,.07)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Resumen · <b>mejores resultados</b> 2DGS → Beta Splatting</h1>
+  <p class="sub">Comparación honesta (<code>metrics.py</code>, <code>--eval</code>, test held-out) de nuestros mejores runs contra el <b>baseline 2DGS oficial</b>. PSNR y SSIM: <b>mayor = mejor</b> (↑). LPIPS: <b>menor = mejor</b> (↓). Mejor valor de cada columna en <span class="best">verde</span>, peor en <span class="worst">rojo</span>. La fila resaltada es el campeón del dataset.</p>
+
+  <!-- ══════════════════════ FLOWERS ══════════════════════ -->
+  <h2>1 · flowers <span class="note">(escena exterior no acotada — fondo rasante, velo translúcido)</span></h2>
+  <p class="sub2">Baseline oficial vs nuestro <b>mejor clásico (run67)</b> y nuestro <b>mejor MCMC (run36)</b>. cap oficial flowers = 7.5M.</p>
+  <table>
+    <thead>
+      <tr>
+        <th class="l">Método / Run</th><th>Camino</th>
+        <th>PSNR ↑</th><th>SSIM ↑</th><th>LPIPS ↓</th>
+        <th>Primitivas</th><th class="l">Notas</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="l run">2DGS oficial</td>
+        <td><span class="tag tORIG">BASELINE</span></td>
+        <td>20.89</td><td class="worst">0.556</td><td class="worst">0.402</td>
+        <td class="note">n/d</td>
+        <td class="l">Baseline a superar. Robusto al render honesto (offset in-train→honesto solo −0.03 dB).</td>
+      </tr>
+      <tr>
+        <td class="l run">run67</td>
+        <td><span class="tag tCLA">CLÁSICO</span></td>
+        <td class="worst">20.6684</td><td>0.5811</td><td>0.3675</td>
+        <td>4.88 M</td>
+        <td class="l"><b>Mejor clásico del historial</b> (fix del trinquete de β). <span class="win">Gana SSIM y LPIPS</span> al oficial; <span class="lose">pierde PSNR −0.22 dB</span>. Primer clásico que iguala el patrón perceptual del MCMC.</td>
+      </tr>
+      <tr class="champ">
+        <td class="l run">run36 🏆</td>
+        <td><span class="tag tMCMC">MCMC</span></td>
+        <td class="best">21.1572</td><td class="best">0.5926</td><td class="best">0.3555</td>
+        <td>7.5 M</td>
+        <td class="l"><b>Campeón global del proyecto.</b> <span class="win">DOMINA al oficial en las TRES métricas</span> (<code>opacity_reg</code>=0.06 adelgaza el velo). Objetivo "superar baseline 2DGS" <b>cumplido</b>, PSNR incluido (+0.27 dB).</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="card">
+    <b>Lectura flowers:</b>
+    <ul>
+      <li><b>run36 (MCMC) es el único que gana al oficial en las 3 métricas</b> — es el techo del proyecto en flowers.</li>
+      <li><b>run67 (clásico) gana perceptualmente</b> (SSIM + LPIPS) pero le falta −0.22 dB de PSNR para dominar. Es la mejor versión del camino clásico tras arreglar el trinquete de β.</li>
+      <li>Patrón común de nuestros dos caminos: <b>ganamos SSIM/LPIPS al oficial</b>; el PSNR solo lo supera run36.</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════════════ BONSAI ══════════════════════ -->
+  <h2>2 · bonsai <span class="note">(escena interior acotada — sin fondo rasante ni velo; régimen opuesto a flowers)</span></h2>
+  <p class="sub2">Baseline oficial vs nuestro <b>clásico limpio (run76, config run67)</b> y nuestro <b>mejor MCMC (run44)</b>. cap oficial bonsai = 1.5M.</p>
+  <table>
+    <thead>
+      <tr>
+        <th class="l">Método / Run</th><th>Camino</th>
+        <th>PSNR ↑</th><th>SSIM ↑</th><th>LPIPS ↓</th>
+        <th>Primitivas</th><th class="l">Notas</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="l run">2DGS oficial</td>
+        <td><span class="tag tORIG">BASELINE</span></td>
+        <td class="best">31.36</td><td>0.9359</td><td class="worst">0.2042</td>
+        <td>798 K</td>
+        <td class="l">Baseline a superar en bonsai. Muy fuerte en escena acotada con muy pocos splats.</td>
+      </tr>
+      <tr>
+        <td class="l run">run76</td>
+        <td><span class="tag tCLA">CLÁSICO</span></td>
+        <td>30.8194</td><td class="worst">0.9303</td><td>0.1971</td>
+        <td>1.37 M</td>
+        <td class="l"><b>Clásico limpio (config run67) en bonsai.</b> <span class="win">Gana LPIPS</span> al oficial pero <span class="lose">pierde PSNR (−0.54) y SSIM (−0.0056)</span>. Patrón <b>roto</b> vs flowers (donde el clásico ganaba SSIM): en escena acotada los huecos negros del clásico rompen la estructura, ni el fix del trinquete lo salva.</td>
+      </tr>
+      <tr class="champ">
+        <td class="l run">run44 🏆</td>
+        <td><span class="tag tMCMC">MCMC</span></td>
+        <td class="worst">30.67</td><td class="best">0.9404</td><td class="best">0.1862</td>
+        <td>1.5 M</td>
+        <td class="l"><b>Campeón bonsai.</b> <span class="win">Gana SSIM (+0.0045) y LPIPS (−0.0180)</span> al oficial; <span class="lose">pierde PSNR −0.69 dB</span> → mismo patrón perceptual que flowers/run36 (<code>opacity_reg</code>=0.01, cap 1.5M, conserva detalle).</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="card">
+    <b>Lectura bonsai:</b>
+    <ul>
+      <li><b>run44 (MCMC) es el campeón</b> — el único que gana SSIM + LPIPS al oficial. En bonsai (acotada) gana <b>conservar detalle</b>, no adelgazar.</li>
+      <li><b>El clásico NO transfiere de flowers a bonsai</b> (run76): la config ganadora en flowers (run67) aquí pierde SSIM y PSNR al oficial. Gana PSNR a run44 pero a costa del perceptual → los huecos del clásico rompen la estructura en escena acotada.</li>
+      <li><b>Patrón consistente en ambos datasets:</b> el camino que gana perceptualmente (SSIM/LPIPS) al oficial es el <b>MCMC</b> (run36 en flowers, run44 en bonsai), no el clásico.</li>
+    </ul>
+  </div>
+
+  <h2>3 · bicycle <span class="note">(escena exterior no acotada — fondo rasante, régimen flowers)</span></h2>
+  <p class="sub2">Baseline oficial (medido local con nuestro <code>metrics.py</code>) vs nuestro <b>clásico limpio (run77, config run67/run76)</b>. Honesto-vs-honesto real, 25 vistas.</p>
+  <table>
+    <thead>
+      <tr>
+        <th class="l">Método / Run</th><th>Camino</th>
+        <th>PSNR ↑</th><th>SSIM ↑</th><th>LPIPS ↓</th>
+        <th>Primitivas</th><th class="l">Notas</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="l run">2DGS oficial</td>
+        <td><span class="tag tORIG">BASELINE</span></td>
+        <td class="worst">24.6091</td><td class="worst">0.7134</td><td class="worst">0.3064</td>
+        <td>3.55 M</td>
+        <td class="l">Baseline a superar en bicycle (medido local con nuestro <code>metrics.py</code>).</td>
+      </tr>
+      <tr class="champ">
+        <td class="l run">run77 🏆</td>
+        <td><span class="tag tCLA">CLÁSICO</span></td>
+        <td class="best">24.7836</td><td class="best">0.7424</td><td class="best">0.2509</td>
+        <td>7.67 M</td>
+        <td class="l"><b>Campeón bicycle — DOMINA al oficial en las TRES métricas</b> (<span class="win">PSNR +0.175, SSIM +0.029, LPIPS −0.056</span>). <b>Primera escena exterior donde el clásico gana también PSNR</b> (en flowers run67 lo perdía −0.22). El fix del trinquete de β + 2.16× masa útil lo hace competitivo también fuera de flowers.</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="card">
+    <b>Lectura bicycle:</b>
+    <ul>
+      <li><b>run77 (clásico limpio) es el único run del proyecto que GANA las 3 métricas al oficial en un exterior</b> — supera incluso al patrón de flowers (donde el clásico perdía PSNR). El camino clásico con el trinquete arreglado generaliza a bicycle mejor que a flowers.</li>
+    </ul>
+  </div>
+
+  <h2>4 · kitchen <span class="note">(escena interior acotada — sin fondo rasante ni velo; régimen bonsai)</span></h2>
+  <p class="sub2">Baseline oficial (medido local con nuestro <code>metrics.py</code>) vs nuestro <b>clásico limpio (run78, config run67/run76)</b>. Honesto-vs-honesto real, 35 vistas.</p>
+  <table>
+    <thead>
+      <tr>
+        <th class="l">Método / Run</th><th>Camino</th>
+        <th>PSNR ↑</th><th>SSIM ↑</th><th>LPIPS ↓</th>
+        <th>Primitivas</th><th class="l">Notas</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="l run">2DGS oficial</td>
+        <td><span class="tag tORIG">BASELINE</span></td>
+        <td class="best">30.3389</td><td class="worst">0.9210</td><td class="worst">0.1383</td>
+        <td>818 K</td>
+        <td class="l">Baseline a superar en kitchen (medido local). Conserva el mejor PSNR por +0.05 (dentro del ruido).</td>
+      </tr>
+      <tr class="champ">
+        <td class="l run">run78 🏆</td>
+        <td><span class="tag tCLA">CLÁSICO</span></td>
+        <td class="worst">30.2876</td><td class="best">0.9266</td><td class="best">0.1255</td>
+        <td>1.82 M</td>
+        <td class="l"><b>Campeón perceptual kitchen.</b> <span class="win">Gana SSIM (+0.0056) y LPIPS (−0.0128)</span>, <span class="lose">pierde PSNR por un pelo (−0.051 = ruido)</span>. <b>CONTRADICE la lección de bonsai</b>: allí el clásico (run76) perdía SSIM al oficial; aquí lo gana → los huecos negros del clásico no rompen la estructura en toda escena acotada, bonsai era el caso peor.</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="card">
+    <b>Lectura kitchen:</b>
+    <ul>
+      <li><b>run78 (clásico limpio) gana SSIM+LPIPS al oficial en interior acotado</b> — justo lo que bonsai (run76) NO conseguía. La conclusión "el clásico rompe la estructura en escenas acotadas" era específica de bonsai, no una regla general.</li>
+      <li><b>Lectura conjunta (4 escenas):</b> el clásico limpio (config run67) gana <b>perceptualmente</b> (SSIM/LPIPS) al oficial en <b>flowers, bicycle y kitchen</b>, y en <b>bicycle domina las 3</b>. Solo <b>bonsai</b> se le resiste en SSIM → el fix del trinquete de β generaliza mucho mejor de lo que sugería el único punto acotado previo.</li>
+    </ul>
+  </div>
+
+  <p class="note" style="margin-top:22px">Fuentes: <code>historial_runs.csv</code> · <code>docs/comparativa_runs.html</code> (historial completo) · <code>docs/comparativa_vs_original.html</code> (honesto-vs-honesto vs 2DGS original). Métricas honestas = <code>metrics.py</code> (PSNR/SSIM/LPIPS vía <code>lpipsPyTorch</code>). Última actualización 2026-07-23.</p>
+
+</div>
+</body>
+</html>

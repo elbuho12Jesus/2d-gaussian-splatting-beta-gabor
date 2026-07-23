@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Densificación MCMC — relocate_gs y add_new_gs</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .tok-c{color:#8b949e;font-style:italic}      /* comentario */
+  .tok-k{color:#ff7b72}                          /* keyword */
+  .tok-f{color:#d2a8ff}                          /* función */
+  .tok-s{color:#a5d6ff}                          /* string/num */
+  .tok-v{color:#79c0ff}                          /* variable destacada */
+  .badge{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+    padding:2px 9px;border-radius:999px;text-transform:uppercase}
+  .b-relo{background:rgba(110,168,254,.15);color:var(--accent);border:1px solid rgba(110,168,254,.4)}
+  .b-add{background:rgba(126,231,135,.13);color:var(--accent2);border:1px solid rgba(126,231,135,.4)}
+  .b-key{background:rgba(255,180,84,.13);color:var(--warn);border:1px solid rgba(255,180,84,.4)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:18px 0}
+  .callout{border-left:4px solid var(--accent);background:var(--panel2);border-radius:0 10px 10px 0;padding:14px 18px;margin:18px 0}
+  .callout.key{border-left-color:var(--warn)}
+  .callout.danger{border-left-color:var(--danger)}
+  .callout h4{margin:.1em 0 .3em;font-size:1rem}
+  figure{margin:22px 0;text-align:center}
+  figcaption{color:var(--muted);font-size:.86rem;margin-top:8px}
+  svg{max-width:100%;height:auto;background:var(--panel2);border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.9rem}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent)}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 22px}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .toc ol{margin:.3em 0;padding-left:1.4em}
+  .step{display:flex;gap:14px;align-items:flex-start;margin:10px 0}
+  .step .n{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:#0b0d13;
+    font-weight:800;display:flex;align-items:center;justify-content:center;font-size:.9rem}
+  .step.add .n{background:var(--accent2)}
+  .muted{color:var(--muted)}
+  .hl{background:rgba(255,180,84,.16);border-radius:4px;padding:0 3px}
+  hr{border:none;border-top:1px solid var(--line);margin:2.4em 0}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;font-size:.82rem;color:var(--muted);margin-top:6px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:3px;display:inline-block}
+  .filepath{font-size:.8rem;color:var(--muted);margin:-.4em 0 .8em}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Densificación MCMC</h1>
+<p class="sub">Funcionamiento actual de <code>relocate_gs</code> y <code>add_new_gs</code> — base para la Opción 2 (cambiar el sesgo del muestreo).</p>
+<p class="filepath">Archivos: <code>scene/gaussian_model.py</code> (líneas 536–621) · <code>train.py</code> (líneas 158–178)</p>
+
+<div class="toc">
+<strong>Contenido</strong>
+<ol>
+  <li><a href="#contexto">Contexto: dónde viven estas dos funciones</a></li>
+  <li><a href="#previos">Conceptos previos (opacidad, multinomial, regla de transmittance)</a></li>
+  <li><a href="#relocate">relocate_gs — reciclar splats muertos</a></li>
+  <li><a href="#add">add_new_gs — crecer hacia cap_max</a></li>
+  <li><a href="#muestreo">El corazón del problema: el muestreo ∝ opacidad</a></li>
+  <li><a href="#opcion2">Dónde interviene la Opción 2</a></li>
+</ol>
+</div>
+
+<!-- ============================================================= -->
+<h2 id="contexto">1. Contexto: dónde viven estas dos funciones</h2>
+
+<p>Cada <code>densification_interval</code> iteraciones (por defecto <strong>100</strong>), dentro de la ventana
+<code>densify_from_iter</code> → <code>densify_until_iter</code>, el bucle de entrenamiento ejecuta el
+<strong>paso de densificación MCMC</strong>. No hay split/clone por gradiente (eso es 2DGS, ya eliminado).
+El paso completo es solo esto:</p>
+
+<pre><code><span class="tok-c"># train.py:158-178 (resumido)</span>
+<span class="tok-k">if</span> iteration &lt; opt.densify_until_iter:
+    <span class="tok-k">if</span> iteration &gt; opt.densify_from_iter <span class="tok-k">and</span> iteration % opt.densification_interval == <span class="tok-s">0</span>:
+        gaussians.<span class="tok-f">sanitize_parameters</span>(iteration)              <span class="tok-c"># 1. limpiar NaN/Inf</span>
+        dead_mask = (gaussians.get_opacity &lt;= opt.opacity_cull).squeeze(-1)  <span class="tok-c"># 2. ¿quién está "muerto"?</span>
+        gaussians.<span class="tok-f">relocate_gs</span>(dead_mask=dead_mask)            <span class="tok-c"># 3. reciclar muertos</span>
+        gaussians.<span class="tok-f">add_new_gs</span>(cap_max=opt.cap_max)             <span class="tok-c"># 4. crear nuevos</span>
+
+        <span class="tok-c"># 5. ruido posicional: solo afecta splats casi transparentes</span>
+        noise = <span class="tok-f">randn_like</span>(_xyz) * (<span class="tok-s">1</span> - get_opacity)**<span class="tok-s">100</span> * noise_lr * xyz_lr
+        gaussians._xyz.<span class="tok-f">add_</span>(noise)
+</code></pre>
+
+<figure>
+<svg viewBox="0 0 900 150" role="img" aria-label="Flujo del paso de densificación">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#6ea8fe"/>
+    </marker>
+  </defs>
+  <g font-family="monospace" font-size="13" text-anchor="middle">
+    <rect x="14"  y="50" width="120" height="50" rx="9" fill="#1e222e" stroke="#2a2f3c"/>
+    <text x="74" y="72" fill="#9aa3b2">sanitize</text>
+    <text x="74" y="90" fill="#9aa3b2" font-size="11">NaN/Inf</text>
+
+    <rect x="174" y="50" width="140" height="50" rx="9" fill="#1e222e" stroke="#ffb454"/>
+    <text x="244" y="72" fill="#ffb454">dead_mask</text>
+    <text x="244" y="90" fill="#9aa3b2" font-size="11">op ≤ cull</text>
+
+    <rect x="354" y="50" width="140" height="50" rx="9" fill="#1e222e" stroke="#6ea8fe"/>
+    <text x="424" y="72" fill="#6ea8fe">relocate_gs</text>
+    <text x="424" y="90" fill="#9aa3b2" font-size="11">reciclar</text>
+
+    <rect x="534" y="50" width="140" height="50" rx="9" fill="#1e222e" stroke="#7ee787"/>
+    <text x="604" y="72" fill="#7ee787">add_new_gs</text>
+    <text x="604" y="90" fill="#9aa3b2" font-size="11">+5% pts</text>
+
+    <rect x="714" y="50" width="150" height="50" rx="9" fill="#1e222e" stroke="#2a2f3c"/>
+    <text x="789" y="72" fill="#9aa3b2">ruido xyz</text>
+    <text x="789" y="90" fill="#9aa3b2" font-size="11">(1-op)¹⁰⁰</text>
+
+    <line x1="136" y1="75" x2="172" y2="75" stroke="#6ea8fe" marker-end="url(#arr)"/>
+    <line x1="316" y1="75" x2="352" y2="75" stroke="#6ea8fe" marker-end="url(#arr)"/>
+    <line x1="496" y1="75" x2="532" y2="75" stroke="#6ea8fe" marker-end="url(#arr)"/>
+    <line x1="676" y1="75" x2="712" y2="75" stroke="#6ea8fe" marker-end="url(#arr)"/>
+  </g>
+</svg>
+<figcaption>Los 5 pasos del bloque de densificación. <code>relocate_gs</code> y <code>add_new_gs</code> son los pasos 3 y 4.</figcaption>
+</figure>
+
+<div class="callout key">
+<h4>La idea central de MCMC</h4>
+<p>En vez de "dividir el splat con más gradiente" (2DGS/3DGS clásico), MCMC trata el conjunto de splats como
+una <strong>población</strong> que se renueva: los que se vuelven transparentes (muertos) se reciclan, y la población
+crece clonando a los "buenos". <strong>Quién es bueno se decide por su opacidad</strong> — y ahí está exactamente
+la palanca de la Opción 2.</p>
+</div>
+
+
+<!-- ============================================================= -->
+<h2 id="previos">2. Conceptos previos</h2>
+
+<h3>Opacidad (alpha)</h3>
+<p>Cada splat guarda <code>_opacity</code> en espacio logit. La opacidad real es
+<code>get_opacity = sigmoid(_opacity) ∈ (0, 1)</code>. Un splat con opacidad ≈ 0 es invisible (transparente).</p>
+
+<h3>Muestreo proporcional: <code>torch.multinomial</code></h3>
+<p>Las dos funciones eligen splats "fuente" con <code>torch.multinomial(probs, n, replacement=True)</code>.
+Esto sortea <code>n</code> índices donde la probabilidad de cada splat es proporcional a su peso.
+<span class="hl">Hoy ese peso es la opacidad</span>: <code>probs = get_opacity</code>. Por tanto, un splat con opacidad 0.9
+tiene ~9× más probabilidad de ser clonado que uno con opacidad 0.1.</p>
+
+<h3>Regla de conservación de transmittance (α/2)</h3>
+<p>Cuando un splat de opacidad <code>α</code> se "reparte" en dos (el original y la copia), ambos quedan con
+<code>α/2</code>. Esto evita que clonar dispare el brillo de esa zona: dos splats al 50 % se parecen ópticamente
+a uno al 100 %. En el código:</p>
+<pre><code>src_alpha = get_opacity[src_idx].clamp(min=<span class="tok-s">2e-3</span>, max=<span class="tok-s">1-1e-3</span>)
+new_alpha = (src_alpha * <span class="tok-s">0.5</span>).clamp(min=<span class="tok-s">1e-3</span>)        <span class="tok-c"># ← la mitad</span>
+new_opacity_raw = <span class="tok-f">inverse_opacity_activation</span>(new_alpha)  <span class="tok-c"># volver a logit</span></code></pre>
+<p class="muted">Nota: el repo oficial usa una fórmula más fina <code>1−(1−α)^(1/(ratio+1))</code> que reparte entre
+las <em>ratio</em> copias reales; aquí se simplificó a la mitad exacta. No afecta a la Opción 2, pero conviene saberlo.</p>
+
+
+<!-- ============================================================= -->
+<h2 id="relocate"><span class="badge b-relo">relocate_gs</span> &nbsp;3. Reciclar splats muertos</h2>
+<p class="filepath"><code>scene/gaussian_model.py:536–580</code></p>
+
+<p><strong>Objetivo:</strong> los splats cuya opacidad cayó por debajo de <code>opacity_cull</code> (0.005) ya no aportan.
+En vez de borrarlos (lo que reduciría el conteo), se <strong>sobrescriben</strong> con una copia de un splat vivo
+"bueno". El número total de splats no cambia.</p>
+
+<div class="card">
+<div class="step"><div class="n">1</div><div><strong>Identificar muertos y vivos.</strong>
+<code>dead_idx</code> = índices con opacidad ≤ cull. <code>alive_idx</code> = el resto.</div></div>
+<div class="step"><div class="n">2</div><div><strong>Calcular pesos de los vivos.</strong>
+<code class="hl">probs = get_opacity[alive_idx]</code> (saneados, clamp&nbsp;≥&nbsp;1e-6). Se normaliza a una distribución.</div></div>
+<div class="step"><div class="n">3</div><div><strong>Sortear fuentes.</strong>
+<code>src_idx = alive_idx[multinomial(weights, n_dead, replacement=True)]</code> — un splat vivo por cada muerto,
+elegido <span class="hl">proporcional a su opacidad</span>.</div></div>
+<div class="step"><div class="n">4</div><div><strong>Copiar TODOS los parámetros</strong> de <code>src_idx</code> a <code>dead_idx</code>:
+xyz, color (f_dc/f_rest), scaling, rotation, beta. El muerto pasa a ser un duplicado del vivo.</div></div>
+<div class="step"><div class="n">5</div><div><strong>Repartir opacidad.</strong>
+<code>new_alpha = src_alpha · 0.5</code> se asigna <em>tanto al muerto como a su fuente</em>
+(<code>_opacity[dead]=_opacity[src]=new_alpha</code>).</div></div>
+<div class="step"><div class="n">6</div><div><strong>Resetear estado.</strong> Contadores (<code>low_opacity_counter</code>,
+<code>xyz_gradient_accum</code>, <code>max_radii2D</code>) y el momentum de Adam (<code>exp_avg/exp_avg_sq</code>) para
+<code>dead ∪ src</code>, para que no arrastren historia vieja.</div></div>
+</div>
+
+<figure>
+<svg viewBox="0 0 880 300" role="img" aria-label="Diagrama de relocate_gs">
+  <defs>
+    <marker id="arr2" markerWidth="10" markerHeight="10" refX="8" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#6ea8fe"/>
+    </marker>
+  </defs>
+  <text x="440" y="26" text-anchor="middle" fill="#e6e8ee" font-size="14" font-family="monospace">ANTES — población de 8 splats</text>
+  <!-- fila antes -->
+  <g font-family="monospace" font-size="11" text-anchor="middle">
+    <!-- vivos (verde según opacidad) y muertos (gris) -->
+    <rect x="40"  y="44" width="70" height="46" rx="7" fill="#1f6f3f" stroke="#2a2f3c"/><text x="75"  y="64" fill="#fff">vivo</text><text x="75" y="80" fill="#cde">op .9</text>
+    <rect x="140" y="44" width="70" height="46" rx="7" fill="#2b2f3c" stroke="#ff7b72" stroke-dasharray="4 3"/><text x="175" y="64" fill="#ff7b72">muerto</text><text x="175" y="80" fill="#9aa3b2">op .002</text>
+    <rect x="240" y="44" width="70" height="46" rx="7" fill="#2a6b3c" stroke="#2a2f3c"/><text x="275" y="64" fill="#fff">vivo</text><text x="275" y="80" fill="#cde">op .7</text>
+    <rect x="340" y="44" width="70" height="46" rx="7" fill="#173a24" stroke="#2a2f3c"/><text x="375" y="64" fill="#fff">vivo</text><text x="375" y="80" fill="#cde">op .3</text>
+    <rect x="440" y="44" width="70" height="46" rx="7" fill="#2b2f3c" stroke="#ff7b72" stroke-dasharray="4 3"/><text x="475" y="64" fill="#ff7b72">muerto</text><text x="475" y="80" fill="#9aa3b2">op .001</text>
+    <rect x="540" y="44" width="70" height="46" rx="7" fill="#1f6f3f" stroke="#2a2f3c"/><text x="575" y="64" fill="#fff">vivo</text><text x="575" y="80" fill="#cde">op .85</text>
+    <rect x="640" y="44" width="70" height="46" rx="7" fill="#173a24" stroke="#2a2f3c"/><text x="675" y="64" fill="#fff">vivo</text><text x="675" y="80" fill="#cde">op .25</text>
+    <rect x="740" y="44" width="70" height="46" rx="7" fill="#2a6b3c" stroke="#2a2f3c"/><text x="775" y="64" fill="#fff">vivo</text><text x="775" y="80" fill="#cde">op .6</text>
+  </g>
+
+  <!-- flechas de copia: los vivos de alta opacidad alimentan los muertos -->
+  <path d="M75,92 C75,140 175,150 175,182" fill="none" stroke="#6ea8fe" stroke-width="2" marker-end="url(#arr2)"/>
+  <path d="M575,92 C575,140 475,150 475,182" fill="none" stroke="#6ea8fe" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="120" y="150" fill="#6ea8fe" font-size="10.5" font-family="monospace">copia (∝ op)</text>
+
+  <text x="440" y="216" text-anchor="middle" fill="#e6e8ee" font-size="14" font-family="monospace">DESPUÉS — mismos 8 slots, sin huecos muertos</text>
+  <g font-family="monospace" font-size="11" text-anchor="middle">
+    <rect x="40"  y="232" width="70" height="46" rx="7" fill="#2a6b3c" stroke="#2a2f3c"/><text x="75"  y="252" fill="#fff">vivo</text><text x="75" y="268" fill="#cde">op .45</text>
+    <rect x="140" y="232" width="70" height="46" rx="7" fill="#2a6b3c" stroke="#7ee787"/><text x="175" y="252" fill="#fff">≡ copia</text><text x="175" y="268" fill="#cde">op .45</text>
+    <rect x="240" y="232" width="70" height="46" rx="7" fill="#2a6b3c" stroke="#2a2f3c"/><text x="275" y="252" fill="#fff">vivo</text><text x="275" y="268" fill="#cde">op .7</text>
+    <rect x="340" y="232" width="70" height="46" rx="7" fill="#173a24" stroke="#2a2f3c"/><text x="375" y="252" fill="#fff">vivo</text><text x="375" y="268" fill="#cde">op .3</text>
+    <rect x="440" y="232" width="70" height="46" rx="7" fill="#1f6f3f" stroke="#7ee787"/><text x="475" y="252" fill="#fff">≡ copia</text><text x="475" y="268" fill="#cde">op .42</text>
+    <rect x="540" y="232" width="70" height="46" rx="7" fill="#1f6f3f" stroke="#2a2f3c"/><text x="575" y="252" fill="#fff">vivo</text><text x="575" y="268" fill="#cde">op .42</text>
+    <rect x="640" y="232" width="70" height="46" rx="7" fill="#173a24" stroke="#2a2f3c"/><text x="675" y="252" fill="#fff">vivo</text><text x="675" y="268" fill="#cde">op .25</text>
+    <rect x="740" y="232" width="70" height="46" rx="7" fill="#2a6b3c" stroke="#2a2f3c"/><text x="775" y="252" fill="#fff">vivo</text><text x="775" y="268" fill="#cde">op .6</text>
+  </g>
+</svg>
+<figcaption>Los muertos (rojo) se sobrescriben con una copia de un vivo elegido por opacidad. La fuente y la copia
+quedan a media opacidad. El conteo total (8) no cambia. <strong>La copia nace en la misma posición que su fuente.</strong></figcaption>
+</figure>
+
+<div class="callout danger">
+<h4>Consecuencia clave</h4>
+<p>Un splat muerto en una zona del fondo <strong>no se queda en su sitio para arreglarlo</strong>: se teletransporta
+a donde ya hay un splat vivo y opaco (típicamente foreground). La zona vacía pierde su última primitiva.</p>
+</div>
+
+
+<!-- ============================================================= -->
+<h2 id="add"><span class="badge b-add">add_new_gs</span> &nbsp;4. Crecer hacia cap_max</h2>
+<p class="filepath"><code>scene/gaussian_model.py:582–621</code></p>
+
+<p><strong>Objetivo:</strong> aumentar el número de splats un <strong>5 % por paso</strong> hasta llegar al techo
+<code>cap_max</code>. Cada splat nuevo es un <strong>clon de un splat vivo</strong> elegido —otra vez— por opacidad.</p>
+
+<div class="card">
+<div class="step add"><div class="n">1</div><div><strong>Calcular cuántos crear.</strong>
+<code>target = min(cap_max, ceil(1.05 · N))</code>, <code>k = target − N</code>. Si ya estás en el cap, <code>k=0</code> y no hace nada.</div></div>
+<div class="step add"><div class="n">2</div><div><strong>Pesos = opacidad de TODOS los splats.</strong>
+<code class="hl">probs = get_opacity</code> (saneado, normalizado). A diferencia de relocate, aquí se muestrea sobre toda la población.</div></div>
+<div class="step add"><div class="n">3</div><div><strong>Sortear k fuentes.</strong>
+<code>src_idx = multinomial(probs, k, replacement=True)</code> — <span class="hl">proporcional a opacidad</span>.</div></div>
+<div class="step add"><div class="n">4</div><div><strong>Clonar.</strong> Los <code>k</code> nuevos copian xyz/color/scaling/rotation/beta de sus fuentes.
+<code>new_xyz = _xyz[src_idx]</code> → <strong>nacen exactamente encima de su fuente</strong>.</div></div>
+<div class="step add"><div class="n">5</div><div><strong>Repartir opacidad.</strong> Nuevo y fuente quedan a <code>src_alpha·0.5</code>.</div></div>
+<div class="step add"><div class="n">6</div><div><strong>Append + reset.</strong> <code>densification_postfix</code> añade los nuevos al optimizador;
+se resetea el momentum de Adam de las fuentes.</div></div>
+</div>
+
+<figure>
+<svg viewBox="0 0 880 250" role="img" aria-label="Diagrama de add_new_gs">
+  <defs>
+    <marker id="arr3" markerWidth="10" markerHeight="10" refX="8" refY="3.5" orient="auto">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#7ee787"/>
+    </marker>
+  </defs>
+  <text x="440" y="26" text-anchor="middle" fill="#e6e8ee" font-size="14" font-family="monospace">N splats  →  target = 1.05 · N</text>
+
+  <!-- población existente -->
+  <g font-family="monospace" font-size="11" text-anchor="middle">
+    <rect x="40"  y="46" width="64" height="44" rx="7" fill="#1f6f3f" stroke="#2a2f3c"/><text x="72" y="66" fill="#fff">op .9</text><text x="72" y="82" fill="#cde" font-size="9">foreground</text>
+    <rect x="120" y="46" width="64" height="44" rx="7" fill="#2a6b3c" stroke="#2a2f3c"/><text x="152" y="70" fill="#fff">op .7</text>
+    <rect x="200" y="46" width="64" height="44" rx="7" fill="#1f6f3f" stroke="#2a2f3c"/><text x="232" y="70" fill="#fff">op .85</text>
+    <rect x="280" y="46" width="64" height="44" rx="7" fill="#173a24" stroke="#2a2f3c"/><text x="312" y="66" fill="#fff">op .2</text><text x="312" y="82" fill="#cde" font-size="9">fondo</text>
+    <rect x="360" y="46" width="64" height="44" rx="7" fill="#14301d" stroke="#2a2f3c"/><text x="392" y="66" fill="#fff">op .1</text><text x="392" y="82" fill="#cde" font-size="9">fondo</text>
+  </g>
+
+  <!-- nuevos clones, salen sobre todo de los opacos -->
+  <g font-family="monospace" font-size="10.5" text-anchor="middle">
+    <rect x="520" y="46" width="64" height="44" rx="7" fill="#1f6f3f" stroke="#7ee787"/><text x="552" y="70" fill="#fff">clon .45</text>
+    <rect x="600" y="46" width="64" height="44" rx="7" fill="#1f6f3f" stroke="#7ee787"/><text x="632" y="70" fill="#fff">clon .42</text>
+    <rect x="680" y="46" width="64" height="44" rx="7" fill="#2a6b3c" stroke="#7ee787"/><text x="712" y="70" fill="#fff">clon .35</text>
+    <rect x="760" y="46" width="64" height="44" rx="7" fill="#1f6f3f" stroke="#7ee787"/><text x="792" y="70" fill="#fff">clon .45</text>
+  </g>
+  <text x="672" y="112" text-anchor="middle" fill="#7ee787" font-size="11" font-family="monospace">k nuevos (≈5%) — casi todos clonan foreground</text>
+
+  <path d="M72,92  C72,150 540,150 552,92" fill="none" stroke="#7ee787" stroke-width="1.6" marker-end="url(#arr3)"/>
+  <path d="M232,92 C232,160 620,160 632,92" fill="none" stroke="#7ee787" stroke-width="1.6" marker-end="url(#arr3)"/>
+  <path d="M152,92 C152,170 700,170 712,92" fill="none" stroke="#7ee787" stroke-width="1.6" marker-end="url(#arr3)"/>
+
+  <!-- los de baja opacidad casi nunca se eligen -->
+  <path d="M312,92 C312,200 770,200 780,92" fill="none" stroke="#3a4250" stroke-width="1.2" stroke-dasharray="3 4"/>
+  <text x="430" y="214" text-anchor="middle" fill="#6b7280" font-size="10" font-family="monospace">fondo: probabilidad casi nula de ser elegido ✕</text>
+</svg>
+<figcaption>El crecimiento del 5 % se reparte clonando splats opacos. Los splats de baja opacidad (fondos, zonas
+poco cubiertas) casi nunca son elegidos como fuente. <strong>Ningún clon aterriza en una zona vacía.</strong></figcaption>
+</figure>
+
+
+<!-- ============================================================= -->
+<h2 id="muestreo"><span class="badge b-key">clave</span> &nbsp;5. El corazón del problema: muestreo ∝ opacidad</h2>
+
+<p>Las dos funciones comparten exactamente la misma línea de decisión:</p>
+<pre><code><span class="tok-c"># relocate_gs (línea 551 y 558)</span>
+probs   = get_opacity[alive_idx]
+src_idx = alive_idx[ <span class="tok-f">torch.multinomial</span>(probs/probs.sum(), n_dead, replacement=<span class="tok-k">True</span>) ]
+
+<span class="tok-c"># add_new_gs (línea 592 y 599)</span>
+probs   = get_opacity
+src_idx = <span class="tok-f">torch.multinomial</span>(probs/probs.sum(), k, replacement=<span class="tok-k">True</span>)</code></pre>
+
+<p>El presupuesto de splats (reciclados + nuevos) se reparte <strong>proporcionalmente a la opacidad ya existente</strong>.
+Eso crea un ciclo que se retroalimenta:</p>
+
+<figure>
+<svg viewBox="0 0 760 230" role="img" aria-label="Ciclo de retroalimentación del sesgo por opacidad">
+  <defs>
+    <marker id="arr4" markerWidth="11" markerHeight="11" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#ffb454"/>
+    </marker>
+  </defs>
+  <g font-family="monospace" font-size="12.5" text-anchor="middle">
+    <rect x="250" y="20"  width="260" height="42" rx="9" fill="#1e222e" stroke="#ffb454"/>
+    <text x="380" y="46" fill="#ffb454">zona opaca (foreground)</text>
+
+    <rect x="540" y="95" width="200" height="42" rx="9" fill="#1e222e" stroke="#2a2f3c"/>
+    <text x="640" y="121" fill="#cde">recibe más splats</text>
+
+    <rect x="250" y="168" width="260" height="42" rx="9" fill="#1e222e" stroke="#2a2f3c"/>
+    <text x="380" y="194" fill="#cde">aún más opaca / detallada</text>
+
+    <rect x="20"  y="95" width="200" height="42" rx="9" fill="#1e222e" stroke="#2a2f3c"/>
+    <text x="120" y="115" fill="#9aa3b2">probabilidad alta</text>
+    <text x="120" y="131" fill="#9aa3b2" font-size="10">de ser muestreada</text>
+  </g>
+  <path d="M510,41  C600,55 640,72 640,93"  fill="none" stroke="#ffb454" stroke-width="2" marker-end="url(#arr4)"/>
+  <path d="M540,128 C470,150 450,156 440,166" fill="none" stroke="#ffb454" stroke-width="2" marker-end="url(#arr4)"/>
+  <path d="M250,189 C150,180 120,160 120,139" fill="none" stroke="#ffb454" stroke-width="2" marker-end="url(#arr4)"/>
+  <path d="M120,93  C120,72 200,52 248,44"   fill="none" stroke="#ffb454" stroke-width="2" marker-end="url(#arr4)"/>
+</svg>
+<figcaption>Ciclo de Mateo ("el que tiene, recibe más"): la opacidad atrae presupuesto, que aumenta la opacidad.
+Las zonas de baja opacidad — fondos translúcidos, huecos sin puntos SfM — quedan fuera del reparto.</figcaption>
+</figure>
+
+<div class="callout danger">
+<h4>Por qué quedan los huecos negros / falta de detalle</h4>
+<ul>
+<li><strong>add_new_gs</strong> clona en la <em>misma posición</em> de la fuente → nunca pone un splat donde no había nada.</li>
+<li><strong>relocate_gs</strong> mueve los muertos <em>hacia</em> el foreground → vacía aún más las zonas pobres.</li>
+<li>El <strong>ruido posicional</strong> solo desplaza splats casi transparentes y muy localmente: no transporta capacidad de una región a otra.</li>
+</ul>
+<p>Resultado: una zona que arrancó con pocos o cero puntos SfM (cielo liso, césped uniforme, pared) nunca recibe
+primitivas nuevas y se renderiza con el fondo (negro).</p>
+</div>
+
+
+<!-- ============================================================= -->
+<h2 id="opcion2">6. Dónde interviene la Opción 2</h2>
+
+<p>La Opción 2 consiste en <strong>cambiar el vector <code>probs</code></strong> que alimenta <code>torch.multinomial</code>
+en ambas funciones — son exactamente dos puntos en el código:</p>
+
+<table>
+<tr><th>Función</th><th>Línea actual</th><th>Qué controla</th></tr>
+<tr><td><code>relocate_gs</code></td><td><code>gaussian_model.py:551</code> → <code>alive_op = get_opacity[alive_idx]</code></td><td>A dónde van los splats reciclados</td></tr>
+<tr><td><code>add_new_gs</code></td><td><code>gaussian_model.py:592</code> → <code>probs = get_opacity.squeeze()</code></td><td>A dónde van los splats nuevos</td></tr>
+</table>
+
+<p>La idea es sustituir (o combinar) la opacidad por una señal que <strong>premie las zonas mal reconstruidas</strong>
+en lugar de las ya-opacas, por ejemplo:</p>
+
+<pre><code><span class="tok-c"># En vez de: probs = get_opacity</span>
+<span class="tok-c"># Algo como (esquema, aún por diseñar):</span>
+probs = get_opacity * (<span class="tok-s">1</span> + λ * error_acumulado_por_splat)
+<span class="tok-c">#   error_acumulado = |render − gt| proyectado sobre cada splat,</span>
+<span class="tok-c">#   acumulado durante el intervalo de densificación.</span></code></pre>
+
+<div class="callout">
+<h4>Lo que hay que decidir en el siguiente paso</h4>
+<ol>
+<li><strong>Qué señal de "mala reconstrucción" usar</strong> y cómo atribuirla a cada splat (gradiente de posición acumulado, residual L1 proyectado, varianza de profundidad…).</li>
+<li><strong>Cómo mezclarla con la opacidad</strong> (sustituir del todo vs. ponderar) para no romper la estabilidad numérica ni la regla de transmittance.</li>
+<li><strong>Sembrar zonas vacías</strong>: ojo, cambiar el muestreo redistribuye splats existentes, pero si una zona tiene <em>cero</em> primitivas seguirá sin recibir clones (no hay fuente cercana). Quizá haya que combinar con jitter posicional mayor en las fuentes de alto error.</li>
+</ol>
+</div>
+
+<p class="muted">Este documento describe solo el <strong>estado actual</strong>. El diseño concreto de la nueva señal de
+muestreo y su implementación se aborda en el siguiente paso.</p>
+
+<hr>
+<p class="muted" style="text-align:center;font-size:.8rem">
+Generado para el proyecto 2DGS → Beta Splatting · funcionamiento de <code>relocate_gs</code> / <code>add_new_gs</code> a fecha del run <em>bonsai_beta_run1</em> (PSNR 33.6).
+</p>
+
+</div>
+</body>
+</html>

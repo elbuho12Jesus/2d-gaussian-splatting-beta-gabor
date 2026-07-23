@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diagnóstico del ruido — run flowers1 (cap 6M)</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.95rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700} .hl3{color:var(--accent);font-weight:700}
+  .center{text-align:center}
+  .big{font-size:1.3rem;font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Diagnóstico del ruido — run <code>flowers1</code> (cap 6M)</h1>
+<p class="sub">Qué nos dicen las sondas de debug del último entrenamiento (<code>train_server.sh</code>: flowers, <code>noise_lr=5e4</code>, <code>--cov_noise</code>, cap 6M, PSNR 24.36). Conclusión en una frase: <b>el ruido de exploración mueve los splats casi un radio de escena entero por paso, mientras el gradiente apenas los toca</b>. Eso es lo que conviene cambiar para los huecos del césped.</p>
+
+<div class="note ok-box"><b>Primero, la buena noticia.</b> La memoria <b>no</b> es problema en flowers: el pico fue <b>15.3 GB de 95</b> (quedaron 83 GB libres). El OOM era exclusivo de bonsai. En flowers puedes subir cap/resolución tranquilo.</div>
+
+<h2>1. Recordatorio: la posición tiene DOS fuerzas</h2>
+<p>Cada vez que se actualiza la posición <code>μ</code> de un splat, actúan dos términos (la ecuación MCMC de Beta/3DGS):</p>
+<div class="eq">μ &nbsp;&larr;&nbsp; μ <span class="hl3">&minus; λ<sub>lr</sub> &middot; &nabla;<sub>μ</sub>L</span> <span class="hl">+ λ<sub>ε</sub> &middot; ε</span></div>
+<div class="grid2">
+  <div class="card card2"><span class="tag" style="color:var(--accent);border-color:var(--accent)">Término 1 · GRADIENTE</span>
+  <p style="margin:.4em 0">El ajuste a la imagen. Mueve el splat hacia donde reduce el error de reconstrucción. Es el <code>optimizer.step()</code> de Adam. <b>Es la fuerza "inteligente".</b></p></div>
+  <div class="card card2"><span class="tag" style="color:var(--danger);border-color:var(--danger)">Término 2 · RUIDO</span>
+  <p style="margin:.4em 0">La exploración aleatoria (<code>ε</code>). Empuja al splat en una dirección al azar para que el MCMC pruebe sitios nuevos. <b>Es la fuerza "ciega".</b> Se supone que debe ser <b>pequeña y local</b>.</p></div>
+</div>
+
+<h2>2. Qué midieron las sondas (números reales del log)</h2>
+<p>Las sondas <code>[GRAD]</code> y <code>[NOISE]</code> imprimen el <b>desplazamiento real</b> que produce cada término, <code>‖Δμ‖</code>, en metros de la escena. Para referencia, el <b>radio de la escena</b> (<code>extent</code>) es <b>4.825</b> — o sea, "4.8" es el tamaño de toda la escena.</p>
+
+<table>
+  <tr><th>Iteración ~6500<br><span class="meta">(plena densificación)</span></th><th>Término 1 (gradiente)</th><th>Término 2 (ruido)</th></tr>
+  <tr><td>‖Δμ‖ media</td><td class="hl3">0.00003</td><td class="hl">4.85</td></tr>
+  <tr><td>‖Δμ‖ mediana</td><td>~0.00001</td><td class="hl">2.25</td></tr>
+  <tr><td>‖Δμ‖ máximo</td><td>~0.0006</td><td class="hl">61 &nbsp;(hasta 99 en el run)</td></tr>
+  <tr><td>vs radio de escena (4.825)</td><td>0.0006%</td><td class="hl">≈ 100% (¡y hasta 2000%!)</td></tr>
+</table>
+
+<p class="center big">El ruido mueve los splats <span class="hl">~150.000 veces más</span> que el gradiente.</p>
+
+<div class="card card2">
+<svg viewBox="0 0 900 260" width="900" height="260" role="img" aria-label="Comparación de magnitudes en escala log">
+  <text x="20" y="22" fill="#9aa3b2" font-size="13" font-family="monospace">magnitud de ‖Δμ‖ (escala logarítmica)</text>
+  <!-- eje base -->
+  <line x1="60" y1="220" x2="860" y2="220" stroke="#2a2f3c" stroke-width="1.5"/>
+  <!-- barras: posiciones x proporcionales a log10(valor) -->
+  <!-- grad mean 3e-5 -> log=-4.5 ; disp_noise 4.85 -> log=0.69 ; extent 4.825 ; max 99 -> log=2 -->
+  <!-- mapeo: log -5 -> x60 ; log 2.5 -> x860  (rango 7.5 dec, 800px -> 106.7px/dec) -->
+  <!-- grad: log10(3e-5)=-4.52 -> x=60+(-4.52+5)*106.7=111 -->
+  <g font-family="monospace" font-size="12">
+    <rect x="60" y="185" width="51"  height="30" fill="#6ea8fe" opacity="0.85"/>
+    <text x="115" y="178" fill="#6ea8fe">gradiente ≈ 0.00003</text>
+    <!-- noise mean: log10(4.85)=0.686 -> x=60+(0.686+5)*106.7=667 ; width from 60 -->
+    <rect x="60" y="120" width="607" height="30" fill="#ff7b72" opacity="0.85"/>
+    <text x="675" y="113" fill="#ff7b72">ruido (media) ≈ 4.85</text>
+    <!-- extent line: log10(4.825)=0.684 -> x=666 -->
+    <line x1="666" y1="60" x2="666" y2="230" stroke="#ffb454" stroke-width="2" stroke-dasharray="5 4"/>
+    <text x="540" y="52" fill="#ffb454">radio de escena = 4.825</text>
+    <!-- max noise: log10(99)=1.996 -> x=60+(1.996+5)*106.7=806 -->
+    <rect x="60" y="155" width="746" height="22" fill="#ff7b72" opacity="0.35"/>
+    <text x="700" y="171" fill="#ff7b72">ruido (máx) ≈ 99</text>
+  </g>
+  <text x="60" y="245" fill="#9aa3b2" font-size="11">El gradiente (azul) es un punto frente al ruido (rojo). El ruido medio = el tamaño de toda la escena.</text>
+</svg>
+</div>
+
+<h2>3. ¿Por qué el ruido es tan grande? (la causa)</h2>
+<p>El ruido aplicado es: <code>noise = η · B(o) · <span class="hl">noise_lr</span> · <span class="hl">xyz_lr</span></code>. El factor que fija la escala es <code>noise_lr · xyz_lr</code>:</p>
+<div class="eq">noise_lr &middot; xyz_lr = 5e4 &middot; 2.85e&minus;4 &asymp; <span class="hl">14</span> &nbsp;&nbsp;(en it6500)</div>
+<p>Ese 14, multiplicado por el ruido aleatorio (~1.7) y la atenuación por opacidad (media 0.21), da <code>14 · 1.7 · 0.21 ≈ 4.85</code> = exactamente la media medida. <b>El modelo encaja perfecto.</b> El problema: ese factor <b>no depende del tamaño del splat</b>, así que un splat diminuto recibe el mismo empujón gigante que uno grande.</p>
+
+<h3>La diferencia con el repo oficial de Beta</h3>
+<p>El oficial usa <b>el mismo <code>noise_lr=5e4</code></b>... pero multiplica el ruido por la <b>covarianza real del splat</b> <code>Σ = L·Lᵀ</code> (≈ tamaño², que vale ~0.0001). Eso <b>encoge</b> el ruido al tamaño del propio splat → exploración <b>local</b>. El <code>5e4</code> está pensado para ir multiplicado por ese <code>Σ</code> pequeño.</p>
+<p>En tu repo, <code>--cov_noise</code> normaliza la forma a <b>media 1</b> (mantiene la <i>dirección</i> anisótropa pero <b>tira la magnitud</b>), así que el <code>Σ</code> pequeño desaparece y el <code>5e4</code> queda "desnudo" → <b>~10.000× demasiado grande</b>.</p>
+
+<div class="card card2">
+<svg viewBox="0 0 900 250" width="900" height="250" role="img" aria-label="Exploración local oficial vs teletransporte de este repo">
+  <!-- izquierda: oficial, exploración local -->
+  <circle cx="220" cy="140" r="95" fill="none" stroke="#2a2f3c" stroke-width="1.5"/>
+  <text x="220" y="35" fill="#9aa3b2" font-size="12" text-anchor="middle" font-family="monospace">OFICIAL: ruido · Σ (tamaño²)</text>
+  <!-- splat -->
+  <ellipse cx="220" cy="150" rx="22" ry="11" fill="#7ee787" opacity="0.5" stroke="#7ee787"/>
+  <!-- pequeñas flechas de jitter local -->
+  <g stroke="#7ee787" stroke-width="2" fill="none">
+    <line x1="220" y1="150" x2="232" y2="142" marker-end="url(#a2)"/>
+    <line x1="220" y1="150" x2="210" y2="158" marker-end="url(#a2)"/>
+    <line x1="220" y1="150" x2="228" y2="160" marker-end="url(#a2)"/>
+  </g>
+  <text x="220" y="200" fill="#7ee787" font-size="12" text-anchor="middle">se mueve dentro de su propio tamaño</text>
+  <!-- derecha: este repo, teletransporte -->
+  <circle cx="660" cy="140" r="95" fill="none" stroke="#2a2f3c" stroke-width="1.5"/>
+  <text x="660" y="35" fill="#9aa3b2" font-size="12" text-anchor="middle" font-family="monospace">ESTE REPO: ruido (sin Σ)</text>
+  <ellipse cx="660" cy="150" rx="22" ry="11" fill="#ff7b72" opacity="0.5" stroke="#ff7b72"/>
+  <!-- flecha enorme que sale del circulo -->
+  <line x1="660" y1="150" x2="880" y2="70" stroke="#ff7b72" stroke-width="3" marker-end="url(#a1)"/>
+  <line x1="660" y1="150" x2="470" y2="210" stroke="#ff7b72" stroke-width="3" marker-end="url(#a1)"/>
+  <text x="660" y="205" fill="#ff7b72" font-size="12" text-anchor="middle">salta ~1 radio de escena (a veces fuera)</text>
+  <defs>
+    <marker id="a1" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#ff7b72"/></marker>
+    <marker id="a2" markerWidth="8" markerHeight="8" refX="5" refY="2.5" orient="auto"><path d="M0,0 L6,2.5 L0,5 Z" fill="#7ee787"/></marker>
+  </defs>
+</svg>
+</div>
+
+<h2>4. ¿Por qué esto deja huecos en el césped?</h2>
+<p>Los splats que deberían cubrir el fondo (césped, lejanía) <b>nacen con opacidad baja</b>. Y la atenuación por opacidad <code>B(o)=(1−o)<sup>100</sup></code> hace que <b>justo los de opacidad baja sean los que más ruido reciben</b> (en it6500, el <span class="hl">63% de los splats</span> estaban siendo perturbados).</p>
+<p>Resultado: un splat que aterriza en un hueco del césped, antes de poder ganar opacidad y "fijarse", recibe un empujón de ~1 radio de escena en la siguiente densificación → se va, o se aleja tanto que el MCMC lo recicla. <b>No le da tiempo a asentarse y tapar el hueco.</b></p>
+<div class="note">Lo que <b>sí</b> funciona bien: la atenuación por opacidad está correcta (los splats buenos, de alta opacidad, casi no se mueven). El fallo es <b>solo la magnitud</b> del empujón, no a quién afecta.</div>
+
+<h2>5. Qué proponemos probar (aún sin aplicar)</h2>
+<p>Bajar la magnitud del ruido para que la exploración sea <b>local</b> (una fracción pequeña del extent), como en el oficial. Cambio mínimo en <code>train_server.sh</code>:</p>
+<pre><code>--noise_lr 5e4   →   --noise_lr 5e2     <span style="color:#8b949e"># 100× menos</span></code></pre>
+<p>Con eso, el factor de escala pasaría de <code>~14</code> a <code>~0.14</code> y el <code>‖Δμ‖</code> medio de <code>~4.85</code> a <code>~0.05</code> (≈1% del extent). Lo verificaríamos con <code>DEBUG_NOISE=1</code> antes de juzgar nada.</p>
+
+<table>
+  <tr><th>Hipótesis a contrastar</th><th>Qué miraríamos</th></tr>
+  <tr><td>Ruido local deja asentarse a los splats de fondo</td><td>¿Se cierran los huecos blancos del césped?</td></tr>
+  <tr><td>Menos teletransporte = mejor convergencia</td><td>¿Sube el PSNR sobre 24.36?</td></tr>
+  <tr><td>Riesgo: ¿el ruido grande era lo que "rellenaba" por fuerza bruta?</td><td>Si los huecos <b>crecen</b>, el ruido ayudaba a cubrir → revertir o buscar valor intermedio (5e3)</td></tr>
+</table>
+
+<div class="note warn-box"><b>Decisión pendiente.</b> Probar un solo valor (<code>5e2</code>) o barrer <code>5e3 / 5e2 / 5e1</code> para ver la curva. Nada de esto está aplicado todavía — este doc es para que decidas con criterio.</div>
+
+<p class="meta">Fuente: <code>logs/flowers1.log</code> (sondas <code>[GRAD]</code>/<code>[NOISE]</code>/<code>[MEM]</code>), config <code>train_server.sh</code>. Código del ruido: <code>train.py:215-248</code>. Compañeros: <code>ruido_isotropico_vs_covarianza.html</code>, <code>ruido_hibrido_ejemplo.html</code>.</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Idea: covarianza tangencial + snap de profundidad a la superficie</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700}
+  .step{display:inline-block;width:1.7em;height:1.7em;line-height:1.7em;text-align:center;border-radius:999px;
+    background:#0b0d13;border:1px solid var(--accent);color:var(--accent);font-weight:700;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Idea: covarianza <i>tangencial</i> + snap de profundidad a la superficie</h1>
+<p class="sub">Propuesta tuya para reactivar el ruido por covarianza en surfels 2D sin migrar a 3D: explorar <b>moldeado por la covarianza</b> (deslizando en el plano del splat) pero, tras mover, <b>corregir la profundidad</b> colocando el splat en un <code>z̄</code> de referencia de la superficie; si no lo hay, mantener su <code>z</code> anterior. En la jerga de optimización esto es un <b>paso tangencial + retracción a la variedad</b>. Aquí la dibujo y evalúo si funcionaría.</p>
+
+<h2>1. El error de geometría que tu idea ataca</h2>
+<div class="card">
+<p>Como vimos en <code>ruido_isotropico_vs_covarianza.html</code> (sección 4), la covarianza de un surfel es <b>rango 2</b>: el ruido <code>Σ·n</code> se desliza <b>dentro del plano local</b> del splat. El problema: ese plano casi nunca coincide exactamente con la superficie real (el surfel está algo mal orientado, o la superficie es <b>curva</b>). Deslizar a lo largo del plano del splat → el centro se va <b>fuera de la superficie</b> = floater.</p>
+</div>
+
+<svg viewBox="0 0 920 250" role="img" aria-label="Deslizar en el plano del surfel lo saca de la superficie real">
+  <rect x="0" y="0" width="920" height="250" fill="#0b0d13" rx="10"/>
+  <text x="460" y="28" fill="#ff7b72" font-size="15" text-anchor="middle" font-weight="bold">Deslizar en el plano local → el splat se va de la superficie</text>
+  <!-- superficie real -->
+  <path d="M90,170 Q465,135 840,175" fill="none" stroke="#9aa3b2" stroke-width="5" opacity="0.55"/>
+  <text x="770" y="150" fill="#9aa3b2" font-size="12">superficie real</text>
+  <!-- surfel original (en superficie, mal orientado) -->
+  <line x1="270" y1="170" x2="330" y2="138" stroke="#7ee787" stroke-width="5"/>
+  <circle cx="300" cy="154" r="3.5" fill="#7ee787"/>
+  <text x="232" y="150" fill="#7ee787" font-size="12">surfel</text>
+  <!-- paso en el plano -->
+  <line x1="300" y1="154" x2="372" y2="116" stroke="#7ee787" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#g)"/>
+  <text x="360" y="104" fill="#7ee787" font-size="12">paso en el plano (Σ·n)</text>
+  <!-- surfel nuevo (flotando) -->
+  <line x1="342" y1="132" x2="402" y2="100" stroke="#7ee787" stroke-width="5" opacity="0.45"/>
+  <circle cx="372" cy="116" r="3.5" fill="#7ee787" opacity="0.6"/>
+  <!-- delta error -->
+  <line x1="372" y1="116" x2="372" y2="156" stroke="#ff7b72" stroke-width="2" stroke-dasharray="3 3"/>
+  <text x="382" y="142" fill="#ff7b72" font-size="13" font-weight="bold">Δz ✗</text>
+  <text x="460" y="232" fill="#9aa3b2" font-size="12" text-anchor="middle">el centro queda flotando por encima de la superficie real (floater)</text>
+  <defs>
+    <marker id="g" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#7ee787"/></marker>
+  </defs>
+</svg>
+
+<h2>2. Tu idea, en tres pasos</h2>
+<div class="card">
+<p><span class="step">1</span><b>Mover con la covarianza.</b> Construye Σ (3×3 padeando la 3ª escala, justo como <code>get_covariance</code> ya hace en <code>gaussian_model.py:29</code>) y da el paso <code>Σ·n</code>: exploración moldeada por la forma del splat (los grandes exploran más), deslizando en su plano.</p>
+<p><span class="step">2</span><b>Buscar un <code>z̄</code> de referencia.</b> En la nueva posición lateral, mira los splats vecinos y calcula su profundidad media <b>a lo largo de la normal</b> — la altura local de la superficie.</p>
+<p><span class="step">3</span><b>Corregir la profundidad.</b> Si hay <code>z̄</code> → coloca el splat ahí (vuelve a la superficie). Si <b>no</b> hay vecinos → mantén el <code>z</code> anterior.</p>
+<p class="note">La clave: la covarianza decide <b>hacia dónde</b> explorar (lateralmente, sesgado por geometría y tamaño); el snap decide <b>a qué profundidad</b> aterrizar (sobre la superficie). Separas las dos cosas que el <code>Σ·n</code> crudo mezclaba.</p>
+</div>
+
+<h2>3. Tu corrección, visualizada</h2>
+<svg viewBox="0 0 920 250" role="img" aria-label="Tras el paso tangencial, snap de la profundidad al z medio de los vecinos">
+  <rect x="0" y="0" width="920" height="250" fill="#0b0d13" rx="10"/>
+  <text x="460" y="28" fill="#7ee787" font-size="15" text-anchor="middle" font-weight="bold">Paso tangencial → snap al z̄ de los vecinos → de vuelta a la superficie</text>
+  <path d="M90,170 Q465,135 840,175" fill="none" stroke="#9aa3b2" stroke-width="5" opacity="0.55"/>
+  <!-- vecinos -->
+  <circle cx="320" cy="152" r="3" fill="#6ea8fe"/><circle cx="352" cy="149" r="3" fill="#6ea8fe"/>
+  <circle cx="392" cy="148" r="3" fill="#6ea8fe"/><circle cx="424" cy="149" r="3" fill="#6ea8fe"/>
+  <text x="430" y="170" fill="#6ea8fe" font-size="12">vecinos → z̄</text>
+  <!-- surfel original -->
+  <line x1="270" y1="170" x2="330" y2="138" stroke="#7ee787" stroke-width="5" opacity="0.5"/>
+  <circle cx="300" cy="154" r="3.5" fill="#7ee787"/>
+  <!-- paso lateral -->
+  <line x1="300" y1="154" x2="372" y2="116" stroke="#7ee787" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#g2)"/>
+  <text x="300" y="108" fill="#7ee787" font-size="12">1) Σ·n</text>
+  <!-- snap a superficie -->
+  <line x1="372" y1="116" x2="372" y2="148" stroke="#ffb454" stroke-width="2.5" marker-end="url(#a2)"/>
+  <text x="382" y="132" fill="#ffb454" font-size="12">2) snap z̄</text>
+  <!-- surfel final en superficie -->
+  <line x1="344" y1="164" x2="404" y2="132" stroke="#7ee787" stroke-width="5"/>
+  <circle cx="374" cy="148" r="3.5" fill="#7ee787"/>
+  <text x="412" y="124" fill="#7ee787" font-size="13" font-weight="bold">✓ en superficie</text>
+  <text x="460" y="232" fill="#9aa3b2" font-size="12" text-anchor="middle">explora lateralmente pero aterriza sobre la superficie local — sin floater</text>
+  <defs>
+    <marker id="g2" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#7ee787"/></marker>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#ffb454"/></marker>
+  </defs>
+</svg>
+
+<h2>4. Los dos casos del <code>else</code> (y dónde está el riesgo)</h2>
+<svg viewBox="0 0 920 260" role="img" aria-label="Hueco con borde se rellena; vacío total mantiene z previo y puede flotar">
+  <rect x="0" y="0" width="920" height="260" fill="#0b0d13" rx="10"/>
+
+  <!-- IZQUIERDA: hueco en una superficie (con borde) -->
+  <text x="230" y="28" fill="#7ee787" font-size="14" text-anchor="middle" font-weight="bold">Hueco en una superficie (con borde)</text>
+  <line x1="70" y1="150" x2="180" y2="146" stroke="#9aa3b2" stroke-width="5" opacity="0.55"/>
+  <line x1="290" y1="146" x2="400" y2="150" stroke="#9aa3b2" stroke-width="5" opacity="0.55"/>
+  <text x="235" y="138" fill="#ff7b72" font-size="12" text-anchor="middle">hueco</text>
+  <!-- vecinos del borde -->
+  <circle cx="178" cy="146" r="3" fill="#6ea8fe"/><circle cx="292" cy="146" r="3" fill="#6ea8fe"/>
+  <!-- splat moribundo que entra -->
+  <circle cx="150" cy="146" r="3.5" fill="#7ee787" opacity="0.5"/>
+  <line x1="150" y1="146" x2="228" y2="146" stroke="#7ee787" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#g3)"/>
+  <line x1="235" y1="146" x2="234" y2="146" stroke="#ffb454" stroke-width="2.5"/>
+  <line x1="208" y1="158" x2="262" y2="158" stroke="#7ee787" stroke-width="5"/>
+  <circle cx="235" cy="146" r="3.5" fill="#7ee787"/>
+  <text x="230" y="190" fill="#7ee787" font-size="13" text-anchor="middle" font-weight="bold">✓ z̄ interpolado del borde → rellena</text>
+  <text x="230" y="232" fill="#9aa3b2" font-size="11.5" text-anchor="middle">el caso de tus huecos de césped/pared:</text>
+  <text x="230" y="248" fill="#9aa3b2" font-size="11.5" text-anchor="middle">el borde da la profundidad correcta</text>
+
+  <!-- DERECHA: vacío total -->
+  <text x="690" y="28" fill="#ffb454" font-size="14" text-anchor="middle" font-weight="bold">Vacío total (sin vecinos)</text>
+  <!-- splat que entra al vacío -->
+  <circle cx="560" cy="120" r="3.5" fill="#7ee787" opacity="0.5"/>
+  <line x1="560" y1="120" x2="660" y2="120" stroke="#7ee787" stroke-width="2.5" stroke-dasharray="6 4" marker-end="url(#g3)"/>
+  <line x1="635" y1="120" x2="695" y2="120" stroke="#7ee787" stroke-width="5"/>
+  <circle cx="665" cy="120" r="3.5" fill="#7ee787"/>
+  <!-- fondo real lejos -->
+  <line x1="540" y1="210" x2="840" y2="216" stroke="#9aa3b2" stroke-width="4" opacity="0.4" stroke-dasharray="4 4"/>
+  <text x="690" y="206" fill="#9aa3b2" font-size="11">fondo real (lejos)</text>
+  <line x1="665" y1="120" x2="665" y2="208" stroke="#ff7b72" stroke-width="1.6" stroke-dasharray="3 3"/>
+  <text x="690" y="100" fill="#ffb454" font-size="12.5" text-anchor="middle">mantiene z anterior</text>
+  <text x="690" y="248" fill="#ff7b72" font-size="11.5" text-anchor="middle">⚠ si el z previo era de foreground → nuevo floater</text>
+
+  <defs>
+    <marker id="g3" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#7ee787"/></marker>
+  </defs>
+</svg>
+
+<div class="note danger-box">El <code>else</code> «mantén el <code>z</code> anterior» tiene una trampa: un splat moribundo que estaba en el <b>foreground</b> y se desliza hacia un hueco de fondo conserva su profundidad de foreground → puede quedar <b>flotando delante</b> del fondo real. Para esos casos suele ser más seguro <b>no moverlo</b> (revertir el paso) que dejarlo con un <code>z</code> que ya no corresponde.</div>
+
+<h2>5. ¿Funcionaría? Análisis honesto</h2>
+<table>
+<tr><th>Aspecto</th><th>Veredicto</th></tr>
+<tr><td><b>¿La intuición es correcta?</b></td><td class="hl2">Sí. «Paso tangencial + reproyección a la superficie» es una técnica real (optimización en variedades). Corrige tanto la mala orientación del surfel como la curvatura de la superficie.</td></tr>
+<tr><td><b>¿Ayuda a tus huecos?</b></td><td>Para huecos que son <b>gaps dentro de una superficie</b> (césped/pared con parches faltantes) → <span class="hl2">sí, y muy bien</span>: el borde da el <code>z̄</code> correcto y el splat aterriza justo en el hueco. Para vacíos sin borde → neutro/arriesgado (rama <code>else</code>).</td></tr>
+<tr><td><b>Coste</b></td><td>Una <b>búsqueda de vecinos (KNN)</b> por iteración de densificación. Caro si se hace sobre los N splats… pero la <b>compuerta</b> <code>(1-opacity)^100</code> hace que <b>solo los moribundos</b> se muevan de verdad → basta el KNN sobre ese subconjunto pequeño. <code>simple-knn</code> ya está en el repo.</td></tr>
+<tr><td><b>¿Qué es «z»?</b></td><td class="hl">Cuidado: no es el <code>z</code> del mundo (sin sentido para paredes verticales). Debe ser la coordenada <b>a lo largo de la normal</b> del splat. Hay que definirlo así para que sea independiente de la orientación.</td></tr>
+<tr><td><b>Choque con el optimizador</b></td><td>Un snap «duro» cada iteración pisa la profundidad que aprende el gradiente. Como solo afecta a moribundos (que no tienen profundidad útil que preservar), es aceptable; en splats activos sería mejor un pull <b>suave</b>.</td></tr>
+<tr><td><b>Riesgo del <code>else</code></b></td><td class="hl">«z previo» puede crear floaters nuevos en vacíos. Mejor revertir el paso si no hay vecinos.</td></tr>
+</table>
+
+<h2>6. Cómo lo implementaría (sobre <code>train.py:174-185</code>)</h2>
+<div class="card card2">
+<pre><code><span style="color:#8b949e"># reemplaza el bloque de ruido isotrópico actual</span>
+gate  = torch.pow(1.0 - opacity, noise_exp)              <span style="color:#8b949e"># solo moribundos se mueven</span>
+L     = build_scaling_rotation(
+          torch.cat([scale, torch.ones_like(scale[:, :1])], -1), rot)   <span style="color:#8b949e"># 3x3, como get_covariance</span>
+cov   = L @ L.transpose(1, 2)
+step  = torch.bmm(cov, randn_like(xyz).unsqueeze(-1)).squeeze(-1)
+step  = step * gate * noise_lr * xyz_lr                  <span style="color:#7ee787"># 1) paso moldeado por covarianza</span>
+xyz_new = xyz + step
+
+normal  = quaternion_to_normal(rot)                      <span style="color:#8b949e"># 3ª columna de R = t_w</span>
+z_ref, found = knn_surface_along_normal(xyz_new, normal, k=8)   <span style="color:#7ee787"># 2) z̄ de vecinos, sobre la normal</span>
+xyz_snap = xyz_new - ((xyz_new - z_ref) · normal) * normal      <span style="color:#7ee787"># 3) reproyecta a la superficie</span>
+
+xyz.copy_(torch.where(found, xyz_snap, <span class="hl">xyz</span>))   <span style="color:#8b949e"># sin vecinos → NO mover (más seguro que z previo)</span></code></pre>
+<p class="note ok-box">Es <b>todo Python</b> (no toca el rasterizer) → iterar es barato. El único componente nuevo es <code>knn_surface_along_normal</code>; se puede prototipar con <code>simple-knn</code> + una media de los centros vecinos proyectada sobre la normal.</p>
+</div>
+
+<h2>7. Veredicto</h2>
+<div class="card ok-box">
+<p><b>Sí, vale la pena prototiparla</b> — y encaja especialmente bien con tus huecos descritos (césped/cielo/pared), que son <b>gaps en superficies con borde</b>: ahí el <code>z̄</code> del borde coloca el splat justo donde falta. Es un punto intermedio inteligente entre el isotrópico (explora pero ensucia geometría) y el <code>Σ·n</code> crudo (limpio pero atrapado en el plano), <b>sin</b> el coste de migrar a 3D.</p>
+<p><b>Tres ajustes para que funcione de verdad:</b></p>
+<ul>
+  <li>Define <code>z</code> <b>a lo largo de la normal</b>, no del mundo.</li>
+  <li>Aplica el KNN <b>solo a moribundos</b> (la compuerta ya los selecciona) → barato.</li>
+  <li>En la rama sin vecinos, <b>revierte el paso</b> en vez de mantener el <code>z</code> previo → evita floaters de foreground colados en el fondo.</li>
+</ul>
+<p class="meta">Próximo paso natural: prototipo en <code>train.py</code> con KNN sobre el subconjunto moribundo, medir PSNR + inspección visual de huecos en bonsai/flowers frente al isotrópico actual. Relacionado: <code>ruido_isotropico_vs_covarianza.html</code> (secciones 4 y 8).</p>
+</div>
+
+</div>
+</body>
+</html>

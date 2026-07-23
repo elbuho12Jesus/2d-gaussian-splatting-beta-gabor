@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Densificación clásica (antes del MCMC): clone, split, prune y reset</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700} .hl3{color:var(--accent);font-weight:700}
+  .center{text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Densificación <span class="hl2">clásica</span> — la que existía <span class="hl">antes del MCMC</span></h1>
+<p class="sub">Cómo crecía y se podaba la nube en el 2DGS/3DGS original mediante <b>clone</b>, <b>split</b>, <b>prune</b> y <b>opacity&nbsp;reset</b>, todo dirigido por el <b>gradiente</b>. Es la receta que tu repo <b>sustituyó</b> por MCMC (relocate + add_new). Entender esto explica de paso <b>por qué <code>opacity_reset</code> tiene sentido aquí y rompe el MCMC</b>.</p>
+
+<div class="note"><b>Dónde vive este código.</b> En el repo original <code>/home/jesus/Documents/Gaussian_splatting/2d-gaussian-splatting</code>: bucle en <code>train.py:126-135</code>, métodos en <code>scene/gaussian_model.py</code> (<code>densify_and_clone</code> :374, <code>densify_and_split</code> :348, <code>densify_and_prune</code> :389, <code>prune_points</code> :290, <code>reset_opacity</code> :209). En <b>este</b> repo (modificate) esos métodos ya <b>no se usan</b>: se reemplazaron por <code>relocate_gs</code> + <code>add_new_gs</code> (MCMC). Ver <code>docs/mcmc_densificacion.html</code> para el lado MCMC.</p></div>
+
+<h2>1. La idea en una frase</h2>
+<div class="card card2">
+La densificación clásica es un <b>lazo adaptativo</b> que, cada cierto número de iteraciones, mira <b>qué splats tienen mucho error</b> (gradiente grande) y reacciona:
+<ul>
+<li>Si la zona está <b>infra-reconstruida</b> con splats <span class="hl2">pequeños</span> → <b>clona</b> (añade más).</li>
+<li>Si está infra-reconstruida con splats <span class="hl3">grandes</span> → <b>divide</b> (split en 2 más pequeños).</li>
+<li>Lo que sobra (opacidad casi nula, o demasiado grande en pantalla/mundo) → <b>poda</b> (lo borra).</li>
+<li>Periódicamente <b>baja toda la opacidad a casi 0</b> (<code>reset</code>) para forzar que cada splat <b>se gane de nuevo</b> su visibilidad — el que no lo logra, muere en la siguiente poda.</li>
+</ul>
+A diferencia del MCMC, aquí el <b>número de gaussianas cambia</b> constantemente (sube con clone/split, baja con prune). No hay <code>cap_max</code> rígido; el presupuesto lo decide el gradiente.
+</div>
+
+<h2>2. El motor: gradiente de viewspace acumulado</h2>
+<p>Todo arranca de una señal por splat: cuánto "tira" el error fotométrico de su posición en pantalla. Cada iteración se acumula (<code>add_densification_stats</code>, <code>gaussian_model.py</code>):</p>
+<div class="eq">accum<sub>i</sub> += ‖∇<sub>xy</sub> Loss‖ &nbsp;;&nbsp; denom<sub>i</sub> += 1 &nbsp;→&nbsp; grad<sub>i</sub> = accum<sub>i</sub> / denom<sub>i</sub></div>
+<p>Un <code>grad<sub>i</sub></code> alto significa "este punto de la imagen está mal reconstruido y el optimizador quiere mover este splat con fuerza" → <b>candidato a densificar</b>. El umbral es <code>densify_grad_threshold = 0.0002</code>.</p>
+
+<div class="center">
+<svg viewBox="0 0 860 150" width="860" role="img" aria-label="Línea temporal de la densificación clásica">
+  <rect x="0" y="0" width="860" height="150" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+  <line x1="40" y1="95" x2="820" y2="95" stroke="#3a4150" stroke-width="2"/>
+  <!-- marcas -->
+  <g font-size="11" fill="#9aa3b2" text-anchor="middle">
+    <line x1="120" y1="88" x2="120" y2="102" stroke="#6ea8fe" stroke-width="2"/>
+    <text x="120" y="120">500</text><text x="120" y="134" fill="#6b7280">densify_from</text>
+    <line x1="470" y1="88" x2="470" y2="102" stroke="#ffb454" stroke-width="2"/>
+    <text x="470" y="120">3000, 6000…</text><text x="470" y="134" fill="#6b7280">opacity_reset</text>
+    <line x1="780" y1="88" x2="780" y2="102" stroke="#ff7b72" stroke-width="2"/>
+    <text x="780" y="120">15000</text><text x="780" y="134" fill="#6b7280">densify_until</text>
+  </g>
+  <!-- ticks intervalo -->
+  <g stroke="#2a2f3c" stroke-width="1">
+    <line x1="170" y1="90" x2="170" y2="100"/><line x1="220" y1="90" x2="220" y2="100"/>
+    <line x1="270" y1="90" x2="270" y2="100"/><line x1="320" y1="90" x2="320" y2="100"/>
+    <line x1="370" y1="90" x2="370" y2="100"/><line x1="420" y1="90" x2="420" y2="100"/>
+    <line x1="520" y1="90" x2="520" y2="100"/><line x1="570" y1="90" x2="570" y2="100"/>
+    <line x1="620" y1="90" x2="620" y2="100"/><line x1="670" y1="90" x2="670" y2="100"/>
+    <line x1="720" y1="90" x2="720" y2="100"/>
+  </g>
+  <text x="430" y="30" fill="#e6e8ee" font-size="13" text-anchor="middle">cada <tspan fill="#7ee787">densification_interval = 100</tspan> iters → densify_and_prune()</text>
+  <text x="430" y="55" fill="#9aa3b2" font-size="11" text-anchor="middle">acumula gradiente en TODAS las iters · clone/split/prune en los ticks · reset cada 3000</text>
+  <path d="M120,68 L780,68" stroke="#2c3344" stroke-width="6" stroke-linecap="round"/>
+  <text x="120" y="60" fill="#6b7280" font-size="10">↑ ventana de densificación activa ↑</text>
+</svg>
+</div>
+
+<h2>3. Las dos formas de <span class="hl2">crear</span> splats: clone vs split</h2>
+<p>Ambas atacan zonas de <b>alto gradiente</b>, pero se reparten según el <b>tamaño</b> del splat frente a <code>percent_dense·extent</code> (<code>percent_dense = 0.01</code>):</p>
+
+<div class="center">
+<svg viewBox="0 0 860 340" width="860" role="img" aria-label="Clone frente a split">
+  <rect x="0" y="0" width="860" height="340" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+
+  <!-- divisor -->
+  <line x1="430" y1="20" x2="430" y2="320" stroke="#2a2f3c" stroke-width="1" stroke-dasharray="4 4"/>
+
+  <!-- ===== CLONE (izquierda) ===== -->
+  <text x="215" y="40" fill="#7ee787" font-size="15" text-anchor="middle" font-weight="700">CLONE — splat PEQUEÑO</text>
+  <text x="215" y="60" fill="#9aa3b2" font-size="11" text-anchor="middle">scale ≤ percent_dense·extent · zona infra-reconstruida</text>
+
+  <!-- antes -->
+  <text x="120" y="95" fill="#6b7280" font-size="11" text-anchor="middle">antes</text>
+  <circle cx="120" cy="150" r="16" fill="#7ee787" fill-opacity="0.35" stroke="#7ee787"/>
+  <line x1="120" y1="150" x2="150" y2="120" stroke="#ffb454" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="172" y="116" fill="#ffb454" font-size="10">∇ grande</text>
+
+  <!-- flecha -->
+  <text x="215" y="155" fill="#9aa3b2" font-size="22" text-anchor="middle">→</text>
+
+  <!-- despues -->
+  <text x="320" y="95" fill="#6b7280" font-size="11" text-anchor="middle">después</text>
+  <circle cx="312" cy="150" r="16" fill="#7ee787" fill-opacity="0.35" stroke="#7ee787"/>
+  <circle cx="340" cy="158" r="16" fill="#7ee787" fill-opacity="0.35" stroke="#7ee787" stroke-dasharray="3 2"/>
+  <text x="215" y="250" fill="#cfd6e2" font-size="11.5" text-anchor="middle">copia IDÉNTICA en su sitio</text>
+  <text x="215" y="270" fill="#9aa3b2" font-size="10.5" text-anchor="middle">misma escala, opacidad, color.</text>
+  <text x="215" y="286" fill="#9aa3b2" font-size="10.5" text-anchor="middle">+1 splat → más densidad donde falta detalle</text>
+  <text x="215" y="306" fill="#6b7280" font-size="10" text-anchor="middle">gaussian_model.py:374</text>
+
+  <!-- ===== SPLIT (derecha) ===== -->
+  <text x="645" y="40" fill="#6ea8fe" font-size="15" text-anchor="middle" font-weight="700">SPLIT — splat GRANDE</text>
+  <text x="645" y="60" fill="#9aa3b2" font-size="11" text-anchor="middle">scale &gt; percent_dense·extent · cubre demasiado</text>
+
+  <text x="540" y="95" fill="#6b7280" font-size="11" text-anchor="middle">antes</text>
+  <circle cx="540" cy="155" r="34" fill="#6ea8fe" fill-opacity="0.28" stroke="#6ea8fe"/>
+  <line x1="540" y1="155" x2="575" y2="120" stroke="#ffb454" stroke-width="2" marker-end="url(#arr)"/>
+
+  <text x="645" y="155" fill="#9aa3b2" font-size="22" text-anchor="middle">→</text>
+
+  <text x="755" y="95" fill="#6b7280" font-size="11" text-anchor="middle">después</text>
+  <circle cx="745" cy="145" r="19" fill="#6ea8fe" fill-opacity="0.30" stroke="#6ea8fe"/>
+  <circle cx="772" cy="170" r="19" fill="#6ea8fe" fill-opacity="0.30" stroke="#6ea8fe"/>
+  <text x="645" y="250" fill="#cfd6e2" font-size="11.5" text-anchor="middle">N=2 hijos MÁS PEQUEÑOS</text>
+  <text x="645" y="270" fill="#9aa3b2" font-size="10.5" text-anchor="middle">muestreados dentro de su covarianza,</text>
+  <text x="645" y="286" fill="#9aa3b2" font-size="10.5" text-anchor="middle">escala / (0.8·N). El padre se PODA.</text>
+  <text x="645" y="306" fill="#6b7280" font-size="10" text-anchor="middle">gaussian_model.py:348</text>
+
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#ffb454"/>
+    </marker>
+  </defs>
+</svg>
+</div>
+
+<div class="grid2">
+<div class="card"><span class="tag ok">CLONE</span>
+<p>Splat pequeño con error → se <b>duplica en su sitio</b> (misma escala/opacidad/color). Aumenta la densidad para capturar detalle que un solo splat no alcanza. El total <b>crece</b> en +1 por candidato.</p>
+</div>
+<div class="card"><span class="tag" style="color:var(--accent);border-color:#36c">SPLIT</span>
+<p>Splat grande con error → se parte en <b>2 hijos</b> muestreados dentro de su elipse, cada uno a <code>escala/(0.8·2)</code>, y el <b>padre se elimina</b>. Sustituye un splat tosco por dos más finos. Total <b>crece</b> en +1 neto (2 hijos − 1 padre).</p>
+</div>
+</div>
+
+<h2>4. La <span class="hl">poda</span> (prune): qué se borra</h2>
+<p>Tras clonar/dividir, <code>densify_and_prune</code> (<code>gaussian_model.py:389</code>) elimina con una máscara OR de tres criterios:</p>
+<table>
+<tr><th>Criterio</th><th>Condición</th><th>Qué mata</th></tr>
+<tr><td>Opacidad muerta</td><td><code>o &lt; min_opacity</code> (<code>opacity_cull</code>)</td><td>Splats transparentes que no aportan.</td></tr>
+<tr><td>Gigante en pantalla</td><td><code>max_radii2D &gt; size_threshold</code> (=20 px, solo tras el 1er reset)</td><td>Splats que tapan media imagen.</td></tr>
+<tr><td>Gigante en mundo</td><td><code>scale &gt; 0.1·extent</code></td><td>Splats descomunales en 3D.</td></tr>
+</table>
+<p>El criterio de pantalla solo se activa <b>después</b> de la primera iteración de reset (<code>size_threshold = 20 if iteration &gt; opacity_reset_interval else None</code>, <code>train.py:131</code>): da tiempo a que la nube se forme antes de empezar a recortar por tamaño.</p>
+
+<h2>5. <span class="hl">opacity_reset</span>: el latido que limpia floaters</h2>
+<p>Cada <code>opacity_reset_interval = 3000</code> iters, <code>reset_opacity</code> hace:</p>
+<div class="eq">o<sub>i</sub> ← min(o<sub>i</sub>, 0.01) &nbsp; para TODOS los splats</div>
+<p>Parece brutal, pero en el lazo clásico es <b>el mecanismo de limpieza</b>. La lógica es un test de supervivencia:</p>
+
+<div class="center">
+<svg viewBox="0 0 860 300" width="860" role="img" aria-label="Ciclo de opacity reset clásico">
+  <rect x="0" y="0" width="860" height="300" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+
+  <!-- paso 1 -->
+  <text x="120" y="40" fill="#e6e8ee" font-size="12" text-anchor="middle" font-weight="700">1) antes del reset</text>
+  <rect x="70" y="70" width="40" height="120" fill="#7ee787" fill-opacity="0.5" stroke="#7ee787"/>
+  <text x="90" y="205" fill="#7ee787" font-size="10" text-anchor="middle">útil o~0.9</text>
+  <rect x="130" y="120" width="40" height="70" fill="#ffb454" fill-opacity="0.5" stroke="#ffb454"/>
+  <text x="150" y="205" fill="#ffb454" font-size="10" text-anchor="middle">floater o~0.3</text>
+
+  <text x="225" y="135" fill="#9aa3b2" font-size="24" text-anchor="middle">→</text>
+
+  <!-- paso 2 -->
+  <text x="370" y="40" fill="#e6e8ee" font-size="12" text-anchor="middle" font-weight="700">2) reset: o ← 0.01</text>
+  <rect x="320" y="185" width="40" height="5" fill="#7ee787" stroke="#7ee787"/>
+  <rect x="380" y="185" width="40" height="5" fill="#ffb454" stroke="#ffb454"/>
+  <text x="370" y="205" fill="#9aa3b2" font-size="10" text-anchor="middle">todos casi transparentes</text>
+
+  <text x="470" y="135" fill="#9aa3b2" font-size="24" text-anchor="middle">→</text>
+
+  <!-- paso 3 -->
+  <text x="650" y="40" fill="#e6e8ee" font-size="12" text-anchor="middle" font-weight="700">3) ~3000 iters de gradiente</text>
+  <!-- util recupera -->
+  <rect x="560" y="80" width="40" height="110" fill="#7ee787" fill-opacity="0.5" stroke="#7ee787"/>
+  <path d="M580,185 C580,140 580,110 580,82" fill="none" stroke="#7ee787" stroke-width="2" stroke-dasharray="3 3" marker-end="url(#up)"/>
+  <text x="580" y="205" fill="#7ee787" font-size="10" text-anchor="middle">RE-SUBE</text>
+  <text x="580" y="220" fill="#6b7280" font-size="9" text-anchor="middle">el foto-grad la</text>
+  <text x="580" y="232" fill="#6b7280" font-size="9" text-anchor="middle">necesita visible</text>
+  <!-- floater no recupera -->
+  <rect x="650" y="183" width="40" height="7" fill="#ff7b72" fill-opacity="0.6" stroke="#ff7b72"/>
+  <text x="670" y="205" fill="#ff7b72" font-size="10" text-anchor="middle">SE QUEDA</text>
+  <text x="670" y="220" fill="#6b7280" font-size="9" text-anchor="middle">nadie lo</text>
+  <text x="670" y="232" fill="#6b7280" font-size="9" text-anchor="middle">reclama</text>
+  <text x="740" y="135" fill="#9aa3b2" font-size="24" text-anchor="middle">→</text>
+  <text x="800" y="120" fill="#ff7b72" font-size="11" text-anchor="middle">prune</text>
+  <text x="800" y="138" fill="#ff7b72" font-size="11" text-anchor="middle">lo borra</text>
+  <text x="800" y="158" fill="#6b7280" font-size="9" text-anchor="middle">o&lt;min_opacity</text>
+
+  <defs>
+    <marker id="up" markerWidth="8" markerHeight="8" refX="3" refY="1" orient="auto">
+      <path d="M0,6 L3,0 L6,6 Z" fill="#7ee787"/>
+    </marker>
+  </defs>
+</svg>
+</div>
+
+<div class="note ok-box"><b>Por qué funciona aquí.</b> El reset es un <b>filtro pasa-útiles</b>: tras poner todo a 0.01, solo los splats que el <b>error fotométrico</b> vuelve a empujar hacia arriba (porque de verdad ayudan a reconstruir) recuperan opacidad; los floaters que solo sobreajustaban una vista no reciben ese empuje, se quedan en 0.01 y la <b>poda</b> los borra. Es la simbiosis <code>reset → recuperación por gradiente → prune</code> lo que limpia la escena.</p></div>
+
+<h2>6. El bucle completo (original <code>train.py:126-135</code>)</h2>
+<pre><code>if iteration &lt; densify_until_iter:            # ventana activa (&lt;15000)
+    add_densification_stats(...)              # acumula ‖∇xy‖ cada iter
+    if iteration &gt; densify_from_iter and iteration % densification_interval == 0:
+        size_threshold = 20 if iteration &gt; opacity_reset_interval else None
+        densify_and_prune(0.0002, opacity_cull, extent, size_threshold)
+        #   ├─ densify_and_clone   (pequeños + ∇ alto → duplica)
+        #   ├─ densify_and_split   (grandes  + ∇ alto → parte en 2, poda padre)
+        #   └─ prune_points        (o&lt;min · gigante-pantalla · gigante-mundo)
+    if iteration % opacity_reset_interval == 0 or (white_bg and iteration == densify_from_iter):
+        reset_opacity()                       # o ← min(o, 0.01) en TODA la nube</code></pre>
+
+<h2>7. Por qué esto importa para tu repo: clásico vs MCMC</h2>
+<p>Tu repo cambió este motor por <b>MCMC</b> (relocate + add_new, presupuesto fijo <code>cap_max</code>). Las diferencias explican <b>por qué <code>opacity_reset</code> que aquí limpia, en MCMC destruye</b> (el desastre de run10 y runs 11/12):</p>
+
+<table>
+<tr><th></th><th class="ok">Clásico (antes del MCMC)</th><th class="bad">MCMC (este repo)</th></tr>
+<tr><td>Nº de gaussianas</td><td><b>Variable</b> — crece (clone/split) y baja (prune)</td><td><b>Fijo</b> hasta <code>cap_max</code></td></tr>
+<tr><td>Quién decide crear</td><td>Gradiente de viewspace por splat</td><td>Muestreo por opacidad/error (relocate, add_new)</td></tr>
+<tr><td>Quién decide borrar</td><td><code>prune_points</code> (opacidad/tamaño)</td><td>No borra: <b>recicla</b> (relocate a alto error)</td></tr>
+<tr><td>Ruido posicional</td><td>Ninguno</td><td>Sí, gateado por <code>(1−o)<sup>100</sup></code></td></tr>
+<tr><td><code>opacity_reset</code></td><td><b>Integral</b>: alimenta el prune (limpia floaters)</td><td><b>Tóxico</b>: no hay prune que lo aproveche</td></tr>
+</table>
+
+<div class="note danger-box"><b>El choque exacto.</b> En MCMC no existe el <code>prune_points</code> por gradiente que cierra el ciclo del reset. Peor: el ruido posicional está gateado por <code>(1−o)<sup>100</sup></code>, así que al poner <code>o = 0.01</code> esa compuerta pasa de ≈0 a <code>0.99<sup>100</sup> ≈ 0.37</code> y se abre <b>para toda la nube</b> → <b>terremoto posicional</b> cada 3000 iters. Sin el prune que recoja a los muertos y con el ruido sacudiéndolo todo, el reset no limpia: <b>desordena la geometría</b> y deja la nube translúcida (PSNR ~12, LPIPS 0.5–0.7). Por eso en MCMC la vía correcta de limpiar el fondo es la <b>presión L1 continua de <code>opacity_reg</code></b> (ver <code>docs/regularizacion_opacidad_l1.html</code>), no el reset. </p></div>
+
+<div class="card card2">
+<b>Resumen de una línea.</b> La densificación clásica es <span class="hl2">gradiente → clone/split → prune</span>, con <span class="hl">opacity_reset</span> como filtro de floaters dentro de ese ciclo. El MCMC quitó el clone/split/prune y el reset se quedó <b>huérfano</b> de su mecanismo: por eso aquí estorba en vez de ayudar.
+</div>
+
+<p class="meta">Doc autocontenido · español · 2026-06-11 · refs: <code>2d-gaussian-splatting/scene/gaussian_model.py</code>, <code>2d-gaussian-splatting/train.py</code>. Relacionados: <code>mcmc_densificacion.html</code>, <code>add_new_gs_jitter.html</code>, <code>regularizacion_opacidad_l1.html</code>.</p>
+
+</div>
+</body>
+</html>

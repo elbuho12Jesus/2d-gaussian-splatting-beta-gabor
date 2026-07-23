@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>El clamp de escala y los gigantes del fondo — ¿palanca o callejón?</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .hl{color:var(--danger);font-weight:700}
+  .hl2{color:var(--accent2);font-weight:700}
+  .hl3{color:var(--warn);font-weight:700}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0 .5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .kbd{font-family:"JetBrains Mono",monospace;font-size:.82rem;color:var(--accent2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>El clamp de escala y los gigantes del fondo</h1>
+<p class="sub">¿Es tocar <code>s.clamp(max=0.1·extent)</code> una palanca real contra el velo, o un callejón sin salida? Consecuencias de subirlo, bajarlo o quitarlo — y por qué el nudo no es el <em>tamaño</em> del surfel sino la primitiva 2D misma. Enmarcado en la meta del proyecto: <b>replicar Beta Splatting con surfels 2D y ganarle al 3D</b>.</p>
+<p class="meta">Base: <code>scene/gaussian_model.py:114-124</code> (<code>get_scaling</code>), diagnósticos de run21 / run41 / run61 (flowers, cap 7.5M). No confundir con el <b>clamp de radio</b> en <code>forward.cu</code> (espacio-pantalla, anti-OOM) — ese tiene su propio doc <code>clamp_radio_y_techo_rasterizer.html</code>.</p>
+
+<h2>1. Qué es exactamente este clamp</h2>
+<div class="card">
+<p>Cada surfel tiene una escala 2D <code>(s₁, s₂)</code> — el tamaño de su disco en el plano. Al leerla, <code>get_scaling</code> le pone un <b>techo duro atado a la extensión de la escena</b>:</p>
+<pre><code>@property
+def get_scaling(self):
+    s = self.scaling_activation(self._scaling)
+    if self.spatial_lr_scale &gt; 0:
+        s = s.clamp(max=0.1 * self.spatial_lr_scale)   # &larr; EL TECHO
+    return s</code></pre>
+<p>En flowers <code>spatial_lr_scale = extent ≈ <b>4.816</b></code> (unidades de mundo). El techo es por tanto <span class="kbd">0.1 · 4.816 ≈ 0.48</span> unidades de mundo. Ningún surfel puede leerse más grande que eso, <b>y el gradiente por encima del tope se recorta</b> (el <code>clamp</code> mata la derivada allí), así que el optimizer deja de inflarlos.</p>
+</div>
+
+<div class="note">Es un clamp <b>en espacio de mundo</b> sobre la escala física del disco. El otro clamp famoso del repo (el <code>radius</code> en <code>forward.cu</code>) es <b>en espacio de pantalla</b> (píxeles/tiles) y existe para no desbordar el buffer de binning (OOM "1e6 GiB"). Los dos limitan "tamaño", pero en dominios distintos. Aquí hablamos SOLO del de mundo.</div>
+
+<h3>Por qué existe</h3>
+<ul>
+<li><b>Convención 3DGS/2DGS:</b> un splat &gt; <code>0.1·extent</code> se considera degenerado (cubre un pedazo absurdo de escena).</li>
+<li><b>Anti-OOM:</b> sin él, un surfel puede crecer sin límite, tocar miles de tiles y reventar el binning del rasterizer — es el crash fantasma <code>"1050571 GiB"</code> ya documentado.</li>
+<li><b>Estabilidad del optimizer:</b> al cortar el gradiente por encima del tope, el optimizer no puede seguir inflando indefinidamente los surfels que ya llegaron al máximo.</li>
+</ul>
+
+<h2>2. El diagnóstico: por qué señalamos a este clamp</h2>
+<div class="card">
+<p>En run21 (subir <code>scale_reg</code> 0.01→0.05) medimos las escalas del ply resultante. El patrón fue nítido y se repitió en run41 y run61:</p>
+<table>
+<thead><tr><th>Cantidad</th><th>Antes</th><th>Después</th><th>Lectura</th></tr></thead>
+<tbody>
+<tr><td>escala <b>media</b> s(mean)</td><td>0.0552</td><td>0.0461 (−16%)</td><td><span class="hl2">scale_reg SÍ la baja</span> → primer plano mejora</td></tr>
+<tr><td>escala <b>máxima</b> s(max)</td><td>tope</td><td>tope (clavada)</td><td><span class="hl">los gigantes NO se mueven</span> → topados en el clamp</td></tr>
+<tr><td><code>extent</code></td><td>4.816</td><td>4.816</td><td>constante → el techo <code>0.1·extent</code> no cambia</td></tr>
+</tbody>
+</table>
+<p>Conclusión: <b>hay dos poblaciones de surfels.</b> La masa media responde a los reguladores (scale_reg, opacity_reg). Pero los <b>gigantes del fondo rasante</b> están <b>pegados al techo del clamp</b>: ya están tan grandes como se les permite, y el gradiente que los movería está recortado. <span class="hl">Ningún dial los toca</span> — por eso 8 barridos de <code>scale_reg</code> fallaron y el fondo nunca cambió.</p>
+</div>
+
+<div class="card card2">
+<p><b>Y el dato clave que reordena el problema (run61):</b> con <code>opacity_reg=0.06</code> + CULL, el sobre-brillo del velo está <b>casi anulado</b> — <code>dmean(render−gt)</code> cayó de <span class="hl3">+1.00</span> (run16) a <span class="hl2">+0.12</span> (run61). <b>Y aun así el PSNR no sube de ~21.</b> Es decir: ya no queda velo translúcido que adelgazar; lo que queda es <b>detalle estructural</b> del fondo que estos gigantes topados no consiguen reproducir. El clamp de escala es el único mecanismo que actúa <em>directamente</em> sobre esa población de gigantes.</p>
+</div>
+
+<h2>3. Por qué un disco 2D rasante es el problema de fondo</h2>
+<p>Para entender las consecuencias de tocar el clamp hay que ver <b>por qué</b> el fondo genera gigantes topados. La geometría del césped/cielo/pared se ve <b>de refilón</b> (rasante) en las vistas de entrenamiento: el rayo casi paraleliza la superficie.</p>
+
+<svg viewBox="0 0 920 260" role="img" aria-label="Surfel 2D de canto vs elipsoide 3D acostado sobre el fondo rasante">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 Z" fill="#9aa3b2"/></marker>
+  </defs>
+  <!-- fondo rasante -->
+  <line x1="40" y1="200" x2="880" y2="120" stroke="#3a4152" stroke-width="2" stroke-dasharray="4 4"/>
+  <text x="740" y="150" fill="#9aa3b2" font-size="13">fondo rasante (césped)</text>
+  <!-- cámara -->
+  <circle cx="70" cy="70" r="10" fill="#6ea8fe"/><text x="52" y="50" fill="#9aa3b2" font-size="12">cámara</text>
+  <line x1="80" y1="76" x2="430" y2="176" stroke="#6ea8fe" stroke-width="1.4" marker-end="url(#ar)" opacity=".8"/>
+  <line x1="80" y1="76" x2="700" y2="150" stroke="#6ea8fe" stroke-width="1.4" marker-end="url(#ar)" opacity=".8"/>
+
+  <!-- surfel 2D de canto -->
+  <g transform="translate(300,140) rotate(-8)">
+    <ellipse cx="0" cy="0" rx="120" ry="7" fill="#ff7b72" opacity=".33" stroke="#ff7b72" stroke-width="1.2"/>
+  </g>
+  <text x="230" y="235" fill="#ff7b72" font-size="13.5" font-weight="700">surfel 2D: disco plano y GRANDE, casi de canto → translúcido</text>
+
+  <!-- elipsoide 3D -->
+  <g transform="translate(720,132) rotate(-6)">
+    <ellipse cx="0" cy="0" rx="70" ry="26" fill="#7ee787" opacity=".5" stroke="#7ee787" stroke-width="1.2"/>
+  </g>
+  <text x="612" y="86" fill="#7ee787" font-size="13.5" font-weight="700">elipsoide 3D: volumen que se acuesta sobre el fondo</text>
+</svg>
+
+<div class="card">
+<p>Para cubrir esa superficie rasante con un <b>disco plano</b>, el optimizer solo tiene dos salidas, y ambas empujan al clamp:</p>
+<ul>
+<li><b>Hacerlo enorme</b> para tapar el largo tramo de fondo que se ve de refilón → choca con el techo <code>0.1·extent</code>.</li>
+<li><b>Dejarlo translúcido</b> (opacidad baja) para casar el brillo tenue del fondo lejano en train → esos gigantes translúcidos, apilados por el low-pass del rasterizer, <b>fabrican el velo</b> y revientan en las vistas de test.</li>
+</ul>
+<p>Un <b>elipsoide 3D</b> (gsplat) no tiene el dilema: se <b>acuesta</b> sobre el fondo con volumen, orientable en las 3 direcciones y con view-dependence, cubriendo la superficie rasante de forma coherente. <b>Ese es el motivo estructural por el que el 3D "resuelve" el fondo.</b></p>
+</div>
+
+<h2>4. Las tres formas de tocar el clamp y sus consecuencias</h2>
+
+<div class="grid2">
+  <div class="card danger-box">
+    <span class="tag bad">Subir / quitar el techo</span>
+    <p><code>0.1·extent</code> → <code>0.2·extent</code> (o sin clamp). Dejar crecer a los gigantes.</p>
+    <p><b class="hl2">A favor:</b> menos surfels solapados podrían cubrir el fondo con piezas grandes y más coherentes → menos "confeti" translúcido.</p>
+    <p><b class="hl">En contra (probable):</b></p>
+    <ul>
+      <li><b>Más área translúcida = MÁS velo</b>, no menos: cada gigante cubre más superficie con la misma translucidez.</li>
+      <li>Vuelve el <b>OOM</b> "1e6 GiB" — es la razón por la que el clamp existe.</li>
+      <li>El gradiente vuelve a inflarlos <b>sin freno</b> → inestabilidad tardía.</li>
+    </ul>
+  </div>
+  <div class="card warn-box">
+    <span class="tag warn">Bajar el techo</span>
+    <p><code>0.1·extent</code> → <code>0.05·extent</code>. Forzar gigantes más pequeños (lo que <code>scale_reg</code> no logra porque están topados).</p>
+    <p><b class="hl2">A favor:</b> es lo único que <b>sí mueve</b> a los gigantes topados — ataca la población que ningún dial toca.</p>
+    <p><b class="hl">En contra (probable):</b></p>
+    <ul>
+      <li>Surfels más pequeños → hacen falta <b>MÁS</b> para cubrir el fondo → cap 7.5M <b>saturado</b>.</li>
+      <li>Sub-cobertura del fondo rasante → <b>huecos NEGROS</b> — exactamente el modo de fallo del clásico (run14).</li>
+      <li><b>Cambias velo por huecos</b>: rompe SSIM/LPIPS donde hoy ganas al original.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card">
+<span class="tag">Tercera vía · atar el techo a la opacidad</span>
+<p>En vez de un techo fijo, permitir surfels grandes <b>solo si son suficientemente opacos</b> (p.ej. techo ∝ opacidad). La intuición: castiga justo la combinación tóxica "grande + translúcido" (el velo) sin prohibir "grande + opaco" (fondo legítimo). Es la variante menos probada y la más interesante conceptualmente, pero <b>acopla dos reguladores</b> (escala↔opacidad) y puede degenerar en inestabilidad; <code>opacity_reg</code> ya empuja la opacidad y su óptimo (0.06) está localizado — el margen para acoplar es estrecho.</p>
+</div>
+
+<h3>Resumen del trade-off</h3>
+<table>
+<thead><tr><th>Acción</th><th>Efecto esperado en el fondo</th><th>Riesgo principal</th><th>Prob. de mejora</th></tr></thead>
+<tbody>
+<tr><td>Subir / quitar techo</td><td>Gigantes aún más grandes</td><td>Más velo + OOM</td><td><span class="hl">Baja</span></td></tr>
+<tr><td>Bajar techo</td><td>Gigantes más chicos</td><td>Huecos negros (sub-cobertura)</td><td><span class="hl3">Baja-media</span></td></tr>
+<tr><td>Techo ∝ opacidad</td><td>Prohíbe "grande + translúcido"</td><td>Inestabilidad por acople</td><td><span class="hl3">Incierta</span></td></tr>
+</tbody>
+</table>
+
+<h2>5. Por qué es "baja probabilidad": el clamp es síntoma, no causa</h2>
+<div class="card danger-box">
+<p>Las tres vías comparten un problema de raíz: <b>no existe un "tamaño correcto" para un disco plano rasante.</b></p>
+<ul>
+<li>Grande + translúcido → <span class="hl">velo</span>.</li>
+<li>Pequeño → <span class="hl">huecos</span> (o cap saturado).</li>
+<li>Grande + opaco → tapa geometría real por delante (el disco de canto no respeta la profundidad del fondo).</li>
+</ul>
+<p>El clamp solo elige <b>dónde</b> en ese eje malo te sitúas. Mover el techo te desplaza de un modo de error a otro — <b>es un trade-off velo↔huecos, no una solución.</b> Por eso la recomendación histórica lo marca como "baja probabilidad": ataca el síntoma correcto (los gigantes) pero con la herramienta equivocada (su tamaño), cuando el verdadero cuello es la <b>orientación de la primitiva</b> y su <b>perfil de opacidad</b> (el kernel β).</p>
+</div>
+
+<h2>6. La conexión con la meta: ganar al 3D <em>sin</em> volverse 3D</h2>
+<p>Aquí está el nudo estratégico del proyecto. La meta declarada no es "reconstruir bien el fondo" a secas — es <b>replicar Deformable Beta Splatting con surfels 2D y superar al 3D con esa primitiva 2D</b>. Eso reencuadra por completo el valor del clamp:</p>
+
+<div class="grid2">
+  <div class="card ok-box">
+    <span class="tag ok">Lo que NO puedes hacer</span>
+    <p><b>Migrar a gsplat/elipsoide 3D</b> resolvería el fondo estructuralmente (sección 3)… pero <b>traiciona la tesis</b>. Si ganas al 3D <em>volviéndote</em> 3D, no has demostrado nada sobre el surfel 2D. La migración es la respuesta "fácil" y está <b>fuera de la meta</b>.</p>
+  </div>
+  <div class="card ok-box">
+    <span class="tag ok">Lo que SÍ está en la meta</span>
+    <p>Empujar la <b>primitiva 2D</b> tan lejos como dé. El clamp de escala es una de las <b>poquísimas palancas nativas del 2D</b> que quedan sin agotar (los diales de regularización ya están barridos). Ahí está su valor: aunque la probabilidad de mejora métrica sea baja, es <b>territorio 2D legítimo</b>.</p>
+  </div>
+</div>
+
+<div class="card">
+<p><b>Pero cuidado con dónde inviertes.</b> El clamp controla el <b>tamaño</b>. Beta Splatting no gana por el tamaño de sus primitivas — gana por su <b>kernel β adaptativo</b> (colas ajustables que modelan desde bordes duros hasta halos suaves con la misma primitiva) y por cómo distribuye densidad. Para el fondo rasante 2D, las dos palancas <em>de la meta</em> con más recorrido probablemente son:</p>
+<ul>
+<li><b>Orientación del surfel al plano del fondo</b> (que el disco se <em>acueste</em> sobre la superficie rasante en vez de quedar de canto) — es lo que el elipsoide 3D consigue por volumen y el 2D debería conseguir por normal. El ruido MCMC direccional (<code>cov_noise_normal</code>) intentó tocar esto y falló (run51-54), pero por la <em>dirección del ruido</em>, no por una presión explícita de orientación.</li>
+<li><b>Explotar el kernel β</b> en el fondo: colas del β que suavicen el borde del gigante sin subir su opacidad de pico → menos velo <em>sin</em> encoger el disco. Esto ataca la combinación "grande + translúcido" desde el <b>perfil</b>, no desde el <b>tamaño</b> — más alineado con la tesis de Beta Splatting que mover el clamp.</li>
+</ul>
+</div>
+
+<h2>7. Si aun así se prueba: experimento mínimo y honesto</h2>
+<div class="card card2">
+<ol>
+<li><b>A/B limpio, un solo delta.</b> Réplica EXACTA de run36 (<code>opacity_reg=0.06</code>, cap 7.5M) cambiando <b>solo</b> el <code>0.1</code> del clamp en <code>gaussian_model.py:123</code>. No es un flag → editar, y <b>no requiere recompilar el rasterizer</b> (es Python puro), ventaja frente a los A/B de CUDA.</li>
+<li><b>Dos puntos:</b> techo <code>0.2·extent</code> (subir) y <code>0.05·extent</code> (bajar). Endpoints del trade-off.</li>
+<li><b>Instrumentar:</b> <code>s(max)</code>, <code>s(mean)</code>, nº de surfels topados, nº de tiles tocados, y <code>dmean(render−gt)</code> — para ver si el velo sube (predicción del "subir") o aparecen huecos (predicción del "bajar").</li>
+<li><b>Medir honesto</b> (<code>metrics.py</code>, no in-train) y comparar honesto-vs-honesto contra run36.</li>
+</ol>
+<p><b>Predicción a batir:</b> subir → LPIPS↑ (más velo); bajar → SSIM↓ (huecos). Si alguno rompe la predicción, es señal genuina y merece seguirse. Si ambos la cumplen, el clamp queda cerrado como los otros 8 diales y el foco vuelve a <b>orientación + kernel β</b>, que es donde vive la meta.</p>
+</div>
+
+<div class="note ok-box"><b>TL;DR.</b> El clamp de escala es lo único que ataca directamente a los gigantes translúcidos del fondo, y es una palanca <em>nativa del 2D</em> (no traiciona la tesis como migrar a 3D). Pero controla su <b>tamaño</b>, y el tamaño solo te mueve entre dos males (velo ↔ huecos): es síntoma, no causa. Barato de probar (Python, sin recompilar), con predicción pesimista. La apuesta alineada con "ganar al 3D con 2D" no es el tamaño del surfel, sino su <b>orientación al fondo rasante</b> y su <b>kernel β</b> — que es exactamente lo que Beta Splatting explota.</div>
+
+<p class="meta">Doc generado 2026-07-13 · flowers, cap 7.5M · refs: <code>gaussian_model.py:114-124</code>, run21/run41/run61, <code>docs/comparativa_runs.html</code>, <code>docs/lowpass_clamp_y_aa2dgs.html</code>, <code>docs/clamp_radio_y_techo_rasterizer.html</code>.</p>
+
+</div>
+</body>
+</html>

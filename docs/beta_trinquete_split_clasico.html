@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>β = 4·exp(_beta) y el trinquete del split clásico</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.9rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.45rem;margin:2.0em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.12rem;margin:1.5em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;font-family:"JetBrains Mono",monospace;font-size:.95rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  .legend{font-family:"JetBrains Mono",monospace;font-size:.85rem;margin:6px 0 0;display:flex;gap:14px;flex-wrap:wrap}
+  svg{max-width:100%;height:auto}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)}
+  .figwrap{overflow-x:auto}
+  .discs{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:10px 0}
+  .disc{text-align:center;font-family:"JetBrains Mono",monospace;font-size:.75rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>β = 4·exp(<code>_beta</code>) y el <b class="lo">trinquete del split clásico</b></h1>
+<p class="sub">Cómo se parametriza β, qué le hace al kernel, y por qué <code>densify_and_split</code> lo empuja exponencialmente contra el suelo del clamp — con ejemplo de juguete generación a generación. Doc de apoyo del <b>diagnóstico de run65/run66</b>.</p>
+
+<div class="card note danger-box">
+<b>Resumen en una línea:</b> el split resta <code>log(N)</code> a <code>_beta</code>, lo que <b>divide β entre 2 en cada generación</b>. Tras <b>6 splits</b> el splat queda clavado en el suelo del clamp (β=0.0733) y su kernel deja de ser un perfil: pasa a ser una <b>caja</b>. Solo ocurre en el camino <b>clásico</b> — clone y las dos rutas MCMC copian β sin tocarlo.
+</div>
+
+<div class="card note warn-box">
+<b>Aviso de alcance (importante):</b> este bug existe <b>desde el <code>first commit</code></b> (verificado con <code>git log -L</code>). Los clásicos sanos <b>run15 / run25 / run26</b> convivieron con él y aun así llegaron a train PSNR ≈ 22.2. Por tanto <b>NO es la causa de la regresión de run65/run66</b> — esa fue de los reguladores (<code>scale_reg</code>/<code>opacity_reg</code> heredados de flowers-MCMC, medido: 1.82 dB). Este doc describe un <b>defecto estructural latente</b> del camino clásico, no el fallo del run. Ver §7.
+</div>
+
+<h2>1 · Las dos β: el parámetro crudo y el activado</h2>
+
+<p>En el código hay <b>dos cosas distintas</b> que se llaman "beta", y confundirlas hace que los números no cuadren:</p>
+
+<table>
+  <thead><tr><th>Símbolo</th><th>Dónde vive</th><th>Rango</th><th>Qué es</th></tr></thead>
+  <tbody>
+    <tr><td><code>_beta</code></td><td><code>nn.Parameter</code>, lo que optimiza Adam</td><td>[−4, 2] por clamp duro</td><td>Parámetro <b>crudo</b>, puede ser negativo</td></tr>
+    <tr><td><b>β</b> (<code>get_beta</code>)</td><td>Propiedad, lo que ve el rasterizer</td><td>[0.0733, 29.56]</td><td>Valor <b>activado</b>, siempre positivo</td></tr>
+  </tbody>
+</table>
+
+<p>La activación (<code>scene/gaussian_model.py:183-185</code>):</p>
+
+<div class="eq">β = 4 · exp( clamp(<code>_beta</code>, −6, +2) )</div>
+
+<p>La exponencial cumple dos funciones: <b>(1)</b> garantiza β&gt;0 (un exponente negativo en el kernel lo haría divergir en el borde), y <b>(2)</b> hace que el optimizador trabaje en <b>escala logarítmica</b> — un paso constante de Adam sobre <code>_beta</code> es un factor multiplicativo constante sobre β. El <code>4·</code> solo fija el punto de partida: con <code>_beta</code> inicializado a <b>0</b>, todos los splats nacen con <b>β = 4</b>.</p>
+
+<h3>El clamp que manda es el de <code>train.py</code>, no el de <code>get_beta</code></h3>
+
+<p>Hay dos clamps y <b>no coinciden</b>:</p>
+
+<pre><code>scene/gaussian_model.py:184   b = self._beta.clamp(min=-6.0, max=2.0)   # en la activación
+train.py:399                  gaussians._beta.data.clamp_(min=-4.0, max=2.0)   # sobre el DATO, cada iteración</code></pre>
+
+<p>Como <code>train.py</code> reescribe el <b>dato</b> tras cada paso, el rango real nunca baja de −4. El −6 de la activación es código muerto en entrenamiento. Por tanto el <b>suelo efectivo</b> es:</p>
+
+<div class="eq">β<sub>mín</sub> = 4 · e<sup>−4</sup> = <b>0.0733</b></div>
+
+<p class="meta">Este número es la huella dactilar del problema: en los logs de run65 y run66 el mínimo reportado es <b>exactamente</b> 0.0733 — señal inequívoca de que hay splats <b>saturados contra el límite</b>, no simplemente con β baja.</p>
+
+<div class="figwrap">
+<svg viewBox="0 0 620 300" role="img" aria-label="Curva beta = 4 exp(_beta) con la zona de clamp marcada">
+  <rect x="0" y="0" width="620" height="300" fill="#0b0d13" rx="10"/>
+  <!-- zona clamp -->
+  <rect x="40" y="30" width="86" height="230" fill="#ff7b72" opacity="0.10"/>
+  <text x="83" y="24" fill="#ff7b72" font-size="11" text-anchor="middle" font-family="monospace">clamp −4</text>
+  <!-- ejes -->
+  <line x1="40" y1="260" x2="600" y2="260" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="40" y1="30" x2="40" y2="260" stroke="#2a2f3c" stroke-width="1.5"/>
+  <!-- curva beta=4exp(x), x de -5 a 2 -> escala: x px = 40 + (x+5)*80 ; beta 0..30 -> y = 260 - beta*7.6 -->
+  <polyline fill="none" stroke="#6ea8fe" stroke-width="2.5" points="40.0,259.8 68.0,259.6 96.0,259.2 124.0,258.8 152.0,258.2 180.0,257.3 208.0,256.0 236.0,254.1 264.0,251.4 292.0,247.5 320.0,241.9 348.0,233.9 376.0,222.5 404.0,206.1 432.0,182.8 460.0,149.4 488.0,101.7 516.0,33.5"/>
+  <!-- puntos notables -->
+  <circle cx="126" cy="257.8" r="4" fill="#ff7b72"/>
+  <text x="134" y="254" fill="#ff7b72" font-size="11" font-family="monospace">β=0.0733 (suelo)</text>
+  <circle cx="440" cy="229.6" r="4" fill="#7ee787"/>
+  <text x="448" y="226" fill="#7ee787" font-size="11" font-family="monospace">β=4 (inicio, _beta=0)</text>
+  <circle cx="600" cy="35.3" r="4" fill="#ffb454"/>
+  <text x="560" y="52" fill="#ffb454" font-size="11" font-family="monospace" text-anchor="end">β=29.6 (techo, _beta=2)</text>
+  <!-- etiquetas eje -->
+  <text x="40" y="278" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">−5</text>
+  <text x="200" y="278" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">−3</text>
+  <text x="360" y="278" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">−1</text>
+  <text x="440" y="278" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">0</text>
+  <text x="600" y="278" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">2</text>
+  <text x="320" y="295" fill="#9aa3b2" font-size="11" text-anchor="middle">_beta (parámetro crudo)</text>
+  <text x="14" y="150" fill="#9aa3b2" font-size="11" text-anchor="middle" transform="rotate(-90 14 150)">β activada</text>
+</svg>
+</div>
+
+<p class="note">Fíjate en la <b>asimetría</b>: la exponencial es casi plana a la izquierda y explota a la derecha. Entre <code>_beta</code>=−4 y −3 hay apenas 0.13 de β; entre +1 y +2, hay 18.7. Eso significa que <b>la región cercana al suelo está enormemente comprimida</b>: una vez que un splat cae por debajo de <code>_beta</code>≈−3, todo lo que hay más abajo es "casi lo mismo" y el gradiente que podría rescatarlo es minúsculo. Es una <b>trampa</b>, no solo un límite.</p>
+
+<h2>2 · Qué le hace β al kernel</h2>
+
+<p>El rasterizer evalúa (<code>forward.cu:439-442</code>):</p>
+
+<pre><code>float r2 = rho;
+if (r2 &gt;= 1.0f) continue;                    // soporte compacto: fuera del disco, nada
+float one_minus_r2 = max(1.0f - r2, 1e-6f);
+float kernel = powf(one_minus_r2, beta_j);   // k(r) = (1 − r²)^β</code></pre>
+
+<div class="eq">k(r) = (1 − r²)<sup>β</sup>&nbsp;&nbsp; para r &lt; 1,&nbsp;&nbsp; 0 en otro caso</div>
+
+<p>β es el <b>exponente de caída</b>. No cambia el radio de soporte (siempre r=1) — cambia <b>cómo de rápido se apaga</b> el splat dentro de ese disco:</p>
+
+<div class="figwrap">
+<svg viewBox="0 0 560 300" role="img" aria-label="Perfiles del kernel para distintos beta">
+  <rect x="0" y="0" width="560" height="300" fill="#0b0d13" rx="10"/>
+  <line x1="40" y1="250" x2="530" y2="250" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="40" y1="30" x2="40" y2="250" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="40" y1="145" x2="530" y2="145" stroke="#2a2f3c" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="34" y="149" fill="#9aa3b2" font-size="10" text-anchor="end" font-family="monospace">0.5</text>
+  <text x="34" y="44" fill="#9aa3b2" font-size="10" text-anchor="end" font-family="monospace">1.0</text>
+  <text x="34" y="254" fill="#9aa3b2" font-size="10" text-anchor="end" font-family="monospace">0</text>
+
+  <polyline fill="none" stroke="#7ee787" stroke-width="2.5" points="40.0,40.0 49.2,40.3 58.5,41.2 67.7,42.8 76.9,44.9 86.2,47.7 95.4,51.0 104.6,54.8 113.8,59.2 123.1,64.1 132.3,69.4 141.5,75.1 150.8,81.3 160.0,87.8 169.2,94.6 178.5,101.6 187.7,108.9 196.9,116.4 206.2,124.0 215.4,131.6 224.6,139.3 233.8,147.0 243.1,154.6 252.3,162.1 261.5,169.4 270.8,176.6 280.0,183.6 289.2,190.2 298.5,196.6 307.7,202.7 316.9,208.4 326.2,213.7 335.4,218.7 344.6,223.3 353.8,227.4 363.1,231.2 372.3,234.6 381.5,237.5 390.8,240.1 400.0,242.3 409.2,244.2 418.5,245.7 427.7,246.9 436.9,247.9 446.2,248.6 455.4,249.2 464.6,249.5 473.8,249.8 483.1,249.9 492.3,250.0 501.5,250.0 510.8,250.0 520.0,250.0"/>
+  <polyline fill="none" stroke="#6ea8fe" stroke-width="2.5" points="40.0,40.0 49.2,40.1 58.5,40.3 67.7,40.7 76.9,41.2 86.2,41.9 95.4,42.8 104.6,43.8 113.8,45.0 123.1,46.3 132.3,47.8 141.5,49.4 150.8,51.2 160.0,53.1 169.2,55.2 178.5,57.5 187.7,59.9 196.9,62.4 206.2,65.2 215.4,68.0 224.6,71.1 233.8,74.2 243.1,77.6 252.3,81.1 261.5,84.7 270.8,88.5 280.0,92.5 289.2,96.6 298.5,100.9 307.7,105.3 316.9,109.9 326.2,114.6 335.4,119.5 344.6,124.6 353.8,129.8 363.1,135.1 372.3,140.7 381.5,146.3 390.8,152.1 400.0,158.1 409.2,164.3 418.5,170.6 427.7,177.0 436.9,183.6 446.2,190.4 455.4,197.3 464.6,204.3 473.8,211.6 483.1,218.9 492.3,226.5 501.5,234.2 510.8,242.0 520.0,250.0"/>
+  <polyline fill="none" stroke="#ffb454" stroke-width="2.5" points="40.0,40.0 49.2,40.0 58.5,40.1 67.7,40.2 76.9,40.3 86.2,40.5 95.4,40.7 104.6,41.0 113.8,41.3 123.1,41.6 132.3,42.0 141.5,42.4 150.8,42.9 160.0,43.4 169.2,43.9 178.5,44.5 187.7,45.2 196.9,45.9 206.2,46.6 215.4,47.4 224.6,48.2 233.8,49.1 243.1,50.1 252.3,51.1 261.5,52.2 270.8,53.4 280.0,54.6 289.2,55.9 298.5,57.2 307.7,58.7 316.9,60.2 326.2,61.8 335.4,63.6 344.6,65.4 353.8,67.3 363.1,69.4 372.3,71.6 381.5,74.0 390.8,76.5 400.0,79.2 409.2,82.1 418.5,85.3 427.7,88.8 436.9,92.5 446.2,96.7 455.4,101.3 464.6,106.6 473.8,112.6 483.1,119.8 492.3,128.5 501.5,139.9 510.8,157.2 520.0,250.0"/>
+  <polyline fill="none" stroke="#ff7b72" stroke-width="3" points="40.0,40.0 49.2,40.0 58.5,40.0 67.7,40.1 76.9,40.1 86.2,40.1 95.4,40.2 104.6,40.3 113.8,40.4 123.1,40.5 132.3,40.6 141.5,40.7 150.8,40.8 160.0,41.0 169.2,41.2 178.5,41.3 187.7,41.5 196.9,41.7 206.2,42.0 215.4,42.2 224.6,42.4 233.8,42.7 243.1,43.0 252.3,43.3 261.5,43.7 270.8,44.0 280.0,44.4 289.2,44.8 298.5,45.2 307.7,45.7 316.9,46.1 326.2,46.7 335.4,47.2 344.6,47.8 353.8,48.4 363.1,49.1 372.3,49.8 381.5,50.6 390.8,51.4 400.0,52.3 409.2,53.3 418.5,54.4 427.7,55.7 436.9,57.0 446.2,58.5 455.4,60.2 464.6,62.2 473.8,64.6 483.1,67.4 492.3,71.1 501.5,76.2 510.8,84.7 520.0,250.0"/>
+
+  <text x="40" y="270" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">r=0</text>
+  <text x="520" y="270" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">r=1</text>
+  <text x="285" y="290" fill="#9aa3b2" font-size="11" text-anchor="middle">radio normalizado dentro del splat</text>
+</svg>
+</div>
+<div class="legend">
+  <span style="color:#7ee787">— β=4 (inicio)</span>
+  <span style="color:#6ea8fe">— β=1 (lineal en r²)</span>
+  <span style="color:#ffb454">— β=0.25</span>
+  <span style="color:#ff7b72">— β=0.0733 (suelo) ≈ CAJA</span>
+</div>
+
+<p>La curva roja es el problema: con β=0.0733 el kernel vale <b>0.885 al 90% del radio</b>. No se apaga — se mantiene casi a tope hasta caer en vertical en el borde. <b>Eso es una caja, no un perfil.</b> Un splat así pinta un disco de opacidad plana y sin textura.</p>
+
+<h3>Cuantificado</h3>
+
+<table>
+  <thead><tr><th>β</th><th>r a media altura</th><th>k(r=0.9)</th><th>"masa" ∫k·dA = π/(β+1)</th><th>Forma</th></tr></thead>
+  <tbody>
+    <tr><td><b>4.0</b></td><td>0.399</td><td>0.001</td><td>0.628</td><td>Pico concentrado</td></tr>
+    <tr><td>2.0</td><td>0.541</td><td>0.036</td><td>1.047</td><td>Campana</td></tr>
+    <tr><td>1.0</td><td>0.707</td><td>0.190</td><td>1.571</td><td>Cono (lineal en r²)</td></tr>
+    <tr><td>0.5</td><td>0.866</td><td>0.436</td><td>2.094</td><td>Meseta suave</td></tr>
+    <tr><td>0.25</td><td>0.968</td><td>0.660</td><td>2.513</td><td>Meseta</td></tr>
+    <tr><td>0.125</td><td>0.998</td><td>0.813</td><td>2.793</td><td>Casi caja</td></tr>
+    <tr><td><b class="lo">0.0733</b></td><td><b>1.000</b></td><td><b>0.885</b></td><td><b>2.927</b></td><td><b class="lo">CAJA</b></td></tr>
+  </tbody>
+</table>
+
+<p class="note"><b>La clave está en la última columna.</b> El radio de soporte <b>no cambia</b> (siempre r=1), pero la masa integrada pasa de 0.628 a 2.927: <b>×4.66</b>. Es decir, un splat con β en el suelo <b>deposita 4.66 veces más "tinta"</b> que uno recién nacido, <b>con la misma escala y la misma opacidad nominal</b>. Por eso el colapso de β produce a la vez sobre-brillo y pérdida de detalle: el modelo está pintando con brocha gorda sin haber tocado <code>scale</code>.</p>
+
+<h3>El mismo efecto, visto como huella</h3>
+
+<div class="discs">
+  <div class="disc"><svg width="110" height="110" viewBox="0 0 110 110"><defs><radialGradient id="g4"><stop offset="0%" stop-color="#7ee787" stop-opacity="1"/><stop offset="20%" stop-color="#7ee787" stop-opacity="0.849"/><stop offset="40%" stop-color="#7ee787" stop-opacity="0.498"/><stop offset="60%" stop-color="#7ee787" stop-opacity="0.168"/><stop offset="80%" stop-color="#7ee787" stop-opacity="0.017"/><stop offset="100%" stop-color="#7ee787" stop-opacity="0"/></radialGradient></defs><rect width="110" height="110" fill="#0b0d13" rx="6"/><circle cx="55" cy="55" r="50" fill="url(#g4)"/></svg><div>β=4</div></div>
+  <div class="disc"><svg width="110" height="110" viewBox="0 0 110 110"><defs><radialGradient id="g2"><stop offset="0%" stop-color="#9ecbff" stop-opacity="1"/><stop offset="20%" stop-color="#9ecbff" stop-opacity="0.922"/><stop offset="40%" stop-color="#9ecbff" stop-opacity="0.706"/><stop offset="60%" stop-color="#9ecbff" stop-opacity="0.410"/><stop offset="80%" stop-color="#9ecbff" stop-opacity="0.130"/><stop offset="100%" stop-color="#9ecbff" stop-opacity="0"/></radialGradient></defs><rect width="110" height="110" fill="#0b0d13" rx="6"/><circle cx="55" cy="55" r="50" fill="url(#g2)"/></svg><div>β=2</div></div>
+  <div class="disc"><svg width="110" height="110" viewBox="0 0 110 110"><defs><radialGradient id="g1"><stop offset="0%" stop-color="#6ea8fe" stop-opacity="1"/><stop offset="20%" stop-color="#6ea8fe" stop-opacity="0.960"/><stop offset="40%" stop-color="#6ea8fe" stop-opacity="0.840"/><stop offset="60%" stop-color="#6ea8fe" stop-opacity="0.640"/><stop offset="80%" stop-color="#6ea8fe" stop-opacity="0.360"/><stop offset="100%" stop-color="#6ea8fe" stop-opacity="0"/></radialGradient></defs><rect width="110" height="110" fill="#0b0d13" rx="6"/><circle cx="55" cy="55" r="50" fill="url(#g1)"/></svg><div>β=1</div></div>
+  <div class="disc"><svg width="110" height="110" viewBox="0 0 110 110"><defs><radialGradient id="g05"><stop offset="0%" stop-color="#ffd08a" stop-opacity="1"/><stop offset="20%" stop-color="#ffd08a" stop-opacity="0.980"/><stop offset="40%" stop-color="#ffd08a" stop-opacity="0.917"/><stop offset="60%" stop-color="#ffd08a" stop-opacity="0.800"/><stop offset="80%" stop-color="#ffd08a" stop-opacity="0.600"/><stop offset="100%" stop-color="#ffd08a" stop-opacity="0"/></radialGradient></defs><rect width="110" height="110" fill="#0b0d13" rx="6"/><circle cx="55" cy="55" r="50" fill="url(#g05)"/></svg><div>β=0.5</div></div>
+  <div class="disc"><svg width="110" height="110" viewBox="0 0 110 110"><defs><radialGradient id="g025"><stop offset="0%" stop-color="#ffb454" stop-opacity="1"/><stop offset="20%" stop-color="#ffb454" stop-opacity="0.990"/><stop offset="40%" stop-color="#ffb454" stop-opacity="0.957"/><stop offset="60%" stop-color="#ffb454" stop-opacity="0.894"/><stop offset="80%" stop-color="#ffb454" stop-opacity="0.775"/><stop offset="100%" stop-color="#ffb454" stop-opacity="0"/></radialGradient></defs><rect width="110" height="110" fill="#0b0d13" rx="6"/><circle cx="55" cy="55" r="50" fill="url(#g025)"/></svg><div>β=0.25</div></div>
+  <div class="disc"><svg width="110" height="110" viewBox="0 0 110 110"><defs><radialGradient id="g0073"><stop offset="0%" stop-color="#ff7b72" stop-opacity="1"/><stop offset="20%" stop-color="#ff7b72" stop-opacity="0.997"/><stop offset="40%" stop-color="#ff7b72" stop-opacity="0.987"/><stop offset="60%" stop-color="#ff7b72" stop-opacity="0.968"/><stop offset="80%" stop-color="#ff7b72" stop-opacity="0.928"/><stop offset="100%" stop-color="#ff7b72" stop-opacity="0"/></radialGradient></defs><rect width="110" height="110" fill="#0b0d13" rx="6"/><circle cx="55" cy="55" r="50" fill="url(#g0073)"/></svg><div>β=0.0733</div></div>
+</div>
+<p class="meta" style="text-align:center">Mismo radio, misma opacidad nominal. Solo cambia β. Los degradados usan los valores exactos de k(r)=(1−r²)<sup>β</sup>.</p>
+
+<h2>3 · El trinquete: dónde se rompe</h2>
+
+<p><code>scene/gaussian_model.py:574</code>, dentro de <code>densify_and_split</code>:</p>
+
+<pre><code>new_beta = (self._beta[selected_pts_mask] - math.log(N)).repeat(N, 1)</code></pre>
+
+<p>Con N=2, resta <code>log(2) = 0.6931</code> al parámetro crudo. Y como β es exponencial en <code>_beta</code>:</p>
+
+<div class="eq">β<sub>hijo</sub> = 4·e<sup>(<code>_beta</code> − ln 2)</sup> = 4·e<sup><code>_beta</code></sup> · e<sup>−ln 2</sup> = <b>β<sub>padre</sub> / 2</b></div>
+
+<p>Restar en el espacio crudo es <b>dividir en el espacio activado</b>. No es un ajuste pequeño: es un <b>factor multiplicativo que se compone</b> en cada generación de split.</p>
+
+<h3>Por qué esto es un error conceptual</h3>
+
+<p>Mirando el bloque completo del split se ve la intención — y el fallo de analogía:</p>
+
+<pre><code>new_scaling = ... (self.get_scaling[sel] / (0.8 * N))    # escala   ÷ 1.6   ✔ extensiva
+alpha_new   = alpha / N                                   # opacidad ÷ 2     ✔ extensiva
+new_beta    = (self._beta[sel] - math.log(N))             # β        ÷ 2     ✘ NO extensiva</code></pre>
+
+<p>Escala y opacidad son magnitudes <b>extensivas</b>: al partir un splat en dos, repartirlas tiene una lógica de conservación (los dos hijos juntos deben aproximar al padre). <b>β no es extensiva</b> — es el parámetro de <b>forma</b> del kernel, adimensional. Dividirla no conserva nada; simplemente <b>aplana el perfil</b>. La analogía se aplicó a un parámetro donde no aplica.</p>
+
+<p class="note">Nótese además la dirección perversa: el split existe para <b>refinar</b> (dos primitivas más pequeñas donde había una grande, para capturar detalle). Pero al aplanar β, cada hijo cubre proporcionalmente <b>más</b> área con opacidad plana. <b>El mecanismo de refinamiento está degradando la capacidad de representar detalle en el mismo acto.</b></p>
+
+<h2>4 · Ejemplo de juguete: un splat, seis splits</h2>
+
+<p>Seguimos <b>un solo splat</b> desde su nacimiento. Nace con <code>_beta</code>=0 (β=4) y cae en zona de alto gradiente, así que se parte en cada ronda de densificación:</p>
+
+<table>
+  <thead><tr><th>Gen.</th><th><code>_beta</code> acumulado</th><th>¿clamp?</th><th>β resultante</th><th>k(r=0.9)</th><th>masa relativa</th><th>Forma</th></tr></thead>
+  <tbody>
+    <tr><td>0 (nace)</td><td>0.0000</td><td>—</td><td><b class="hi">4.0000</b></td><td>0.001</td><td>×1.00</td><td>Pico concentrado</td></tr>
+    <tr><td>1</td><td>−0.6931</td><td>—</td><td>2.0000</td><td>0.036</td><td>×1.67</td><td>Campana</td></tr>
+    <tr><td>2</td><td>−1.3863</td><td>—</td><td>1.0000</td><td>0.190</td><td>×2.50</td><td>Cono</td></tr>
+    <tr><td>3</td><td>−2.0794</td><td>—</td><td>0.5000</td><td>0.436</td><td>×3.33</td><td>Meseta suave</td></tr>
+    <tr><td>4</td><td>−2.7726</td><td>—</td><td>0.2500</td><td>0.660</td><td>×4.00</td><td>Meseta</td></tr>
+    <tr><td>5</td><td>−3.4657</td><td>—</td><td>0.1250</td><td>0.813</td><td>×4.44</td><td>Casi caja</td></tr>
+    <tr><td><b>6</b></td><td>−4.1589</td><td><b class="lo">SÍ → −4</b></td><td><b class="lo">0.0733</b></td><td><b>0.885</b></td><td><b>×4.66</b></td><td><b class="lo">CAJA — atrapado</b></td></tr>
+    <tr><td>7+</td><td>−4.8520 …</td><td><b class="lo">SÍ → −4</b></td><td><b class="lo">0.0733</b></td><td>0.885</td><td>×4.66</td><td>Idéntico (saturado)</td></tr>
+  </tbody>
+</table>
+
+<div class="figwrap">
+<svg viewBox="0 0 620 260" role="img" aria-label="Cascada de beta por generacion de split">
+  <rect x="0" y="0" width="620" height="260" fill="#0b0d13" rx="10"/>
+  <line x1="55" y1="205" x2="600" y2="205" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="55" y1="25" x2="55" y2="205" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="55" y1="196" x2="600" y2="196" stroke="#ff7b72" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="596" y="190" fill="#ff7b72" font-size="10" text-anchor="end" font-family="monospace">suelo β=0.0733</text>
+
+  <!-- barras: beta 0..4 -> altura = beta*45 -->
+  <rect x="75"  y="25"  width="46" height="180" fill="#7ee787" opacity="0.85" rx="3"/>
+  <rect x="145" y="115" width="46" height="90"  fill="#9ecbff" opacity="0.85" rx="3"/>
+  <rect x="215" y="160" width="46" height="45"  fill="#6ea8fe" opacity="0.85" rx="3"/>
+  <rect x="285" y="182" width="46" height="23"  fill="#ffd08a" opacity="0.85" rx="3"/>
+  <rect x="355" y="194" width="46" height="11"  fill="#ffb454" opacity="0.85" rx="3"/>
+  <rect x="425" y="199" width="46" height="6"   fill="#ff9f45" opacity="0.85" rx="3"/>
+  <rect x="495" y="202" width="46" height="3"   fill="#ff7b72" rx="3"/>
+  <rect x="565" y="202" width="46" height="3"   fill="#ff7b72" rx="3"/>
+
+  <text x="98"  y="18" fill="#7ee787" font-size="11" text-anchor="middle" font-family="monospace">4.0</text>
+  <text x="168" y="108" fill="#9ecbff" font-size="11" text-anchor="middle" font-family="monospace">2.0</text>
+  <text x="238" y="153" fill="#6ea8fe" font-size="11" text-anchor="middle" font-family="monospace">1.0</text>
+  <text x="308" y="175" fill="#ffd08a" font-size="11" text-anchor="middle" font-family="monospace">0.5</text>
+  <text x="378" y="187" fill="#ffb454" font-size="11" text-anchor="middle" font-family="monospace">0.25</text>
+  <text x="448" y="192" fill="#ff9f45" font-size="11" text-anchor="middle" font-family="monospace">0.125</text>
+  <text x="518" y="192" fill="#ff7b72" font-size="11" text-anchor="middle" font-family="monospace">0.073</text>
+  <text x="588" y="192" fill="#ff7b72" font-size="11" text-anchor="middle" font-family="monospace">0.073</text>
+
+  <text x="98"  y="222" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">gen 0</text>
+  <text x="168" y="222" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">1</text>
+  <text x="238" y="222" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">2</text>
+  <text x="308" y="222" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">3</text>
+  <text x="378" y="222" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">4</text>
+  <text x="448" y="222" fill="#9aa3b2" font-size="11" text-anchor="middle" font-family="monospace">5</text>
+  <text x="518" y="222" fill="#ff7b72" font-size="11" text-anchor="middle" font-family="monospace">6</text>
+  <text x="588" y="222" fill="#ff7b72" font-size="11" text-anchor="middle" font-family="monospace">7</text>
+  <text x="330" y="245" fill="#9aa3b2" font-size="11" text-anchor="middle">generación de split — β se divide entre 2 cada vez</text>
+</svg>
+</div>
+
+<div class="card note danger-box">
+<b>Seis splits bastan.</b> Con <code>densification_interval</code>=100 y la ventana 500→15000, hay <b>145 rondas</b> de densificación. Un splat en zona de detalle (justo donde el gradiente es alto y el split se dispara) supera 6 generaciones <b>muy pronto</b>. Y una vez en el suelo, ahí se queda: el clamp lo fija y la compresión de la exponencial en esa zona (§1) hace que el gradiente de rescate sea despreciable. <b>Es un trinquete: solo gira hacia abajo.</b>
+</div>
+
+<h2>5 · Por qué solo pasa en el clásico</h2>
+
+<p>Hay cuatro sitios que crean primitivas nuevas. <b>Solo uno resta:</b></p>
+
+<table>
+  <thead><tr><th>Ruta</th><th>Línea</th><th>β del hijo</th><th>Modo</th></tr></thead>
+  <tbody>
+    <tr><td><code>densify_and_split</code></td><td>574</td><td><code class="lo">_beta − log(N)</code> &nbsp;<b class="lo">← DECREMENTA</b></td><td><b>clásico</b></td></tr>
+    <tr><td><code>densify_and_clone</code></td><td>599</td><td><code>_beta[sel]</code> (copia)</td><td>clásico</td></tr>
+    <tr><td><code>relocate_gs</code></td><td>771</td><td><code>_beta[src]</code> (copia)</td><td>MCMC</td></tr>
+    <tr><td><code>add_new_gs</code></td><td>849</td><td><code>_beta[src]</code> (copia)</td><td>MCMC</td></tr>
+  </tbody>
+</table>
+
+<p>El MCMC <b>no usa split en absoluto</b> — recicla (<code>relocate</code>) y añade (<code>add_new</code>), y ambos copian β tal cual. Por eso el trinquete es invisible en toda la familia MCMC.</p>
+
+<h2>6 · La evidencia medida</h2>
+
+<p>La predicción del mecanismo es específica y contrastable: <b>β colapsado en clásico, intacto en MCMC</b>. Es exactamente lo que dicen los logs:</p>
+
+<table>
+  <thead><tr><th>Run</th><th>Modo</th><th>β&lt;0.1 @7000</th><th>β mín</th><th>Lectura</th></tr></thead>
+  <tbody>
+    <tr><td>run36</td><td>MCMC</td><td><b class="hi">0.000%</b></td><td>0.1043</td><td>Ni un splat cerca del suelo</td></tr>
+    <tr><td>run61</td><td>MCMC</td><td><b class="hi">0.000%</b></td><td>0.1009</td><td>Idem</td></tr>
+    <tr><td>run56</td><td>MCMC</td><td>0.004%</td><td>0.0980</td><td>Residual</td></tr>
+    <tr><td><b>run66</b></td><td><b>clásico</b></td><td><b class="lo">54.78%</b></td><td><b class="lo">0.0733</b></td><td>Mitad de la población en el suelo <b>exacto</b></td></tr>
+    <tr><td><b>run65</b></td><td><b>clásico</b></td><td><b class="lo">55.85%</b></td><td><b class="lo">0.0733</b></td><td>Idem</td></tr>
+  </tbody>
+</table>
+
+<p>Que el mínimo sea <b>0.0733 exacto</b> (= 4·e<sup>−4</sup>, el clamp) y no un valor cualquiera es la confirmación: no es "β tiende a bajar", es <b>saturación contra el límite del parámetro</b>.</p>
+
+<p>Además, el A/B local (flowers, clásico, 2500 iters) muestra que el colapso ocurre <b>con los reguladores apagados</b> — no lo causan ellos:</p>
+
+<table>
+  <thead><tr><th><code>opacity_reg</code></th><th><code>scale_reg</code></th><th>train PSNR @2500</th><th>β&lt;0.1</th></tr></thead>
+  <tbody>
+    <tr><td>0.02</td><td>0.06</td><td>17.02</td><td>70.7%</td></tr>
+    <tr><td>0.02</td><td>0</td><td>18.70</td><td>70.3%</td></tr>
+    <tr><td><b>0</b></td><td><b>0</b></td><td><b>18.84</b></td><td><b>57.4%</b></td></tr>
+  </tbody>
+</table>
+
+<h2>7 · Qué explica esto y qué NO</h2>
+
+<div class="card note ok-box">
+<b>SÍ explica:</b>
+<ul>
+  <li>Por qué el mínimo de β es <code>0.0733</code> exacto en todos los runs clásicos.</li>
+  <li>Por qué el 50–70% de la población clásica está bajo β=0.1 y la MCMC el 0.0%.</li>
+  <li>Por qué los renders clásicos muestran <b>discos anchos de opacidad plana sin textura</b> aunque las escalas sean diminutas (<code>s_mean</code>=0.0167): la huella la ensancha β, no <code>scale</code>.</li>
+  <li>Por qué hay sobre-brillo (<code>dmean</code>=+1.61 en run65) sin splats grandes: la masa integrada del kernel se multiplica por 4.66.</li>
+</ul>
+</div>
+
+<div class="card note danger-box">
+<b>NO explica — y hay que ser explícito:</b>
+<ul>
+  <li><b>No es la causa de la regresión de run65/run66.</b> <code>git log -L 574,574</code> lo sitúa en el <code>first commit</code>. <b>run15 / run25 / run26 son clásicos, tienen este mismo bug, y llegaron a train PSNR ≈ 22.2 y honesto 19.94–20.13.</b> El tercer brazo del A/B (reguladores a 0 = config de run25/26) da 57.4% de β colapsado y aun así <b>18.84</b> frente a los 17.02 de run66.</li>
+  <li>La regresión de run65/66 la causan los <b>reguladores</b> trasplantados de flowers-MCMC: <code>scale_reg</code>=0.06 cuesta <b>1.68 dB</b> y <code>opacity_reg</code>=0.02 otros 0.14 dB (medido a 2500 iters).</li>
+  <li><b>Cota inferior, no cuenta cerrada:</b> el A/B mide 1.82 dB a 2500 iters, pero el hueco real a 30k es de 4.4 dB (17.74 vs 22.18). Si al revertir los reguladores no se recuperan los ~22, queda residuo por explicar.</li>
+</ul>
+</div>
+
+<p>La lectura correcta: el trinquete es un <b>techo estructural del camino clásico</b>, no el fallo de este run. Dicho de otro modo — si el clásico siempre aplasta β contra el suelo, entonces <b>el camino clásico nunca ha usado Beta Splatting de verdad</b>: degenera a kernels de caja, que es justo el 2DGS gaussiano de partida pero peor. Podría ser parte de por qué el clásico siempre perdió SSIM contra el MCMC en todo el historial.</p>
+
+<h2>8 · El fix propuesto</h2>
+
+<p>Alinear el split con las otras tres rutas — heredar β sin tocarlo:</p>
+
+<pre><code>- new_beta = (self._beta[selected_pts_mask] - math.log(N)).repeat(N, 1)
++ new_beta = self._beta[selected_pts_mask].repeat(N, 1)</code></pre>
+
+<p>Es una línea, y deja el split consistente con <code>densify_and_clone</code> (599), <code>relocate_gs</code> (771) y <code>add_new_gs</code> (849).</p>
+
+<div class="card note warn-box">
+<b>Pero es un cambio de comportamiento, no una corrección obvia.</b> Cambia la dinámica de <b>todos</b> los runs clásicos del historial (run14–run27, run65, run66), así que las comparaciones con ellos dejarían de ser homogéneas. Y no sabemos si la β heredada sin dividir producirá splats demasiado picudos tras varias generaciones. <b>Requiere su propio A/B</b>, con la misma disciplina que run28/run30/run62: un único delta contra un ancla clásica sana (run25/26), medido honesto.
+</div>
+
+<h3>Orden recomendado</h3>
+<ol>
+  <li><b>run67</b> = clásico con <code>opacity_reg=0</code> y <code>scale_reg=0</code> (reguladores de run25/26). <b>Revierte la regresión medida.</b> Sin tocar código.</li>
+  <li>Si run67 recupera ~22 train / ~19.9 honesto → confirmado que los reguladores eran todo el problema del run.</li>
+  <li><b>Solo entonces</b>, y sobre esa base sana, el A/B del trinquete de β — que es un experimento <b>nuevo</b> con potencial propio, no una reparación de run66.</li>
+</ol>
+
+<hr style="border:none;border-top:1px solid var(--line);margin:36px 0 14px">
+<p class="meta">Doc generado el <b>2026-07-20</b> durante la depuración de run66. Fórmulas verificadas contra <code>scene/gaussian_model.py</code> (183-185, 574, 599, 771, 849), <code>train.py</code> (399) y <code>submodules/diff-surfel-rasterization/cuda_rasterizer/forward.cu</code> (439-442). Todos los valores numéricos y las curvas SVG están calculados con las fórmulas exactas del código, no dibujados a mano. Relacionado: <code>beta_kernel_y_freeze_low_beta.html</code> (qué es β y el freeze del backward), <code>densificacion_clasica_antes_de_mcmc.html</code>, <code>clone_split_logica_huecos.html</code>.</p>
+
+</div>
+</body>
+</html>

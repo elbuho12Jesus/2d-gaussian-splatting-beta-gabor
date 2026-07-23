@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ruido híbrido por covarianza — ejemplo de juguete</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Ruido híbrido por covarianza — ejemplo de juguete</h1>
+<p class="sub">Cómo funciona <b>ahora mismo</b> el ruido posicional con <code>--cov_noise</code> activado: anisotropía moldeada por las 2 escalas <b>en el plano</b> del surfel + isotrópico en la <b>normal</b>, con la normalización que evita el problema de magnitudes del «1» literal. Un splat, números reales. Compañero de <code>ruido_isotropico_vs_covarianza.html</code> (secciones 5 y 9).</p>
+
+<h2>1. El pipeline implementado (train.py)</h2>
+<div class="card card2">
+<pre><code>s = get_scaling                              <span style="color:#8b949e"># (N,2): las 2 escalas del plano</span>
+w = s / s.mean(dim=1, keepdim=True)          <span style="color:#7ee787"># anisotropía, MEDIA 1  ← clave de magnitud</span>
+pad = cov_noise_normal                       <span style="color:#8b949e"># escala isótropa de la normal (1.0)</span>
+local_std = cat([w, pad])                    <span style="color:#8b949e"># (N,3): [u, v, normal]</span>
+R = build_rotation(get_rotation)             <span style="color:#8b949e"># (N,3,3); col 2 = normal del surfel</span>
+base_noise = R @ (local_std * randn(N,3))    <span style="color:#7ee787"># moldea en el plano y rota al mundo</span>
+noise = base_noise * (1-o)**100 * noise_lr * xyz_lr
+xyz += noise</code></pre>
+<p class="note">No se usa <code>build_scaling_rotation</code> (accedería a <code>s[:,2]</code> → IndexError con scales 2D). Se arma <code>R</code> con <code>build_rotation</code> y un <b>std local de 3 ejes</b> a mano. La <b>normalización a media 1</b> es lo que hace que el «1» de la normal sea conmensurable con el plano.</p>
+</div>
+
+<h2>2. Ejemplo número a número</h2>
+<p>Un surfel <b>alargado</b> (eje <i>u</i> 4× el eje <i>v</i>) y un ruido base cualquiera:</p>
+<div class="eq">s = (s<sub>u</sub>, s<sub>v</sub>) = (0.08, 0.02) &nbsp;&nbsp;&nbsp; n = randn = (0.5, &minus;1.0, 0.4)</div>
+<div class="card">
+<pre><code>mean(s)   = (0.08 + 0.02) / 2 = 0.05
+w         = s / mean(s) = (0.08/0.05, 0.02/0.05) = (<span style="color:#7ee787">1.6, 0.4</span>)
+local_std = (1.6, 0.4, <span style="color:#7ee787">1.0</span>)            <span style="color:#8b949e"># [u, v, normal=pad]</span>
+
+local_std ⊙ n = (1.6·0.5, 0.4·(−1.0), 1.0·0.4)
+              = (<span style="color:#7ee787">0.80, −0.40, 0.40</span>)        <span style="color:#8b949e"># en el marco local del surfel</span>
+
+world = R · (0.80, −0.40, 0.40)            <span style="color:#8b949e"># R real orienta u,v,normal en el mundo</span>
+      = (0.80, −0.40, 0.40)                <span style="color:#8b949e"># (con R = I para ver la aritmética)</span>
+
+noise = world · (1−o)^100 · noise_lr · xyz_lr   <span style="color:#8b949e"># escalares comunes → tamaño del paso</span></code></pre>
+<p>Lee el vector local <code>(0.80, −0.40, 0.40)</code>:</p>
+<ul>
+  <li><b>Eje largo <i>u</i>:</b> <code>0.5 → 0.80</code> — <b>amplificado</b> (×1.6): el surfel es grande ahí, explora más a lo largo de su superficie.</li>
+  <li><b>Eje corto <i>v</i>:</b> <code>−1.0 → −0.40</code> — <b>amortiguado</b> (×0.4): es fino ahí, explora poco.</li>
+  <li><b>Normal:</b> <code>0.4 → 0.40</code> — <b>intacto</b> (×1.0): explora perpendicular a la tasa media del plano (isótropo).</li>
+</ul>
+</div>
+
+<h2>3. Los tres ruidos, sobre el mismo <code>n</code></h2>
+<p>Aquí se ve por qué el «1» <i>crudo</i> que propusiste no funcionaba y por qué la normalización lo arregla. Mismos <code>s</code> y <code>n</code>:</p>
+<table>
+<tr><th>Modo</th><th>pesos (u, v, normal)</th><th>resultado ⊙ n</th><th>En el plano</th><th>Normal</th></tr>
+<tr><td><span class="tag">isotrópico</span><br><span class="meta">default actual</span></td><td>(1, 1, 1)</td><td>(0.50, −1.00, 0.40)</td><td>sin forma (ignora el surfel)</td><td>0.40</td></tr>
+<tr><td><span class="tag bad">Σ·n crudo</span><br><span class="meta">pad=1, pesos = s²</span></td><td>(0.0064, 0.0004, 1)</td><td>(0.0032, −0.0004, 0.40)</td><td class="hl">≈ congelado (s²≈0)</td><td>0.40</td></tr>
+<tr><td><span class="tag ok">híbrido</span><br><span class="meta">implementado</span></td><td>(1.6, 0.4, 1.0)</td><td>(0.80, −0.40, 0.40)</td><td class="hl2">moldeado (u &gt; v) ✓</td><td>0.40</td></tr>
+</table>
+<p class="note danger-box"><b>Fíjate en la columna «Normal»: 0.40 en los tres.</b> La normal explora igual en todos — el «1» del pad hace que sea isótropa como el default. La diferencia está <b>solo en el plano</b>: el crudo lo congela (s²≈1e-4 bajo un <code>noise_lr</code> calibrado para magnitud 1), el híbrido lo moldea conservando la magnitud. <b>Esa</b> es la corrección.</p>
+
+<h2>4. La forma del ruido, visual</h2>
+<p>Cada panel: el surfel (azul, vista de frente al plano) y la <b>elipse de la que se muestrea el ruido</b> en el plano (<i>u</i> horizontal, <i>v</i> vertical).</p>
+<svg viewBox="0 0 940 270" role="img" aria-label="Distribución del ruido en el plano para los tres modos">
+  <rect x="0" y="0" width="940" height="270" fill="#0b0d13" rx="10"/>
+
+  <!-- COL 1: isotrópico -->
+  <text x="160" y="32" fill="#9aa3b2" font-size="14" text-anchor="middle" font-weight="bold">Isotrópico (default)</text>
+  <ellipse cx="160" cy="140" rx="60" ry="17" fill="#6ea8fe" opacity="0.22" stroke="#6ea8fe"/>
+  <circle cx="160" cy="140" r="38" fill="none" stroke="#9aa3b2" stroke-dasharray="5 4"/>
+  <text x="160" y="218" fill="#9aa3b2" font-size="11.5" text-anchor="middle">esfera: ignora la forma</text>
+  <text x="160" y="234" fill="#9aa3b2" font-size="11.5" text-anchor="middle">del surfel</text>
+
+  <!-- COL 2: cov crudo -->
+  <text x="470" y="32" fill="#ff7b72" font-size="14" text-anchor="middle" font-weight="bold">Σ·n crudo (pad=1)</text>
+  <ellipse cx="470" cy="140" rx="60" ry="17" fill="#6ea8fe" opacity="0.22" stroke="#6ea8fe"/>
+  <circle cx="470" cy="140" r="3" fill="#ff7b72"/>
+  <text x="470" y="120" fill="#ff7b72" font-size="11">≈ punto</text>
+  <text x="470" y="218" fill="#ff7b72" font-size="11.5" text-anchor="middle">plano congelado (s²≈0)</text>
+  <text x="470" y="234" fill="#9aa3b2" font-size="11.5" text-anchor="middle">solo se mueve la normal</text>
+
+  <!-- COL 3: híbrido -->
+  <text x="780" y="32" fill="#7ee787" font-size="14" text-anchor="middle" font-weight="bold">Híbrido (implementado)</text>
+  <ellipse cx="780" cy="140" rx="60" ry="17" fill="#6ea8fe" opacity="0.22" stroke="#6ea8fe"/>
+  <ellipse cx="780" cy="140" rx="54" ry="14" fill="none" stroke="#7ee787" stroke-dasharray="5 4"/>
+  <text x="780" y="218" fill="#7ee787" font-size="11.5" text-anchor="middle">moldea el plano (u &gt; v)</text>
+  <text x="780" y="234" fill="#9aa3b2" font-size="11.5" text-anchor="middle">+ normal viva (pad=1)</text>
+
+  <!-- ejes de referencia -->
+  <g stroke="#3a4150" stroke-width="1">
+    <line x1="60" y1="258" x2="92" y2="258"/><line x1="60" y1="258" x2="60" y2="246"/>
+  </g>
+  <text x="96" y="262" fill="#6b7280" font-size="10">u</text>
+  <text x="52" y="246" fill="#6b7280" font-size="10">v</text>
+</svg>
+<p class="note ok-box">El isótropo es una esfera (ciega a la forma). El crudo colapsa el plano a un punto y solo deja vivir la normal — inútil para explorar superficies. El <b>híbrido</b> es el único cuya elipse de ruido <b>se alinea con el surfel</b> (más larga en <i>u</i>) <b>y</b> mantiene la normal. La normal (⊥, hacia ti en esta vista) vale ≈1 en los tres.</p>
+
+<h2>5. El mando <code>--cov_noise_normal</code></h2>
+<div class="card">
+<p>El <code>pad</code> de la normal es ajustable y barre justo el eje del problema de los huecos:</p>
+<table>
+<tr><th><code>cov_noise_normal</code></th><th>Std normal</th><th>Comportamiento</th></tr>
+<tr><td><b>0.0</b></td><td>0</td><td>Ruido <b>confinado al plano</b> (rango 2 puro). No sale de la superficie → no siembra huecos perpendiculares, pero geometría limpísima.</td></tr>
+<tr><td><b>1.0</b> <span class="meta">(actual)</span></td><td>= tasa media del plano</td><td>Explora perpendicular como el isótropo → <b>puede llenar volumen vacío</b>, con el plano ya moldeado.</td></tr>
+<tr><td><b>&gt;1</b></td><td>&gt; plano</td><td>Sesga hacia salir de la superficie. Riesgo de floaters si se pasa.</td></tr>
+</table>
+<p class="note">Para tus <b>huecos negros</b>, <code>1.0</code> es el punto de partida razonable: conserva la exploración 3D que los llena (como el isótropo) y le suma la forma en el plano (como la covarianza). Si aparecen floaters, baja hacia <code>0.5</code>; si quieres el experimento «covarianza pura sobre superficie», prueba <code>0.0</code>.</p>
+</div>
+
+<p class="meta">Implementación: bloque de ruido en <code>train.py</code> (rama <code>opt.cov_noise</code>), flags en <code>arguments/__init__.py</code> (<code>cov_noise</code>, <code>cov_noise_normal</code>). Activado en <code>train.sh</code>. Marco teórico: <code>ruido_isotropico_vs_covarianza.html</code>.</p>
+
+</div>
+</body>
+</html>

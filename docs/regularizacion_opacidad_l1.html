@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Regularización L1 de opacidad: cómo funciona al optimizar</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700}
+  .center{text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Regularización <span class="hl2">L1 de opacidad</span>: cómo funciona al optimizar</h1>
+<p class="sub">Qué penaliza, qué fuerza ejerce sobre cada splat, por qué limpia el fondo translúcido, por qué es <b>L1 y no L2</b>, y la respuesta a tu pregunta: <b>sí, solo está activa durante la densificación</b> — y hay una razón estructural para ello.</p>
+
+<div class="note warn-box"><b>Aclaración previa imprescindible.</b> Esto <b>NO es algo nuevo que añadir</b>: <code>opacity_reg</code> <b>ya está activo en todos tus runs</b> (run4–run9) a <code>λ = 0.01</code> (default de <code>arguments/__init__.py:102</code>; el <code>train_server.sh</code> no lo sobreescribe). Ya está implementado y gateado igual que el oficial en <code>train.py:143-145</code>. La palanca para el experimento de fondo no es "encenderlo", es <b>subir su λ</b>.</p></div>
+
+<h2>1. Qué es y qué penaliza</h2>
+<p>Es un término extra en la pérdida que castiga la opacidad <b>total</b> de la escena. En tu repo (<code>train.py:144</code>) y en el Beta oficial (<code>train.py:113</code>) es literalmente esto:</p>
+<div class="eq">L<sub>reg</sub> &nbsp;=&nbsp; λ · mean( |o<sub>i</sub>| ) &nbsp;=&nbsp; (λ/N) · Σ<sub>i</sub> o<sub>i</sub></div>
+<p>donde <code>o<sub>i</sub> = sigmoid(ô<sub>i</sub>) ∈ (0,1)</code> es la opacidad activada del splat <code>i</code> (el parámetro optimizado es el <i>logit</i> crudo <code>ô<sub>i</sub></code>). Como la opacidad ya es positiva, el <code>abs()</code> es redundante: en la práctica <b>penaliza la opacidad media de toda la nube</b>. Cuantos más splats opacos tengas, mayor el castigo. El optimizador, para reducirlo, tiene un único camino: <b>bajar opacidades</b>.</p>
+
+<div class="card card2">
+<b>La tensión central de la optimización.</b> Sobre cada splat actúan dos fuerzas opuestas:
+<ul>
+<li><span class="hl2">Pérdida fotométrica</span> (L1+SSIM contra la imagen real): <b>empuja la opacidad hacia ARRIBA</b> en los splats que ayudan a reconstruir bien la imagen — los necesita visibles.</li>
+<li><span class="hl">Regularización L1</span>: <b>empuja TODAS las opacidades hacia ABAJO</b> con una fuerza constante.</li>
+</ul>
+Un splat <b>sobrevive con opacidad alta solo si su contribución a bajar el error fotométrico supera el castigo λ</b>. El que no aporta lo suficiente es arrastrado hacia 0.
+</div>
+
+<h2>2. La lógica al optimizar: qué fuerza ejerce, splat a splat</h2>
+<p>La clave está en el <b>gradiente</b>. Hay que mirarlo en dos espacios, porque cuentan cosas distintas.</p>
+
+<h3>2a. En el espacio de la opacidad <code>o</code>: fuerza CONSTANTE (esto es lo "L1")</h3>
+<div class="eq">∂L<sub>reg</sub> / ∂o<sub>i</sub> &nbsp;=&nbsp; λ/N &nbsp; (constante, igual para todos)</div>
+<p>Cada paso, la opacidad de <b>cada</b> splat recibe el mismo empujón hacia abajo, <b>sin importar su valor actual</b>. Esa fuerza constante es la firma de L1 y la razón de que induzca <b>sparsity</b>: un empujón fijo es capaz de llevar una opacidad pequeña <b>hasta 0 exacto</b> en un número finito de pasos (ver §3).</p>
+
+<h3>2b. En el espacio del parámetro <code>ô</code> (logit, lo que de verdad se actualiza): fuerza en CAMPANA</h3>
+<p>El optimizer no actualiza <code>o</code> directamente, sino el logit <code>ô</code>. Por la regla de la cadena con la sigmoide:</p>
+<div class="eq">∂L<sub>reg</sub> / ∂ô<sub>i</sub> &nbsp;=&nbsp; (λ/N) · o<sub>i</sub>(1 − o<sub>i</sub>)</div>
+<p>Esto es <b>0 en los extremos y máximo en o = 0.5</b>. Consecuencia preciosa para tu problema:</p>
+
+<div class="center">
+<svg viewBox="0 0 760 300" width="760" role="img" aria-label="Fuerza de la regularización en función de la opacidad">
+  <rect x="0" y="0" width="760" height="300" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+  <!-- ejes -->
+  <line x1="80" y1="250" x2="700" y2="250" stroke="#3a4150" stroke-width="1.5"/>
+  <line x1="80" y1="250" x2="80" y2="40" stroke="#3a4150" stroke-width="1.5"/>
+  <text x="390" y="285" fill="#9aa3b2" font-size="13" text-anchor="middle">opacidad del splat &nbsp;o<tspan baseline-shift="sub">i</tspan></text>
+  <text x="30" y="150" fill="#9aa3b2" font-size="12" text-anchor="middle" transform="rotate(-90 30 150)">fuerza efectiva ↓</text>
+  <text x="80" y="268" fill="#6b7280" font-size="11" text-anchor="middle">0</text>
+  <text x="390" y="268" fill="#6b7280" font-size="11" text-anchor="middle">0.5</text>
+  <text x="700" y="268" fill="#6b7280" font-size="11" text-anchor="middle">1</text>
+  <!-- campana o(1-o) en espacio logit -->
+  <path d="M80,250 Q390,40 700,250" fill="none" stroke="#7ee787" stroke-width="2.5"/>
+  <!-- linea constante en espacio opacidad -->
+  <line x1="80" y1="205" x2="700" y2="205" stroke="#ff7b72" stroke-width="2" stroke-dasharray="6 4"/>
+  <!-- zonas -->
+  <line x1="390" y1="250" x2="390" y2="60" stroke="#2a2f3c" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="150" y="100" fill="#7ee787" font-size="12">extremos: fuerza ≈ 0</text>
+  <text x="320" y="32" fill="#7ee787" font-size="12">pico en o=0.5</text>
+  <text x="500" y="195" fill="#ff7b72" font-size="11">L1 en espacio-o: constante</text>
+  <!-- splat translucido marcado -->
+  <circle cx="270" cy="186" r="6" fill="#ffb454"/>
+  <text x="282" y="178" fill="#ffb454" font-size="11">floater de fondo (o~0.2–0.4)</text>
+  <text x="100" y="240" fill="#6b7280" font-size="10">o→0: ya muerto</text>
+  <text x="600" y="240" fill="#6b7280" font-size="10">o→1: primer plano confiado</text>
+</svg>
+</div>
+
+<div class="note ok-box"><b>Por qué esto ataca justo el fondo.</b> Los <b>floaters translúcidos del fondo</b> que sobreajustan train viven en <b>opacidad intermedia</b> (~0.1–0.5): son semitransparentes por definición. Ahí la fuerza efectiva (campana) es <b>máxima</b>. En cambio, el primer plano nítido y confiado (<code>o→1</code>) y los splats ya muertos (<code>o→0</code>) <b>apenas se tocan</b>. La regularización <b>discrimina sola</b> a favor de matar la basura semitransparente y dejar quieto lo bueno. No es casualidad que sea el remedio del fondo.</p></div>
+
+<h2>3. Por qué <span class="hl2">L1</span> y no L2 (el porqué de la <i>sparsity</i>)</h2>
+<div class="grid2">
+<div class="card"><span class="tag ok">L1 — lo que se usa</span>
+<p>Fuerza hacia abajo <b>constante</b> (<code>λ/N</code>). No se desvanece al acercarse a 0 → es capaz de <b>aplastar opacidades pequeñas hasta 0 exacto</b>. Produce splats <b>genuinamente muertos</b>.</p>
+<div class="eq" style="color:var(--accent2)">fuerza ∝ 1</div>
+</div>
+<div class="card"><span class="tag bad">L2 — descartado</span>
+<p>Fuerza proporcional a la opacidad (<code>∝ o</code>). Al acercarse a 0, la fuerza <b>se desvanece</b> → solo <b>encoge</b> los splats, nunca los lleva a 0. Deja un mar de splats tenues vivos.</p>
+<div class="eq" style="color:var(--danger)">fuerza ∝ o</div>
+</div>
+</div>
+<p>Esto importa muchísimo en MCMC: solo un splat <b>realmente muerto</b> (<code>o ≤ opacity_cull</code>) entra en el <code>dead_mask</code> y puede ser <b>reciclado</b>. L2 nunca los mata del todo → no se recicla nada. <b>L1 es lo que cierra el bucle con la densificación.</b></p>
+
+<h2>4. El bucle con MCMC: por qué <i>limpia</i> sin perder presupuesto</h2>
+<p>La regularización por sí sola solo <i>apaga</i> splats. Lo que la hace útil es que en tu pipeline MCMC va <b>encadenada con <code>relocate_gs</code></b>. El ciclo, cada <code>densification_interval</code> (100 iters):</p>
+
+<div class="center">
+<svg viewBox="0 0 820 250" width="820" role="img" aria-label="Bucle regularización + relocate">
+  <rect x="0" y="0" width="820" height="250" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+  <!-- nodo 1 -->
+  <rect x="30" y="95" width="170" height="60" rx="10" fill="#171a23" stroke="#ff7b72"/>
+  <text x="115" y="120" fill="#ff7b72" font-size="13" text-anchor="middle" font-weight="bold">L1 opacidad</text>
+  <text x="115" y="140" fill="#9aa3b2" font-size="11" text-anchor="middle">apaga splats inútiles</text>
+  <!-- flecha -->
+  <line x1="200" y1="125" x2="245" y2="125" stroke="#3a4150" stroke-width="2" marker-end="url(#ar)"/>
+  <!-- nodo 2 -->
+  <rect x="250" y="95" width="170" height="60" rx="10" fill="#171a23" stroke="#ffb454"/>
+  <text x="335" y="118" fill="#ffb454" font-size="13" text-anchor="middle" font-weight="bold">dead_mask</text>
+  <text x="335" y="138" fill="#9aa3b2" font-size="11" text-anchor="middle">o ≤ opacity_cull</text>
+  <!-- flecha -->
+  <line x1="420" y1="125" x2="465" y2="125" stroke="#3a4150" stroke-width="2" marker-end="url(#ar)"/>
+  <!-- nodo 3 -->
+  <rect x="470" y="95" width="180" height="60" rx="10" fill="#171a23" stroke="#7ee787"/>
+  <text x="560" y="118" fill="#7ee787" font-size="13" text-anchor="middle" font-weight="bold">relocate_gs</text>
+  <text x="560" y="138" fill="#9aa3b2" font-size="11" text-anchor="middle">recicla → zona alto error</text>
+  <!-- flecha de retorno -->
+  <path d="M650,125 H700 V210 H115 V155" fill="none" stroke="#3a4150" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+  <text x="400" y="228" fill="#6b7280" font-size="11" text-anchor="middle">presupuesto reinvertido donde la imagen falla — no se pierde primitiva</text>
+  <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3a4150"/></marker></defs>
+</svg>
+</div>
+
+<p>Es el equivalente MCMC del <code>reset+prune</code> del 2DGS original, pero <b>suave y continuo</b>: la L1 "adelgaza la grasa" y <code>relocate</code> reinvierte ese presupuesto en las zonas mal resueltas. Sin la L1, los floaters translúcidos del fondo nunca bajan de <code>opacity_cull</code> → nunca entran en <code>dead_mask</code> → se quedan ahí para siempre garabateando el fondo. <b>Ese es exactamente el síntoma que ves.</b></p>
+
+<h2>5. ¿Se aplica <span class="hl2">solo en densificación</span>? — SÍ, y con motivo</h2>
+<p>Tu repo y el oficial la <b>gatean a la ventana de densificación</b>, idéntico:</p>
+<pre><code># train.py:143  (idéntico a beta-splatting/train.py:112)
+if opt.densify_from_iter &lt; iteration &lt; opt.densify_until_iter:
+    total_loss += opt.opacity_reg * gaussians.get_opacity.abs().mean()
+    total_loss += opt.scale_reg   * gaussians.get_scaling.abs().mean()</code></pre>
+
+<div class="center">
+<svg viewBox="0 0 820 150" width="820" role="img" aria-label="Ventana temporal de la regularización">
+  <rect x="0" y="0" width="820" height="150" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+  <line x1="40" y1="100" x2="780" y2="100" stroke="#3a4150" stroke-width="2"/>
+  <!-- marcas -->
+  <line x1="40" y1="92" x2="40" y2="108" stroke="#6b7280"/>
+  <text x="40" y="128" fill="#6b7280" font-size="11" text-anchor="middle">0</text>
+  <line x1="150" y1="92" x2="150" y2="108" stroke="#6b7280"/>
+  <text x="150" y="128" fill="#9aa3b2" font-size="11" text-anchor="middle">densify_from (500)</text>
+  <line x1="600" y1="92" x2="600" y2="108" stroke="#6b7280"/>
+  <text x="600" y="128" fill="#9aa3b2" font-size="11" text-anchor="middle">densify_until (35k)</text>
+  <line x1="780" y1="92" x2="780" y2="108" stroke="#6b7280"/>
+  <text x="780" y="128" fill="#6b7280" font-size="11" text-anchor="middle">fin (50k)</text>
+  <!-- zona reg ON -->
+  <rect x="150" y="55" width="450" height="40" fill="#7ee78722" stroke="#7ee787" rx="6"/>
+  <text x="375" y="80" fill="#7ee787" font-size="13" text-anchor="middle" font-weight="bold">REG ON  (L1 + relocate vivos)</text>
+  <!-- zona reg OFF -->
+  <rect x="600" y="55" width="180" height="40" fill="#ff7b7218" stroke="#ff7b72" rx="6"/>
+  <text x="690" y="80" fill="#ff7b72" font-size="12" text-anchor="middle">REG OFF</text>
+  <text x="690" y="42" fill="#9aa3b2" font-size="10" text-anchor="middle">ajuste final puro</text>
+</svg>
+</div>
+
+<h3>El porqué de apagarla tras la densificación</h3>
+<p>No es un capricho — es <b>estructural</b>: la L1 solo tiene sentido <b>mientras <code>relocate</code> esté vivo para explotarla</b>.</p>
+<ul>
+<li><b>Dentro de la ventana:</b> la L1 mata splats inútiles y <code>relocate</code> <b>recicla</b> ese presupuesto (§4). El bucle está cerrado: lo que se apaga se reinvierte.</li>
+<li><b>Después de <code>densify_until</code>:</b> <code>relocate</code>/<code>add_new</code> <b>ya no corren</b>. Si dejaras la L1 encendida, seguiría arrastrando opacidades hacia abajo <b>sin nadie que recicle</b> → la imagen se <b>apaga/oscurece</b> y se pierde cobertura sin posibilidad de recuperarla. Pura pérdida de calidad.</li>
+<li>Por eso, en los últimos miles de iters se <b>apaga</b> y se deja que la pérdida fotométrica asiente las opacidades en su valor óptimo para la imagen.</li>
+</ul>
+<div class="note"><b>Matiz:</b> "solo en densificación" se refiere al término del <b>loss</b>. La opacidad sigue cambiando después por gradiente fotométrico normal; lo que se retira es la <b>presión artificial</b> hacia abajo.</div>
+
+<h2>6. <code>opacity_reg</code> (L1) vs <code>opacity_reset</code> — por qué uno integra y el otro rompió tu run10</h2>
+<p>Conecta con el desastre del run10: meter <code>opacity_reset=3000</code> colapsó el PSNR y rompió la profundidad. La razón es la misma idea vista al revés.</p>
+<table>
+<tr><th></th><th class="ok">opacity_reg (L1) — compatible</th><th class="bad">opacity_reset — incompatible con MCMC</th></tr>
+<tr><td><b>Cómo actúa</b></td><td>Presión continua e infinitesimal, dentro del gradiente</td><td>Choque discreto cada 3000 iters: pone TODA la opacidad a 0.01</td></tr>
+<tr><td><b>Efecto en geometría</b></td><td>Suave, estable; solo mueve opacidad</td><td>Abre la compuerta del ruido <code>(1−o)<sup>100</sup></code> para toda la nube → terremoto posicional → profundidad/normales basura</td></tr>
+<tr><td><b>Diseñado para</b></td><td>MCMC (recicla con <code>relocate</code>)</td><td>Densificación adaptativa del 3DGS/2DGS (recupera por gradiente + <code>prune</code>)</td></tr>
+<tr><td><b>Resultado</b></td><td>Limpia el fondo sin romper nada</td><td>PSNR 19→16.8, profundidad rota (run10)</td></tr>
+</table>
+<p class="meta">Detalle del fallo del reset en MCMC: ver el diagnóstico de la conversación / <code>train.py:280</code> + <code>gaussian_model.py:268</code>.</p>
+
+<h2>7. Estado actual y cómo experimentar</h2>
+<div class="card card2">
+<ul>
+<li><b>Ya activo:</b> <code>opacity_reg = 0.01</code> en todos los runs (default; el script no lo toca). El fondo sigue garabateado <b>con</b> esta λ → la hipótesis es que <b>0.01 es demasiado débil</b> para vencer el incentivo fotométrico que mantiene vivos los floaters translúcidos.</li>
+<li><b>Experimento correcto:</b> <b>subir λ</b> (p.ej. <code>--opacity_reg 0.02</code> → <code>0.05</code>), no encenderlo. Barrido pequeño.</li>
+<li><b>Qué esperar / cómo leerlo:</b> probablemente <b>baje el PSNR</b> (matas memorización de primer plano) pero <b>limpie el fondo</b>. Recuerda lo aprendido: tu objetivo real es <b>fondo limpio</b>, no PSNR. Mide <b>LPIPS/SSIM</b> y mira el fondo a ojo, no solo PSNR.</li>
+<li><b>Riesgo:</b> λ demasiado alto → fondo (y zonas tenues) se <b>apagan</b> de más → huecos. Es un equilibrio; por eso un barrido y no un salto grande.</li>
+</ul>
+</div>
+<div class="note ok-box"><b>En una frase:</b> la L1 de opacidad es una presión constante hacia abajo que, gracias a su naturaleza de <i>sparsity</i>, mata splats translúcidos inútiles (máxima en <code>o≈0.5</code>, justo el fondo) y deja que <code>relocate</code> reinvierta ese presupuesto — <b>solo mientras dura la densificación</b>, porque sin <code>relocate</code> vivo solo apagaría la imagen.</div>
+
+<h2>8. <span class="hl2">PSNR vs SSIM vs LPIPS</span> — por qué el PSNR nos engañó con el fondo</h2>
+<p>Las tres miden "cuánto se parece la imagen renderizada a la real", pero <b>miran cosas distintas</b>. Entender la diferencia es lo que explica la paradoja de tu proyecto: <b>tu repo gana en PSNR al 2DGS original (21.54 vs 20.92) y aun así su fondo se ve peor</b>.</p>
+
+<h3>8a. PSNR — error de píxel crudo</h3>
+<p>Mide el error cuadrático medio entre píxeles, en decibelios. Es puramente <b>local y por píxel</b>:</p>
+<div class="eq">PSNR = 10 · log<sub>10</sub>( MAX<sup>2</sup> / MSE ) &nbsp;&nbsp; MSE = mean( (I − Î)<sup>2</sup> )</div>
+<ul>
+<li><b>No tiene noción de estructura ni de percepción.</b> Solo cuenta cuánto difiere cada píxel de su gemelo.</li>
+<li><b>Domina el primer plano nítido.</b> Acertar los bordes de las flores (alto contraste) mueve el MSE mucho más que un fondo entero ligeramente mal.</li>
+<li><b>Premia "apostar a la media".</b> Ante incertidumbre, un render <b>borroso</b> (la media local) puntúa <i>mejor</i> en MSE que un render con detalle plausible pero ligeramente desplazado. → favorece el desenfoque.</li>
+<li><b>Castiga poco un fondo garabateado de baja frecuencia</b> si los colores promedio están cerca: el error por píxel es pequeño aunque la textura sea un desastre visual.</li>
+</ul>
+
+<h3>8b. SSIM — similitud estructural</h3>
+<p>Compara <b>parches</b> (ventanas locales) en tres factores: <b>luminancia, contraste y estructura</b> (correlación de patrones). Va de −1 a 1 (1 = idéntico).</p>
+<ul>
+<li>Captura si <b>la textura y los bordes están bien</b>, no solo el valor del píxel. Un fondo con la estructura correcta puntúa alto aunque haya pequeñas diferencias de color.</li>
+<li>Más cercano a cómo el ojo juzga "se parece", pero sigue siendo una fórmula fija (no aprendida).</li>
+</ul>
+
+<h3>8c. LPIPS — distancia perceptual aprendida</h3>
+<p>Pasa ambas imágenes por una red neuronal preentrenada (VGG/AlexNet) y compara sus <b>activaciones internas</b>. Es una distancia, así que <b>más bajo = mejor</b>.</p>
+<ul>
+<li>Mide similitud <b>perceptual</b>: aprende qué diferencias <i>nota un humano</i>. Es el que mejor correlaciona con el juicio visual.</li>
+<li><b>Penaliza fuerte el "garabato"</b>: texturas falsas, floaters translúcidos y artefactos estructurales del fondo disparan LPIPS aunque el PSNR apenas se mueva.</li>
+<li>Es justo el que captura <b>lo que a ti te importa</b> en el fondo del prado.</li>
+</ul>
+
+<div class="center">
+<svg viewBox="0 0 820 210" width="820" role="img" aria-label="Qué mide cada métrica">
+  <rect x="0" y="0" width="820" height="210" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+  <!-- eje: local -> perceptual -->
+  <line x1="60" y1="170" x2="760" y2="170" stroke="#3a4150" stroke-width="2" marker-end="url(#ar2)"/>
+  <text x="60" y="195" fill="#6b7280" font-size="11">píxel / local</text>
+  <text x="760" y="195" fill="#6b7280" font-size="11" text-anchor="end">percepción humana</text>
+  <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3a4150"/></marker></defs>
+  <!-- PSNR -->
+  <rect x="80" y="60" width="180" height="80" rx="10" fill="#171a23" stroke="#ff7b72"/>
+  <text x="170" y="88" fill="#ff7b72" font-size="15" text-anchor="middle" font-weight="bold">PSNR</text>
+  <text x="170" y="110" fill="#9aa3b2" font-size="11" text-anchor="middle">error por píxel</text>
+  <text x="170" y="126" fill="#9aa3b2" font-size="11" text-anchor="middle">↑ mejor · favorece blur</text>
+  <line x1="170" y1="140" x2="170" y2="170" stroke="#ff7b72" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <!-- SSIM -->
+  <rect x="320" y="60" width="180" height="80" rx="10" fill="#171a23" stroke="#ffb454"/>
+  <text x="410" y="88" fill="#ffb454" font-size="15" text-anchor="middle" font-weight="bold">SSIM</text>
+  <text x="410" y="110" fill="#9aa3b2" font-size="11" text-anchor="middle">estructura/textura</text>
+  <text x="410" y="126" fill="#9aa3b2" font-size="11" text-anchor="middle">↑ mejor</text>
+  <line x1="410" y1="140" x2="410" y2="170" stroke="#ffb454" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <!-- LPIPS -->
+  <rect x="560" y="60" width="180" height="80" rx="10" fill="#171a23" stroke="#7ee787"/>
+  <text x="650" y="88" fill="#7ee787" font-size="15" text-anchor="middle" font-weight="bold">LPIPS</text>
+  <text x="650" y="110" fill="#9aa3b2" font-size="11" text-anchor="middle">distancia perceptual (red)</text>
+  <text x="650" y="126" fill="#9aa3b2" font-size="11" text-anchor="middle">↓ mejor · caza garabato</text>
+  <line x1="650" y1="140" x2="650" y2="170" stroke="#7ee787" stroke-width="1.5" stroke-dasharray="3 3"/>
+  <text x="410" y="30" fill="#e6e8ee" font-size="13" text-anchor="middle" font-weight="bold">¿qué mide cada una?</text>
+</svg>
+</div>
+
+<table>
+<tr><th>Métrica</th><th>Qué mide</th><th>Mejor =</th><th>Punto ciego</th><th>Útil para ti</th></tr>
+<tr><td><b>PSNR</b></td><td>Error de píxel (MSE)</td><td>más alto (dB)</td><td>Ignora estructura; premia blur; tolera fondo garabateado de baja frecuencia</td><td class="bad">Engañoso para el fondo</td></tr>
+<tr><td><b>SSIM</b></td><td>Luminancia + contraste + estructura por parches</td><td>más alto (→1)</td><td>Fórmula fija; menos sensible a artefactos sutiles que LPIPS</td><td class="warn">Útil, intermedio</td></tr>
+<tr><td><b>LPIPS</b></td><td>Distancia en activaciones de una red (percepción)</td><td>más bajo (→0)</td><td>Coste de cómputo; depende de la red base</td><td class="ok">El que captura tu fondo</td></tr>
+</table>
+
+<div class="note danger-box"><b>La paradoja de tu proyecto, explicada.</b> El 2DGS original tiene un fondo <b>borroso pero correcto</b> → poca estructura falsa → <b>buen LPIPS</b>, pero PSNR modesto (20.92) porque el blur "apuesta a la media" y pierde detalle de píxel en primer plano. Tu repo memoriza el primer plano (sube PSNR a 21.54) <b>a costa de un fondo garabateado</b> → ese garabato <b>casi no toca el PSNR</b> pero <b>dispara el LPIPS</b>. <b>Llevábamos runs optimizando PSNR, la métrica que es ciega justo a tu problema.</b></p></div>
+
+<div class="note ok-box"><b>Implicación práctica.</b> Para el barrido de <code>opacity_reg</code> (§7), la señal de éxito <b>no es el PSNR</b> — es <b>bajar LPIPS</b> (y subir SSIM) aunque el PSNR caiga un poco. Un PSNR que baja mientras LPIPS mejora = <b>estás cambiando memorización por fondo limpio</b>, que es exactamente el trato que quieres.</div>
+
+<p class="meta" style="margin-top:32px">Refs de código: <code>train.py:122,143-145</code> (loss + gate) · <code>arguments/__init__.py:101-102</code> (defaults <code>scale_reg/opacity_reg = 0.01</code>) · <code>gaussian_model.py:141-142</code> (<code>get_opacity = sigmoid</code>) · <code>scene/gaussian_model.py:626</code> (<code>relocate_gs</code>) · oficial <code>beta-splatting/train.py:112-114</code>.</p>
+
+</div>
+</body>
+</html>

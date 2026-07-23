@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>El clamp low-pass del rasterizer 2DGS y el velo — y cómo lo arregla AA-2DGS</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .hl{color:var(--danger);font-weight:700}
+  .hl2{color:var(--accent2);font-weight:700}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0 .5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto;display:block;margin:8px auto}
+  .fig{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:18px 0}
+  .figcap{color:var(--muted);font-size:.86rem;margin-top:6px;text-align:center}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:12px 0;overflow-x:auto;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.92rem;color:var(--ink)}
+  .kbd{font-family:"JetBrains Mono",monospace;color:var(--accent)}
+  .toc{columns:2;font-size:.92rem} .toc a{color:var(--accent);text-decoration:none} .toc li{margin:.2em 0}
+  @media(max-width:720px){.toc{columns:1}}
+  .lead{font-size:1.05rem}
+  b.red{color:var(--danger)} b.grn{color:var(--accent2)} b.blu{color:var(--accent)} b.org{color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>El clamp <span style="color:var(--danger)">low-pass</span> del rasterizer 2DGS y el <span style="color:var(--danger)">velo</span></h1>
+<p class="sub">Por qué <code>min(rho3d, rho2d)</code> en <code>forward.cu</code> deja brillantes los surfels sub-píxel del fondo, cómo eso fabrica el velo translúcido sobre-brillante, y cómo lo ataca <b>AA-2DGS</b> (NeurIPS 2025). Con tu código real, tus constantes reales y diagramas.</p>
+<p class="meta">Doc generado del análisis del <code>max{G(u), G((x−c)/σ)}</code> — el "low pass filter" de <code>diff-surfel-rasterization/cuda_rasterizer/forward.cu:381</code>. Ancla del proyecto: run16 (techo perceptual), run36 (techo PSNR), run44 (techo bonsai).</p>
+
+<div class="card card2">
+<b>TL;DR</b>
+<ul>
+<li>El "low-pass" del rasterizer es <code>rho = min(rho3d, rho2d)</code> — equivale a <code>max{G(u), G((x−c)/σ)}</code>.</li>
+<li>Le pone a cada surfel un <b>suelo de tamaño de ~1px</b> pero <b class="red">NO le baja la opacidad</b>.</li>
+<li>⇒ los surfels sub-píxel del fondo pintan un blob de 1px a <b class="red">opacidad plena</b>. Apilados = <b class="red">velo sobre-brillante</b> (tu <code>dmean(render−gt)&gt;0</code>).</li>
+<li>Peor: el optimizador <b>aprende</b> que "sub-píxel + opaco" es gratis y estable → aparca gigantes translúcidos en el fondo (run21: <code>s(max)=extent</code>).</li>
+<li>AA-2DGS reemplaza el clamp por filtros con un factor <span class="eq" style="display:inline;padding:1px 6px">√det &lt; 1</span> que <b class="grn">sí atenúan</b> los sub-píxel. Es la causa que ningún cheap-sweep tocó.</li>
+</ul>
+</div>
+
+<div class="card">
+<b>Índice</b>
+<ol class="toc">
+<li><a href="#s1">Qué es un surfel sub-píxel</a></li>
+<li><a href="#s2">El clamp, en tu código real</a></li>
+<li><a href="#s3">min de distancias = max de gaussianas</a></li>
+<li><a href="#s4">Mecanismo 1: suelo de tamaño</a></li>
+<li><a href="#s5">Mecanismo 2: la opacidad NO se atenúa</a></li>
+<li><a href="#s6">Mecanismo 3: apilado = velo</a></li>
+<li><a href="#s7">Por qué el optimizador lo premia</a></li>
+<li><a href="#s8">AA-2DGS: los dos filtros</a></li>
+<li><a href="#s9">Resultados y matiz honesto</a></li>
+<li><a href="#s10">Plan de portado (flag A/B)</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s1">1. Qué es un surfel sub-píxel</h2>
+<div class="card">
+<p>Un surfel 2D (disco orientado) se proyecta a la pantalla como una elipse. En el <b>fondo rasante</b> de flowers (césped/cielo visto de refilón), esa elipse es o bien <b>diminuta</b> (surfel lejano) o bien casi <b>de canto</b> (la normal casi perpendicular a la cámara → la elipse colapsa a una línea fina). En ambos casos su huella real es <b>menor que un píxel</b>.</p>
+<p>La pregunta del rasterizer: <i>¿qué color y con qué peso aporta ese surfel al píxel que lo contiene?</i> La respuesta "correcta" físicamente es: <b>poco peso</b>, proporcional a la fracción del píxel que realmente cubre. Lo que hace tu clamp es otra cosa.</p>
+</div>
+
+<div class="fig">
+<svg viewBox="0 0 900 240" role="img" aria-label="Surfel bien resuelto vs surfel sub-pixel">
+  <!-- grid pixeles -->
+  <defs>
+    <pattern id="px" width="30" height="30" patternUnits="userSpaceOnUse">
+      <rect width="30" height="30" fill="none" stroke="#2a2f3c" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <!-- izquierda: bien resuelto -->
+  <text x="150" y="24" fill="#9aa3b2" font-size="14" text-anchor="middle">Surfel bien resuelto (cubre muchos px)</text>
+  <rect x="30" y="40" width="240" height="180" fill="url(#px)"/>
+  <ellipse cx="150" cy="130" rx="85" ry="60" fill="#6ea8fe" fill-opacity="0.35" stroke="#6ea8fe" stroke-width="2"/>
+  <text x="150" y="135" fill="#e6e8ee" font-size="12" text-anchor="middle">huella real</text>
+  <!-- derecha: sub-pixel -->
+  <text x="600" y="24" fill="#9aa3b2" font-size="14" text-anchor="middle">Surfel sub-píxel (de canto / lejano)</text>
+  <rect x="480" y="40" width="240" height="180" fill="url(#px)"/>
+  <!-- pixel destacado -->
+  <rect x="570" y="130" width="30" height="30" fill="#ff7b72" fill-opacity="0.08"/>
+  <ellipse cx="585" cy="145" rx="26" ry="3" fill="#ff7b72" fill-opacity="0.8" stroke="#ff7b72" stroke-width="1.5" transform="rotate(35 585 145)"/>
+  <text x="600" y="205" fill="#ff7b72" font-size="12" text-anchor="middle">huella &lt; 1 píxel</text>
+  <!-- cuadricula = pixeles -->
+  <text x="375" y="235" fill="#9aa3b2" font-size="11" text-anchor="middle">cada cuadro = 1 píxel</text>
+</svg>
+<div class="figcap">Izquierda: el surfel cubre decenas de píxeles → el rasterizer lo evalúa bien. Derecha: de canto, su huella real es una raya sub-píxel → aquí entra el clamp.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s2">2. El clamp, en tu código real</h2>
+<p><code>forward.cu:380-416</code>. Tus constantes (en <code>auxiliary.h:39-40</code>): <code>FilterSize = 0.707106</code> (=√2/2) y <code>FilterInvSquare = 2.0</code> → un filtro de pantalla de <b>σ ≈ 0.707 px</b> (σ² = 0.5, y <code>1/σ² = 2</code>).</p>
+
+<pre><code>float rho3d = (s.x*s.x + s.y*s.y);                    <span style="color:#7ee787">// distancia² en el frame LOCAL u-v del surfel (footprint REAL)</span>
+float2 d    = {xy.x - pixf.x, xy.y - pixf.y};
+float rho2d = FilterInvSquare * (d.x*d.x + d.y*d.y);  <span style="color:#ffb454">// = |d|²/σ² : disco FIJO de ~0.707px en PANTALLA</span>
+float rho   = <span style="color:#ff7b72">min(rho3d, rho2d);</span>                   <span style="color:#ff7b72">// ← "Add low pass filter"</span>
+...
+float kernel = powf(max(1.0f-rho, 1e-6f), beta_j);   <span style="color:#9aa3b2">// kernel beta, decreciente en rho</span>
+float alpha  = min(0.99f, <span style="color:#ff7b72">opa</span> * kernel);          <span style="color:#ff7b72">// ← opa NO se toca</span></code></pre>
+
+<div class="grid2">
+<div class="card">
+<span class="tag ok">rho3d</span>
+<p>Evaluación en el <b>sistema local del surfel</b> (ec. 8–10 de 2DGS). Es el footprint geométrico verdadero. Si el surfel es grande, <code>rho3d</code> es pequeño cerca del centro → <b>este término gana</b> → render fiel.</p>
+</div>
+<div class="card">
+<span class="tag warn">rho2d</span>
+<p>Disco de anchura <b>FIJA</b> (~0.707px) alrededor del centro proyectado, <b class="red">independiente del tamaño real</b> del surfel. Es el término que "rescata" a los surfels que se desvanecerían.</p>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s3">3. <code>min</code> de distancias = <code>max</code> de gaussianas</h2>
+<p>El kernel es <b>decreciente</b> en <code>rho</code> (a más distancia², menos respuesta). Por tanto tomar el <b>mínimo</b> de las dos distancias² equivale a tomar el <b>máximo</b> de las dos respuestas:</p>
+<div class="eq">min( rho3d , rho2d )   ⟺   max( G(rho3d) , G(rho2d) )   =   max{ 𝒢(u(x)) , 𝒢((x−c)/σ) }</div>
+<p>Es decir: tu <code>min(rho3d, rho2d)</code> <b>es</b> exactamente el <code>max{G,G}</code> que el paper de AA-2DGS señala como problema. El rasterizer usa <b>siempre el que dé más respuesta</b>: la huella real si es grande, o el disco fijo de 1px si la real se desvanece.</p>
+
+<div class="fig">
+<svg viewBox="0 0 900 300" role="img" aria-label="Perfil de las dos gaussianas y su maximo">
+  <!-- ejes -->
+  <line x1="70" y1="250" x2="850" y2="250" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="70" y1="40" x2="70" y2="250" stroke="#2a2f3c" stroke-width="1.5"/>
+  <text x="60" y="46" fill="#9aa3b2" font-size="12" text-anchor="end">1</text>
+  <text x="60" y="250" fill="#9aa3b2" font-size="12" text-anchor="end">0</text>
+  <text x="460" y="285" fill="#9aa3b2" font-size="13" text-anchor="middle">distancia al centro del surfel (px)</text>
+  <text x="30" y="150" fill="#9aa3b2" font-size="13" text-anchor="middle" transform="rotate(-90 30 150)">respuesta (kernel)</text>
+
+  <!-- G(rho3d): surfel sub-pixel, cae abruptamente -->
+  <path d="M70,44 C110,44 130,240 160,248 L160,248" fill="none" stroke="#7ee787" stroke-width="2.5"/>
+  <text x="170" y="235" fill="#7ee787" font-size="13">G(rho3d) — huella real, se desploma</text>
+
+  <!-- G(rho2d): disco fijo, ancho -->
+  <path d="M70,44 C220,44 340,150 470,250 " fill="none" stroke="#ffb454" stroke-width="2.5" stroke-dasharray="6 4"/>
+  <text x="360" y="120" fill="#ffb454" font-size="13">G(rho2d) — disco fijo ~1px</text>
+
+  <!-- max resaltado -->
+  <path d="M70,44 C110,44 128,150 160,190 C260,235 360,150 470,250" fill="none" stroke="#ff7b72" stroke-width="3.5" opacity="0.5"/>
+  <text x="560" y="200" fill="#ff7b72" font-size="13">el max = lo que se rasteriza</text>
+
+  <!-- zona sub-pixel -->
+  <rect x="70" y="40" width="90" height="210" fill="#7ee787" fill-opacity="0.05"/>
+  <line x1="160" y1="40" x2="160" y2="250" stroke="#7ee787" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="115" y="60" fill="#7ee787" font-size="11" text-anchor="middle">~1 px</text>
+</svg>
+<div class="figcap">Para un surfel sub-píxel, <b style="color:#7ee787">G(rho3d)</b> (huella real) se desploma dentro del primer píxel. El <b style="color:#ffb454">disco fijo G(rho2d)</b> no. El <code>max</code> (línea roja) sigue el disco fijo → el surfel <b>nunca desaparece</b>: siempre pinta al menos ~1px.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s4">4. Mecanismo 1 — el suelo de tamaño que ignora el tamaño real</h2>
+<div class="card">
+<p>Cuando un surfel proyecta a sub-píxel, su métrica local está muy estirada → <code>rho3d</code> crece <b>abruptamente</b> al alejarte del centro → el término geométrico se va a ~0 sobre el píxel (el surfel "debería" desaparecer). Pero <code>rho2d</code>, atado a 0.707px fijos, sigue pequeño → <code>min</code> elige <code>rho2d</code> → <b class="red">el surfel pinta igualmente un blob de ~1px</b>.</p>
+<p>Esto está <b>reforzado a nivel de tiling</b> en <code>forward.cu:234</code>:</p>
+<pre><code>radius = ceil(max(max(extent.x, extent.y), <span style="color:#ff7b72">cutoff * FilterSize</span>));</code></pre>
+<p>El <code>max(..., cutoff*0.707)</code> garantiza que el bounding box del surfel sea de al menos ~0.707px <b>aunque su área real sea ~0</b>. Traducción: <b>ningún surfel sub-píxel se cae del rasterizado.</b> Todos consiguen su tile.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s5">5. Mecanismo 2 — la opacidad NO se atenúa <span class="tag bad">clave</span></h2>
+<div class="card danger-box">
+<p><code>alpha = opa * kernel</code>. El clamp <b>infla el footprint geométrico pero no compensa</b> que un surfel sub-píxel debería cubrir solo una <i>fracción</i> del píxel.</p>
+<p>Un filtro correcto multiplicaría la opacidad por <b>(área real / área del píxel) &lt; 1</b>. Aquí <b class="red">no existe ese factor</b>: el surfel sub-píxel aporta su <b>opacidad plena entrenada</b> como blob de 1px.</p>
+<p class="meta">Cita del paper (AA-2DGS): <i>"[the clamp] does not rescale opacity → sub-pixel splats remain bright despite increased kernel size, exacerbating aliasing."</i></p>
+</div>
+
+<div class="fig">
+<svg viewBox="0 0 900 230" role="img" aria-label="Comparacion: clamp mantiene opacidad, filtro correcto la baja">
+  <!-- CLAMP -->
+  <text x="230" y="26" fill="#ff7b72" font-size="15" text-anchor="middle" font-weight="bold">Tu clamp</text>
+  <!-- surfel real -->
+  <text x="90" y="60" fill="#9aa3b2" font-size="11" text-anchor="middle">real (sub-px)</text>
+  <ellipse cx="90" cy="110" rx="22" ry="4" fill="#6ea8fe" fill-opacity="0.9"/>
+  <text x="200" y="60" fill="#9aa3b2" font-size="11" text-anchor="middle">→ rasterizado</text>
+  <!-- blob 1px opacidad plena -->
+  <circle cx="200" cy="110" r="34" fill="#ff7b72" fill-opacity="0.85"/>
+  <text x="200" y="175" fill="#ff7b72" font-size="12" text-anchor="middle">1px · opacidad PLENA</text>
+  <text x="200" y="192" fill="#ff7b72" font-size="12" text-anchor="middle" font-weight="bold">α = opa</text>
+  <line x1="130" y1="110" x2="162" y2="110" stroke="#9aa3b2" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <line x1="450" y1="30" x2="450" y2="210" stroke="#2a2f3c" stroke-width="1"/>
+
+  <!-- FILTRO CORRECTO -->
+  <text x="680" y="26" fill="#7ee787" font-size="15" text-anchor="middle" font-weight="bold">Filtro correcto (Mip/AA)</text>
+  <text x="540" y="60" fill="#9aa3b2" font-size="11" text-anchor="middle">real (sub-px)</text>
+  <ellipse cx="540" cy="110" rx="22" ry="4" fill="#6ea8fe" fill-opacity="0.9"/>
+  <text x="650" y="60" fill="#9aa3b2" font-size="11" text-anchor="middle">→ rasterizado</text>
+  <circle cx="650" cy="110" r="34" fill="#7ee787" fill-opacity="0.28"/>
+  <text x="650" y="175" fill="#7ee787" font-size="12" text-anchor="middle">1px · opacidad ATENUADA</text>
+  <text x="650" y="192" fill="#7ee787" font-size="12" text-anchor="middle" font-weight="bold">α = opa · √det &lt; opa</text>
+  <line x1="580" y1="110" x2="612" y2="110" stroke="#9aa3b2" stroke-width="1.5" marker-end="url(#ar)"/>
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa3b2"/></marker></defs>
+</svg>
+<div class="figcap">Mismo surfel sub-píxel. <b style="color:#ff7b72">El clamp</b> lo esparce a 1px manteniendo opacidad plena. <b style="color:#7ee787">El filtro correcto</b> lo esparce a 1px <i>y</i> le baja la opacidad con un factor <code>√det &lt; 1</code>. La diferencia es el brillo.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s6">6. Mecanismo 3 — apilar sub-píxeles opacos = tu velo</h2>
+<div class="card">
+<p>En el fondo rasante hay <b>cientos</b> de estos surfels solapados; cada uno con piso ~1px a opacidad plena. El alpha-compositing los apila (<code>T·α</code> por splat). Muchos blobs de opacidad plena amontonados → el color/opacidad acumulado <b class="red">satura hacia arriba</b> → render mean &gt; GT → <b class="red">velo translúcido sobre-brillante</b>.</p>
+<p>Esto es <b>literalmente lo que mides</b>: <code>dmean(render−gt) = +0.999</code> en run16 (baja a +0.627 en run36 al meter <code>opacity_reg</code>=0.06, que ataca el <i>síntoma</i> opacidad, no el clamp).</p>
+</div>
+
+<div class="fig">
+<svg viewBox="0 0 900 260" role="img" aria-label="Apilado de surfels sub-pixel produce brillo acumulado">
+  <!-- GT abajo -->
+  <text x="80" y="30" fill="#9aa3b2" font-size="13">Un píxel del fondo, visto de canto:</text>
+  <!-- pila de blobs translucidos -->
+  <g>
+    <circle cx="300" cy="140" r="60" fill="#ff7b72" fill-opacity="0.22"/>
+    <circle cx="330" cy="120" r="60" fill="#ff7b72" fill-opacity="0.22"/>
+    <circle cx="360" cy="150" r="60" fill="#ff7b72" fill-opacity="0.22"/>
+    <circle cx="315" cy="165" r="60" fill="#ff7b72" fill-opacity="0.22"/>
+    <circle cx="345" cy="130" r="60" fill="#ff7b72" fill-opacity="0.22"/>
+  </g>
+  <text x="330" y="235" fill="#ff7b72" font-size="12" text-anchor="middle">5 surfels sub-píxel, cada uno a opacidad plena…</text>
+
+  <!-- flecha -->
+  <line x1="470" y1="140" x2="560" y2="140" stroke="#9aa3b2" stroke-width="2" marker-end="url(#ar2)"/>
+  <defs><marker id="ar2" markerWidth="10" markerHeight="10" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#9aa3b2"/></marker></defs>
+  <text x="515" y="125" fill="#9aa3b2" font-size="11" text-anchor="middle">Σ compositing</text>
+
+  <!-- resultado saturado -->
+  <rect x="600" y="90" width="100" height="100" fill="#ffb0aa"/>
+  <text x="650" y="215" fill="#ff7b72" font-size="12" text-anchor="middle">píxel saturado (blanco/brillante)</text>
+  <!-- GT -->
+  <rect x="740" y="90" width="100" height="100" fill="#3a4a30"/>
+  <text x="790" y="215" fill="#7ee787" font-size="12" text-anchor="middle">GT (verde oscuro)</text>
+  <text x="790" y="232" fill="#9aa3b2" font-size="11" text-anchor="middle">render ≫ GT = velo</text>
+</svg>
+<div class="figcap">Cada surfel aislado es translúcido, pero apilar muchos a opacidad plena satura el píxel hacia el blanco. El fondo real (GT) es oscuro → <code>render − gt &gt; 0</code> = el velo que ves en el vídeo.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s7">7. Por qué el optimizador lo <i>premia</i> (el efecto más pernicioso)</h2>
+<div class="card warn-box">
+<p>Como el clamp <b>regala cobertura de 1px a opacidad plena gratis</b> a cualquier surfel, el descenso de gradiente aprende que "<b>sub-píxel + opacidad alta</b>" es una configuración <b>estable y premiada</b>: no hay penalización por ser diminuto. El surfel casa las vistas rasantes de train sin coste.</p>
+<p>Por eso el MCMC aparca <b>gigantes translúcidos</b> en el fondo, topados en <code>s(max) = extent</code> (tu hallazgo de <b>run21</b>). Y por eso <b>ningún cheap-sweep lo tocó</b>: <code>opacity_reg</code>, <code>scale_reg</code>, el gate <code>dead_sustain</code>, el cap… todos atacan <i>propiedades del splat</i>, no <b>el filtro que hace que ese estado sea óptimo</b>.</p>
+<p class="meta">Conecta con tu CLAUDE.md: "el velo es ESTRUCTURAL del surfel 2D" y "TECHO DEL RASTERIZER". Este doc explica <b>el mecanismo exacto</b> de ese techo.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s8">8. AA-2DGS: los dos filtros que sí atenúan</h2>
+<p class="lead"><b>Younes &amp; Boukhayma, NeurIPS 2025.</b> Repo: <code>github.com/maeyounes/AA-2DGS</code>. La idea común de sus dos filtros: llevan un <b>factor determinante &lt; 1</b> que apaga los sub-píxel — justo lo que a tu clamp le falta.</p>
+
+<h3>A · Object-space Mip filter (reemplaza <code>min(rho3d, rho2d)</code>)</h3>
+<div class="eq">𝒢<sub>obj-mip</sub>(x) = √( |I₂| / |Σ'<sub>local</sub>| ) · exp( −½ · uᵀ Σ'<sub>local</sub>⁻¹ u )      con      Σ'<sub>local</sub> = I + σ·J Jᵀ ,   σ = 0.1</div>
+<p>J = ∂u/∂x es el <b>Jacobiano</b> de la intersección rayo-splat (cuánto se mueve la coordenada local <code>u</code> por cada píxel de pantalla). El detalle decisivo:</p>
+<ul>
+<li>Surfel sub-píxel → <b>J grande</b> (1px en pantalla = un salto enorme en <code>u</code>) → <code>σ·JJᵀ</code> domina → <b class="grn">la covarianza crece</b> (esparce, como el clamp)…</li>
+<li>…<b class="grn">Y</b> el factor <code>√(|I|/|Σ'|) &lt; 1</code> <b class="grn">baja el pico</b> (atenúa). <b>Esparce Y apaga.</b></li>
+</ul>
+<p>Ese <code>√det</code> es exactamente la energía que tu <code>alpha = opa·kernel</code> no descuenta.</p>
+
+<div class="fig">
+<svg viewBox="0 0 900 220" role="img" aria-label="Jacobiano pequeno vs grande">
+  <!-- surfel grande: J pequeno -->
+  <text x="220" y="26" fill="#9aa3b2" font-size="13" text-anchor="middle">Surfel resuelto → J pequeño → Σ'≈I</text>
+  <rect x="120" y="45" width="200" height="140" fill="url(#px)"/>
+  <ellipse cx="220" cy="115" rx="70" ry="55" fill="#7ee787" fill-opacity="0.30" stroke="#7ee787" stroke-width="2"/>
+  <text x="220" y="205" fill="#7ee787" font-size="12" text-anchor="middle">pico ≈ intacto</text>
+
+  <line x1="460" y1="35" x2="460" y2="200" stroke="#2a2f3c" stroke-width="1"/>
+
+  <!-- surfel sub-pixel: J grande -->
+  <text x="680" y="26" fill="#9aa3b2" font-size="13" text-anchor="middle">Surfel sub-px → J grande → Σ'≫I</text>
+  <rect x="580" y="45" width="200" height="140" fill="url(#px)"/>
+  <ellipse cx="680" cy="115" rx="72" ry="58" fill="#7ee787" fill-opacity="0.12" stroke="#7ee787" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <text x="680" y="205" fill="#7ee787" font-size="12" text-anchor="middle">esparcido + √det baja el pico</text>
+</svg>
+<div class="figcap">El Jacobiano detecta automáticamente cuándo el surfel es sub-píxel (J grande) y aplica más esparcido + más atenuación. El clamp, en cambio, aplica el mismo disco fijo a opacidad plena en ambos casos.</div>
+</div>
+
+<h3>B · World-space flat smoothing kernel (pre-filtro en entrenamiento)</h3>
+<div class="eq">V<sub>eff</sub> = V + σ²<sub>smooth</sub>·I₂ ,     σ²<sub>smooth</sub> = s<sub>reg</sub> / ν̂² ,     ν̂ = maxₙ 𝟙ₙ(p)·fₙ/dₙ</div>
+<div class="eq">α<sub>smooth</sub> = α · (s<sub>u</sub> s<sub>v</sub>) / √( (s<sub>u</sub>²+σ²)(s<sub>v</sub>²+σ²) )   &lt; 1     ← reescalado de opacidad (conserva energía)</div>
+<p><code>ν̂</code> = máxima tasa de muestreo (focal/profundidad) sobre las vistas de train donde el surfel es visible → acota la frecuencia del surfel al <b>Nyquist de train</b>. Un surfel más fino de lo que train puede resolver se <b class="grn">desenfoca y se atenúa en la fuente</b> (nótese el <code>α·(...)&lt;1</code>, otra vez el factor energía).</p>
+
+<div class="card card2">
+<b>La diferencia, en una línea:</b> los dos filtros de AA-2DGS llevan un factor <b>&lt; 1</b> que apaga los splats sub-píxel; tu clamp no lleva ninguno → solo infla el footprint y mantiene el brillo → velo.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s9">9. Resultados y matiz honesto</h2>
+<p>Single-scale train → multi-scale test (PSNR, promedio de escalas):</p>
+<table>
+<thead><tr><th>Método</th><th>Blender (avg)</th><th>Mip-NeRF360 (avg)</th><th>Coste render</th></tr></thead>
+<tbody>
+<tr><td><b>AA-2DGS</b></td><td class="hl2">32.11</td><td>27.08</td><td>+15–30%</td></tr>
+<tr><td>Mip-Splatting</td><td>31.97</td><td class="hl2">27.37</td><td>—</td></tr>
+<tr><td>2DGS (baseline)</td><td class="hl">24.47</td><td>25.28</td><td>1×</td></tr>
+</tbody>
+</table>
+<p>Detalle Blender por escala (muestra el colapso del 2DGS al cambiar de escala): 2DGS cae <b>33.05 → 16.59</b> (1× → 0.125×); AA-2DGS aguanta <b>33.24 → 29.0</b>.</p>
+
+<div class="card warn-box">
+<b>Matiz honesto para tu caso.</b> La ganancia gorda de AA-2DGS es en <b>cambio de escala</b> (zoom). Tu velo en flowers NO es exactamente aliasing por escala (train y test están a la misma resolución) — es <b>sobre-cobertura a la escala nativa</b>. Pero el <b>mecanismo raíz es el mismo</b>: el clamp premia surfels sub-píxel a opacidad plena. El filtro de AA-2DGS (con su <code>√det</code> atenuador) ataca la causa que ningún cheap-sweep tocó. Es la primera palanca <b>estructural</b> con evidencia directa de que el culpable es tu <code>min(rho3d, rho2d)</code>. No es garantía de mejora — es la hipótesis mejor fundamentada que queda en el camino 2D.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s10">10. Plan de portado propuesto (flag A/B)</h2>
+<div class="card ok-box">
+<ol>
+<li><b>Clonar</b> <code>github.com/maeyounes/AA-2DGS</code> y aislar su kernel CUDA (copiar la fórmula exacta, no reimplementar del paper).</li>
+<li><b>Reemplazar</b> <code>min(rho3d, rho2d)</code> en <code>forward.cu</code> por el object-space Mip filter: calcular J (Jacobiano de la intersección, ya tienes <code>Tu/Tv/Tw</code>), formar <code>Σ'=I+σ·JJᵀ</code>, aplicar <code>rho' = uᵀΣ'⁻¹u</code> y multiplicar el kernel por <code>√(1/|Σ'|)</code>.</li>
+<li><b>Backward</b>: propagar el gradiente por el nuevo factor (el repo ya trae su <code>backward.cu</code> — portarlo, no derivarlo).</li>
+<li><b>Flag A/B</b> <code>--aa_mip</code> (default OFF = comportamiento run16), hilado como hiciste con <code>--freeze_low_beta</code>. Recompilar el rasterizer en el servidor.</li>
+<li><b>Medir aislado</b>: réplica EXACTA de run16 + <code>--aa_mip</code> ON, honesto (<code>metrics.py</code>), vs run16 (20.21/0.597/0.339) y run36 (21.16/0.5926/0.3555). Diagnóstico de brillo <code>dmean(render−gt)</code> para ver si baja de +0.999.</li>
+<li>Si funciona en flowers, replicar en bonsai vs run44.</li>
+</ol>
+<p class="meta">Este es el <b>primer candidato estructural</b> desde que el cheap-sweep se agotó. Encaja con la palanca (1) de tu CLAUDE.md ("migración/arreglo estructural del fondo") pero <b>sin</b> migrar a gsplat/3D — se queda en tu primitiva 2D.</p>
+</div>
+
+<p class="meta" style="margin-top:40px;border-top:1px solid var(--line);padding-top:16px">
+Fuentes: <a href="https://arxiv.org/abs/2506.11252" style="color:var(--accent)">AA-2DGS (arXiv 2506.11252, NeurIPS'25)</a> ·
+<a href="https://arxiv.org/abs/2311.16493" style="color:var(--accent)">Mip-Splatting (CVPR'24)</a> ·
+<a href="https://arxiv.org/abs/2403.11056" style="color:var(--accent)">Analytic-Splatting (ECCV'24)</a>.
+Código analizado: <code>submodules/diff-surfel-rasterization/cuda_rasterizer/forward.cu</code> (L234, L380–416), <code>auxiliary.h</code> (L39–40).
+</p>
+
+</div>
+</body>
+</html>

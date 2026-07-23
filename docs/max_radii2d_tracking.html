@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>El tracking de max_radii2D — qué es, de dónde sale y para qué sirve</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  ol{margin:.5em 0;padding-left:1.3em} ol li{margin:.4em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700} .hl3{color:var(--accent);font-weight:700}
+  .center{text-align:center}
+  figcaption{color:var(--muted);font-size:.85rem;text-align:center;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>El tracking de <span class="hl3">max_radii2D</span></h1>
+<p class="sub">Qué guarda exactamente, de dónde sale ese número, por qué se acumula como <b>máximo</b> a lo largo del entrenamiento y para qué lo usa la densificación clásica. Es el tensor que añadí al activar <code>--classic_densify</code> (el MCMC no lo usaba). Verificado contra el rasterizer (<code>forward.cu</code>), <code>gaussian_model.py</code> y <code>train.py</code> de este repo.</p>
+
+<div class="note"><b>Contexto.</b> Apareció al portar la densificación clásica 2DGS (<code>--classic_densify</code>). El prune clásico puede descartar splats por su <b>tamaño en pantalla</b>, y para eso necesita saber <b>cuántos píxeles llegó a ocupar</b> cada splat. <code>max_radii2D</code> es ese registro. Docs hermanos: <code>clone_split_logica_huecos.html</code> (clone/split), <code>mcmc_beta_vs_clonesplit.html</code> (por qué el MCMC no lo necesita).</div>
+
+<h2>1. Qué es, en una frase</h2>
+<div class="card card2">
+<code>max_radii2D</code> es un tensor <code>[N]</code> (uno por splat) que guarda el <b>radio máximo, en píxeles, que la huella del splat alcanzó en pantalla</b> a lo largo de todas las vistas en las que fue visible durante la ventana de densificación. No es un parámetro entrenable: es una <b>estadística</b> que se actualiza en cada render y que el prune consulta para decidir si un splat se ha vuelto "demasiado grande en imagen".
+</div>
+
+<h2>2. ¿De dónde sale el número? — el <code>radii</code> del rasterizer</h2>
+<p>Cada vez que se renderiza una vista, el rasterizer CUDA devuelve, además de la imagen, un vector <code>radii</code> <code>[N]</code> con el radio de la huella de cada splat <b>en píxeles</b>. En el kernel (<code>forward.cu:234,261</code>):</p>
+<pre><code>// compute_aabb proyecta el surfel y obtiene su extensión (extent.x, extent.y) en pantalla
+radius = ceil( max( max(extent.x, extent.y), cutoff * FilterSize ) );
+...
+radii[idx] = (int)radius;   // radio en PÍXELES de la huella proyectada del surfel</code></pre>
+<p>Desglose:</p>
+<ul>
+<li><b><code>extent.x, extent.y</code></b> — la mitad del ancho/alto del rectángulo (AABB) que cubre el surfel proyectado en la imagen. Sale de <code>compute_aabb</code> a partir de la transformación <code>T</code> (mundo→pantalla) y el <code>cutoff</code> (corte gaussiano, ~3σ).</li>
+<li><b><code>max(...)</code></b> — toma el lado mayor: el radio es el del círculo que envuelve la huella.</li>
+<li><b><code>cutoff * FilterSize</code></b> — un mínimo: ningún splat ocupa menos que el filtro anti-aliasing (≈ medio píxel). Evita radios 0 en splats lejanos.</li>
+<li><b><code>ceil(...)</code> e <code>(int)</code></b> — se redondea a píxeles enteros (se usa también para decidir qué <i>tiles</i> toca el splat).</li>
+</ul>
+<div class="note"><b>Clave conceptual:</b> <code>radii</code> NO es la escala 3D del splat (eso es <code>get_scaling</code>, en unidades de mundo). Es su <b>tamaño aparente en la imagen</b>: depende de la escala 3D <b>y</b> de la distancia a la cámara. Un splat grande pero lejano puede ocupar pocos píxeles; uno pequeño pero pegado a cámara puede ocupar muchos. <code>radii</code> mide lo segundo.</div>
+
+<h2>3. ¿Por qué el MÁXIMO y no el último valor?</h2>
+<p>Un mismo splat se renderiza desde <b>muchas cámaras</b> distintas a lo largo del entrenamiento. Su radio en pantalla cambia con cada vista (cerca → grande, lejos → pequeño). La actualización es (<code>train.py</code>, solo si <code>classic_densify</code>):</p>
+<pre><code>gaussians.max_radii2D[visibility_filter] = torch.max(
+    gaussians.max_radii2D[visibility_filter],   # lo que ya tenía
+    radii[visibility_filter])                    # lo de esta vista</code></pre>
+<p>Se queda con el <b>peor caso</b>: el radio más grande que el splat alcanzó en cualquier vista. La intención del prune es <i>«si en alguna vista este splat tapa una región enorme de la imagen, es un mal splat (probablemente un floater pegado a cámara o un blob degenerado), elimínalo»</i>. Si se usara el valor de la última vista, un floater podría "esconderse" en una cámara lejana y sobrevivir. El máximo lo delata.</p>
+
+<figure>
+<svg viewBox="0 0 860 250" role="img" aria-label="El mismo splat tiene distinto radio en pantalla segun la camara; se guarda el maximo">
+  <rect x="0" y="0" width="860" height="250" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+  <text x="430" y="28" fill="#e6e8ee" font-size="14" text-anchor="middle">El mismo splat, 3 vistas → se guarda el <tspan fill="#ff7b72">radio máximo</tspan></text>
+
+  <!-- vista 1: lejos -->
+  <text x="140" y="62" fill="#9aa3b2" font-size="11" text-anchor="middle">cámara lejana</text>
+  <rect x="60" y="75" width="160" height="120" fill="#10131b" stroke="#2a2f3c" rx="6"/>
+  <circle cx="140" cy="135" r="10" fill="#6ea8fe" fill-opacity="0.4" stroke="#6ea8fe"/>
+  <text x="140" y="183" fill="#6ea8fe" font-size="11" text-anchor="middle">radii ≈ 6 px</text>
+
+  <!-- vista 2: media -->
+  <text x="370" y="62" fill="#9aa3b2" font-size="11" text-anchor="middle">cámara media</text>
+  <rect x="290" y="75" width="160" height="120" fill="#10131b" stroke="#2a2f3c" rx="6"/>
+  <circle cx="370" cy="135" r="22" fill="#6ea8fe" fill-opacity="0.4" stroke="#6ea8fe"/>
+  <text x="370" y="183" fill="#6ea8fe" font-size="11" text-anchor="middle">radii ≈ 14 px</text>
+
+  <!-- vista 3: cerca -->
+  <text x="600" y="62" fill="#9aa3b2" font-size="11" text-anchor="middle">cámara pegada</text>
+  <rect x="520" y="75" width="160" height="120" fill="#10131b" stroke="#2a2f3c" rx="6"/>
+  <circle cx="600" cy="135" r="42" fill="#ff7b72" fill-opacity="0.35" stroke="#ff7b72"/>
+  <text x="600" y="183" fill="#ff7b72" font-size="11" text-anchor="middle">radii ≈ 38 px</text>
+
+  <!-- resultado -->
+  <text x="780" y="120" fill="#7ee787" font-size="12" text-anchor="middle">max_radii2D</text>
+  <text x="780" y="138" fill="#7ee787" font-size="12" text-anchor="middle">= 38</text>
+  <line x1="686" y1="135" x2="740" y2="135" stroke="#7ee787" stroke-width="2" marker-end="url(#ar2)"/>
+  <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#7ee787"/></marker></defs>
+</svg>
+<figcaption>El splat tapa 6, 14 y 38 px según la cámara. <code>max_radii2D</code> retiene 38 (el peor caso). Si supera el umbral de pantalla, el prune lo borra aunque en otras vistas se viera pequeño.</figcaption>
+</figure>
+
+<h2>4. ¿Para qué lo usa la densificación clásica?</h2>
+<p>El prune del <code>densify_and_prune</code> tiene una rama de "tamaño en pantalla" que solo se activa cuando se le pasa un <code>max_screen_size</code> (<code>gaussian_model.py</code>):</p>
+<pre><code>if max_screen_size:
+    big_points_vs = self.max_radii2D &gt; max_screen_size   # ← aquí se consulta
+    prune_mask = prune_mask | big_points_vs               # se añade a los que ya iban a morir
+self.prune_points(prune_mask)</code></pre>
+<p>Y <code>max_screen_size</code> se activa, en la orquestación (<code>train.py</code>, réplica del 2DGS original), <b>solo después del primer <code>opacity_reset</code></b>:</p>
+<pre><code>size_threshold = 20 if iteration &gt; opt.opacity_reset_interval else None
+gaussians.densify_and_prune(grad_thr, opacity_cull, extent, size_threshold)</code></pre>
+<ul>
+<li><b>El umbral es 20 píxeles.</b> Un splat cuya huella superó los 20 px en alguna vista se considera "demasiado grande en imagen" y es candidato a prune.</li>
+<li><b>Solo tras el primer reset</b> (<code>iter &gt; opacity_reset_interval</code>, aquí 3000): al principio del entrenamiento los splats son pocos y grandes (es normal); el corte por tamaño solo tiene sentido una vez que el reset+densificación han empezado a repartir capacidad. Antes, <code>size_threshold = None</code> → la rama ni se evalúa.</li>
+</ul>
+
+<h2>5. Ciclo de vida del tensor</h2>
+<table>
+<tr><th>Momento</th><th>Qué le pasa a <code>max_radii2D</code></th><th>Dónde</th></tr>
+<tr><td>Inicialización / tras densificar</td><td>Se crea/extiende a ceros para los N splats actuales</td><td><code>gaussian_model.py</code> (training_setup, densification_postfix)</td></tr>
+<tr><td>Cada render (en ventana densify)</td><td><code>max(actual, radii_de_esta_vista)</code> sobre los visibles</td><td><code>train.py</code> (solo si <code>classic_densify</code>)</td></tr>
+<tr><td>En el prune</td><td>Se lee: <code>max_radii2D &gt; 20</code> marca splats gigantes</td><td><code>densify_and_prune</code></td></tr>
+<tr><td>Al podar splats</td><td>Se filtra con la misma máscara que el resto de tensores</td><td><code>prune_points</code></td></tr>
+<tr><td>Al reubicar (MCMC) / relocate</td><td>Se pone a 0 en los slots reciclados (radio "desconocido" otra vez)</td><td><code>relocate_gs</code></td></tr>
+</table>
+
+<h2>6. ¿Por qué el MCMC no lo necesitaba?</h2>
+<div class="note ok-box">El MCMC <b>no tiene un prune por tamaño en pantalla</b>: su reciclaje se decide por <b>opacidad</b> (<code>dead_mask = opacity ≤ umbral</code>), no por cuántos píxeles ocupa un splat. Por eso el camino MCMC nunca actualizaba <code>max_radii2D</code> en cada iteración (lo dejaba a 0, solo lo reseteaba). Al activar <code>--classic_densify</code> tuve que <b>añadir la línea de tracking</b>, porque sin ella <code>max_radii2D</code> se quedaría a <b>0</b> para siempre: la comparación <code>0 &gt; 20</code> es siempre falsa → la rama de prune por tamaño <b>nunca dispararía</b> (sería un no-op silencioso) y los floaters gigantes pegados a cámara sobrevivirían. Con el tracking activo, el registro refleja el tamaño real en pantalla y el prune por tamaño funciona como en el 2DGS original.</div>
+
+<h2>7. Resumen de una pantalla</h2>
+<div class="card">
+<ul>
+<li><b>Qué:</b> tensor <code>[N]</code> con el radio <b>máximo en píxeles</b> que la huella de cada splat alcanzó en pantalla.</li>
+<li><b>De dónde:</b> el <code>radii</code> que devuelve el rasterizer = <code>ceil(max(extent_x, extent_y, cutoff·FilterSize))</code>, el tamaño <b>aparente</b> del splat (escala 3D × cercanía a cámara), no su escala 3D.</li>
+<li><b>Por qué máximo:</b> retiene el peor caso entre todas las vistas; un floater pegado a cámara no puede esconderse en una vista lejana.</li>
+<li><b>Para qué:</b> el prune clásico borra splats con <code>max_radii2D &gt; 20</code> px, pero solo <b>tras el primer <code>opacity_reset</code></b> (iter &gt; 3000).</li>
+<li><b>Por qué es nuevo:</b> el MCMC poda por opacidad, no por tamaño en pantalla → no lo usaba. Lo añadí con <code>--classic_densify</code>.</li>
+</ul>
+</div>
+
+<p class="meta">Verificado contra <code>submodules/diff-surfel-rasterization/cuda_rasterizer/forward.cu</code> (<code>radius</code> @234, <code>radii[idx]</code> @261), <code>scene/gaussian_model.py</code> (<code>densify_and_prune</code>, <code>relocate_gs</code>) y <code>train.py</code> (tracking en la rama <code>classic_densify</code>) · 2026-06-15. Docs hermanos: <code>clone_split_logica_huecos.html</code>, <code>mcmc_beta_vs_clonesplit.html</code>.</p>
+
+</div>
+</body>
+</html>

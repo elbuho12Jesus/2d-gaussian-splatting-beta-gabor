@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>add_new_gs y jitter_scale — funcionamiento actual</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .tok-c{color:#8b949e;font-style:italic}
+  .tok-k{color:#ff7b72}
+  .tok-f{color:#d2a8ff}
+  .tok-s{color:#a5d6ff}
+  .tok-v{color:#79c0ff}
+  .badge{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+    padding:2px 9px;border-radius:999px;text-transform:uppercase}
+  .b-add{background:rgba(126,231,135,.13);color:var(--accent2);border:1px solid rgba(126,231,135,.4)}
+  .b-jit{background:rgba(255,180,84,.13);color:var(--warn);border:1px solid rgba(255,180,84,.4)}
+  .b-key{background:rgba(110,168,254,.15);color:var(--accent);border:1px solid rgba(110,168,254,.4)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:18px 0}
+  .callout{border-left:4px solid var(--accent);background:var(--panel2);border-radius:0 10px 10px 0;padding:14px 18px;margin:18px 0}
+  .callout.key{border-left-color:var(--warn)}
+  .callout.danger{border-left-color:var(--danger)}
+  .callout.ok{border-left-color:var(--accent2)}
+  .callout h4{margin:.1em 0 .3em;font-size:1rem}
+  figure{margin:22px 0;text-align:center}
+  figcaption{color:var(--muted);font-size:.86rem;margin-top:8px}
+  svg{max-width:100%;height:auto;background:var(--panel2);border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.9rem}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent)}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 22px}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .toc ol{margin:.3em 0;padding-left:1.4em}
+  .step{display:flex;gap:14px;align-items:flex-start;margin:10px 0}
+  .step .n{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent2);color:#0b0d13;
+    font-weight:800;display:flex;align-items:center;justify-content:center;font-size:.9rem}
+  .muted{color:var(--muted)}
+  .hl{background:rgba(255,180,84,.16);border-radius:4px;padding:0 3px}
+  .hlb{background:rgba(126,231,135,.16);border-radius:4px;padding:0 3px}
+  hr{border:none;border-top:1px solid var(--line);margin:2.4em 0}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;font-size:.82rem;color:var(--muted);margin-top:6px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:3px;display:inline-block}
+  .eq{text-align:center;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:1.05rem;
+    background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px;margin:16px 0;color:#a5d6ff}
+  .pill{font-family:"JetBrains Mono",monospace;font-size:.8rem;color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:680px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Cómo funcionan hoy <code>add_new_gs</code> y <code>jitter_scale</code></h1>
+<p class="sub">Densificación MCMC en este repo (2DGS → Beta Splatting). Documento autocontenido · <code>scene/gaussian_model.py:609</code> · estado a 2026-05-28</p>
+
+<div class="toc">
+  <strong>Contenido</strong>
+  <ol>
+    <li><a href="#contexto">Dónde encaja en el bucle de entrenamiento</a></li>
+    <li><a href="#add">add_new_gs paso a paso</a></li>
+    <li><a href="#crecimiento">Cuántos splats se añaden (regla del +5%)</a></li>
+    <li><a href="#muestreo">El muestreo: opacidad × error</a></li>
+    <li><a href="#errsignal">De dónde sale err y error_weight (la fórmula)</a></li>
+    <li><a href="#jitter">jitter_scale: sembrar el interior de los huecos</a></li>
+    <li><a href="#magnitud">La magnitud del jitter, término a término</a></li>
+    <li><a href="#anclaje">Después del jitter: colocación única, no fuerza continua</a></li>
+    <li><a href="#relocate">relocate_gs: reciclar los splats muertos</a></li>
+    <li><a href="#clasico">Cómo lo hacen 3DGS y 2DGS — y qué te falta para los huecos</a></li>
+    <li><a href="#params">Parámetros y valores por defecto</a></li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="contexto">1 · Dónde encaja en el bucle de entrenamiento</h2>
+<p>
+Cada <code>densification_interval</code> = <b>100</b> iteraciones (mientras
+<code>iteration &lt; densify_until_iter</code>), <code>train.py</code> ejecuta el bloque de
+densificación MCMC. No hay split/clone de 2DGS: solo <b>dos operaciones</b> y un paso de ruido.
+</p>
+
+<figure>
+<svg viewBox="0 0 920 220" role="img" aria-label="Bloque de densificación">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#9aa3b2"/>
+    </marker>
+  </defs>
+  <!-- timeline -->
+  <text x="20" y="30" fill="#9aa3b2" font-size="13">cada 100 iters (iteration % densification_interval == 0):</text>
+
+  <rect x="20" y="55" width="160" height="56" rx="10" fill="#1e222e" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="100" y="78" fill="#ff7b72" font-size="12.5" text-anchor="middle" font-weight="700">sanitize_parameters</text>
+  <text x="100" y="96" fill="#9aa3b2" font-size="11" text-anchor="middle">repara NaN/Inf</text>
+
+  <rect x="205" y="55" width="160" height="56" rx="10" fill="#1e222e" stroke="#6ea8fe" stroke-width="1.5"/>
+  <text x="285" y="78" fill="#6ea8fe" font-size="13" text-anchor="middle" font-weight="700">relocate_gs</text>
+  <text x="285" y="96" fill="#9aa3b2" font-size="11" text-anchor="middle">recicla muertos</text>
+
+  <rect x="390" y="55" width="160" height="56" rx="10" fill="#1e222e" stroke="#7ee787" stroke-width="2"/>
+  <text x="470" y="78" fill="#7ee787" font-size="13" text-anchor="middle" font-weight="800">add_new_gs</text>
+  <text x="470" y="96" fill="#9aa3b2" font-size="11" text-anchor="middle">crece hasta cap_max</text>
+
+  <rect x="575" y="55" width="160" height="56" rx="10" fill="#1e222e" stroke="#ffb454" stroke-width="1.5"/>
+  <text x="655" y="78" fill="#ffb454" font-size="12.5" text-anchor="middle" font-weight="700">ruido posicional</text>
+  <text x="655" y="96" fill="#9aa3b2" font-size="11" text-anchor="middle">(1−op)¹⁰⁰·noise_lr</text>
+
+  <line x1="180" y1="83" x2="203" y2="83" stroke="#9aa3b2" stroke-width="1.5" marker-end="url(#ar)"/>
+  <line x1="365" y1="83" x2="388" y2="83" stroke="#9aa3b2" stroke-width="1.5" marker-end="url(#ar)"/>
+  <line x1="550" y1="83" x2="573" y2="83" stroke="#9aa3b2" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <!-- accum -->
+  <rect x="20" y="150" width="715" height="50" rx="10" fill="#0b0d13" stroke="#2a2f3c"/>
+  <text x="35" y="172" fill="#7ee787" font-size="12" font-weight="700">add_densification_stats</text>
+  <text x="35" y="190" fill="#9aa3b2" font-size="11">se ejecuta en CADA iteración → acumula ‖∇viewspace‖ por splat = señal de error que consumen relocate/add</text>
+</svg>
+<figcaption>El bloque que corre cada 100 iteraciones. <code>add_new_gs</code> (en verde) es el que <b>aumenta</b> el número de splats; el resto recicla o perturba los existentes.</figcaption>
+</figure>
+
+<p>La llamada concreta en <code>train.py:172</code> es:</p>
+<pre><code><span class="tok-v">gaussians</span>.<span class="tok-f">add_new_gs</span>(cap_max=opt.cap_max, error_weight=opt.mcmc_error_weight, jitter_scale=opt.mcmc_jitter_scale)</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="add">2 · <code>add_new_gs</code> paso a paso</h2>
+<p>
+Función completa en <code>gaussian_model.py:609</code>. Su trabajo es <b>clonar splats vivos</b>
+para hacer crecer la nube hasta <code>cap_max</code>. Cada clon hereda todos los parámetros
+de su <em>fuente</em> (color, escala, rotación, beta) y nace con la mitad de su opacidad.
+</p>
+
+<div class="card">
+  <div class="step"><div class="n">1</div><div><b>Calcular cuántos añadir</b> — <span class="pill">target = min(cap_max, ⌈1.05·N⌉); k = target − N</span>. Si <code>k ≤ 0</code> (ya en el tope), no hace nada.</div></div>
+  <div class="step"><div class="n">2</div><div><b>Señal de error</b> — si <code>error_weight &gt; 0</code> calcula <code>err = _error_signal()</code> (gradiente de viewspace normalizado, media ≈ 1).</div></div>
+  <div class="step"><div class="n">3</div><div><b>Probabilidades de muestreo</b> — <span class="pill">probs ∝ opacity · (1 + error_weight · err)</span>, saneadas y normalizadas a suma 1.</div></div>
+  <div class="step"><div class="n">4</div><div><b>Elegir fuentes</b> — <code>src_idx = multinomial(probs, k, replacement=True)</code>. Un mismo splat puede ser fuente varias veces.</div></div>
+  <div class="step"><div class="n">5</div><div><b>Conservar transmittance</b> — <span class="pill">new_alpha = src_alpha · 0.5</span>; la fuente <u>también</u> baja a la mitad (<code>_opacity[src_idx]</code>) para que el par fuente+clon sume lo de antes.</div></div>
+  <div class="step"><div class="n">6</div><div><b>Posición del clon</b> — por defecto, la <u>misma</u> que la fuente. Con <code>jitter_scale &gt; 0</code> se desplaza (ver §5).</div></div>
+  <div class="step"><div class="n">7</div><div><b>Insertar</b> — <code>densification_postfix(...)</code> concatena los nuevos tensores al modelo, los registra en el optimizer y <b>resetea</b> <code>xyz_gradient_accum</code>/<code>denom</code>.</div></div>
+  <div class="step"><div class="n">8</div><div><b>Limpiar momentum</b> — <code>_reset_optimizer_state(src_idx)</code> pone a 0 el estado de Adam de las fuentes (su opacidad cambió de golpe).</div></div>
+</div>
+
+<div class="callout key">
+  <h4>⚠ La regla de la opacidad a la mitad</h4>
+  <p>Clonar un splat de opacidad α en dos de opacidad α no conserva la imagen: dos surfels al
+  50 % de transmitancia ≈ uno al 100 %. Por eso ambos (fuente y clon) pasan a <span class="hl">α/2</span>.
+  Es la regla MCMC del Beta Splatting oficial.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="crecimiento">3 · Cuántos splats se añaden — la regla del +5 %</h2>
+<p>
+<code>add_new_gs</code> no salta al tope de golpe. En cada llamada apunta a
+<span class="hl">⌈1.05·N⌉</span>: como mucho un <b>5 % más</b> que el conteo actual. Con
+<code>cap_max</code> como techo duro, la nube crece de forma geométrica hasta saturar y
+después se queda clavada (k = 0).
+</p>
+
+<figure>
+<svg viewBox="0 0 900 320" role="img" aria-label="Curva de crecimiento">
+  <!-- axes -->
+  <line x1="70" y1="270" x2="860" y2="270" stroke="#9aa3b2" stroke-width="1.2"/>
+  <line x1="70" y1="40" x2="70" y2="270" stroke="#9aa3b2" stroke-width="1.2"/>
+  <text x="465" y="305" fill="#9aa3b2" font-size="13" text-anchor="middle">pasos de densificación (cada 100 iters)</text>
+  <text x="22" y="155" fill="#9aa3b2" font-size="13" text-anchor="middle" transform="rotate(-90 22 155)">nº de splats</text>
+
+  <!-- cap line -->
+  <line x1="70" y1="70" x2="860" y2="70" stroke="#ff7b72" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="855" y="62" fill="#ff7b72" font-size="12" text-anchor="end">cap_max (techo duro)</text>
+
+  <!-- growth curve: geometric then flat -->
+  <polyline fill="none" stroke="#7ee787" stroke-width="2.5"
+    points="70,255 110,250 150,243 190,234 230,222 270,206 310,186 350,162 390,135 430,108 470,85 510,72 550,70 700,70 860,70"/>
+  <!-- sample dots -->
+  <circle cx="70" cy="255" r="4" fill="#7ee787"/>
+  <circle cx="270" cy="206" r="4" fill="#7ee787"/>
+  <circle cx="430" cy="108" r="4" fill="#7ee787"/>
+  <circle cx="520" cy="71" r="4" fill="#ffb454"/>
+  <circle cx="700" cy="70" r="4" fill="#ffb454"/>
+
+  <text x="70" y="245" fill="#9aa3b2" font-size="11" text-anchor="middle">N₀</text>
+  <text x="525" y="92" fill="#ffb454" font-size="11">cap alcanzado</text>
+  <text x="700" y="88" fill="#ffb454" font-size="11" text-anchor="middle">k = 0 (no añade)</text>
+  <text x="300" y="180" fill="#7ee787" font-size="12">×1.05 por paso</text>
+</svg>
+<figcaption>Cada paso multiplica por ~1.05 hasta tocar <code>cap_max</code>. En los runs de este proyecto el cap se llena muy pronto (p. ej. flowers con cap 1M → lleno hacia la iter 7 200) y permanece saturado el resto del entrenamiento → <b>el cap es la palanca dominante</b>.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="muestreo">4 · El muestreo: opacidad × error de reconstrucción</h2>
+<p>
+¿Qué splats se eligen como fuente? La probabilidad de cada uno es:
+</p>
+<div class="eq">probs<sub>i</sub> &nbsp;∝&nbsp; opacity<sub>i</sub> · ( 1 + error_weight · err<sub>i</sub> )</div>
+<p>
+Con <code>error_weight = 0</code> es muestreo por <b>opacidad pura</b> (comportamiento histórico
+del oficial): el presupuesto se concentra en el foreground opaco y los fondos translúcidos
+(cielo, césped) se quedan sin splats → <span class="hlb">huecos negros</span>. Con
+<code>error_weight = 2.0</code> (default actual) se suma el sesgo por <b>error</b>:
+<code>err</code> es el gradiente de viewspace acumulado por splat (proxy 3DGS de "zona
+sub-reconstruida"), normalizado a media ≈ 1 y limitado a <code>clip = 10</code>.
+</p>
+
+<figure>
+<svg viewBox="0 0 900 250" role="img" aria-label="Sesgo de muestreo">
+  <!-- left: opacity only -->
+  <text x="225" y="28" fill="#9aa3b2" font-size="13" text-anchor="middle" font-weight="700">error_weight = 0 (opacidad pura)</text>
+  <rect x="40" y="45" width="370" height="160" rx="10" fill="#0b0d13" stroke="#2a2f3c"/>
+  <!-- foreground cluster picked heavily -->
+  <circle cx="140" cy="120" r="9" fill="#7ee787"/><circle cx="165" cy="100" r="9" fill="#7ee787"/>
+  <circle cx="120" cy="95" r="9" fill="#7ee787"/><circle cx="150" cy="140" r="9" fill="#7ee787"/>
+  <text x="140" y="175" fill="#7ee787" font-size="11" text-anchor="middle">foreground (alta opacidad)</text>
+  <!-- empty hole at right -->
+  <ellipse cx="330" cy="110" rx="55" ry="42" fill="none" stroke="#ff7b72" stroke-width="1.4" stroke-dasharray="5 4"/>
+  <text x="330" y="114" fill="#ff7b72" font-size="11" text-anchor="middle">hueco vacío</text>
+  <text x="330" y="130" fill="#ff7b72" font-size="11" text-anchor="middle">(0 splats nuevos)</text>
+
+  <!-- right: opacity x error -->
+  <text x="675" y="28" fill="#9aa3b2" font-size="13" text-anchor="middle" font-weight="700">error_weight = 2.0 (opacidad × error)</text>
+  <rect x="490" y="45" width="370" height="160" rx="10" fill="#0b0d13" stroke="#2a2f3c"/>
+  <circle cx="590" cy="120" r="8" fill="#7ee787"/><circle cx="615" cy="100" r="8" fill="#7ee787"/>
+  <circle cx="570" cy="95" r="8" fill="#7ee787"/>
+  <ellipse cx="780" cy="110" rx="55" ry="42" fill="none" stroke="#ffb454" stroke-width="1.4"/>
+  <!-- edge sources highlighted -->
+  <circle cx="735" cy="95" r="8" fill="#ffb454"/><circle cx="730" cy="125" r="8" fill="#ffb454"/>
+  <circle cx="745" cy="145" r="8" fill="#ffb454"/>
+  <text x="780" y="180" fill="#ffb454" font-size="11" text-anchor="middle">bordes del hueco (alto error)</text>
+  <text x="780" y="196" fill="#ffb454" font-size="11" text-anchor="middle">reciben presupuesto</text>
+</svg>
+<figcaption>El sesgo por error desvía clones hacia los <b>bordes</b> de las zonas mal cubiertas. Pero ojo: el gradiente de viewspace solo existe donde <em>ya</em> hay un splat, así que el error crece desde los bordes hacia adentro — un hueco totalmente vacío no se rellena de golpe. Ese es exactamente el problema que ataca <code>jitter_scale</code>.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="errsignal">5 · De dónde sale <code>err</code> y <code>error_weight</code> — la fórmula</h2>
+
+<div class="callout key">
+  <h4>Primero, una distinción que evita confusiones</h4>
+  <p><code>error_weight</code> (λ) <b>no se calcula con ninguna fórmula</b>: es un
+  <b>hiperparámetro libre</b> (un dial), fijado a <code>2.0</code> a mano. Lo que sí tiene
+  fórmula y procedencia es la <b>señal de error <code>err</code></b> que λ multiplica. Esta
+  sección deriva <code>err</code> de principio a fin y explica por qué λ vale 2.0.</p>
+</div>
+
+<h3>5.1 · El origen: criterio de densificación de 3DGS</h3>
+<p>
+La señal <code>err</code> es el <b>proxy clásico de "zona sub-reconstruida"</b> de 3D Gaussian
+Splatting (Kerbl et al., SIGGRAPH 2023). La idea: durante el backward, la <b>posición proyectada
+en pantalla</b> de cada splat recibe un gradiente. Si una primitiva está intentando cubrir más
+detalle del que puede (zona mal reconstruida), el optimizador "tira" fuerte de ella → el
+gradiente de su posición en <em>viewspace</em> tiene norma grande. Esa norma, promediada en el
+tiempo, es la señal de error por splat.
+</p>
+
+<h3>5.2 · Paso 1 — acumulación (cada iteración)</h3>
+<p>En <code>add_densification_stats</code> (<code>gaussian_model.py:523</code>), llamado en
+<u>cada</u> iteración con <code>iteration &lt; densify_until_iter</code>:</p>
+<pre><code><span class="tok-v">xyz_gradient_accum</span>[vis] += torch.<span class="tok-f">norm</span>(viewspace_point_tensor.grad[vis], dim=-<span class="tok-s">1</span>)
+<span class="tok-v">denom</span>[vis] += <span class="tok-s">1</span>   <span class="tok-c"># vis = visibility_filter (solo splats visibles este frame)</span></code></pre>
+<div class="eq">accum<sub>i</sub> &nbsp;←&nbsp; accum<sub>i</sub> + ‖ ∇<sub>viewspace</sub> x<sub>i</sub> ‖₂ &nbsp;&nbsp;&nbsp;&nbsp; denom<sub>i</sub> &nbsp;←&nbsp; denom<sub>i</sub> + 1</div>
+<p class="muted">Solo se acumula para splats visibles en el frame (los invisibles no reciben gradiente).</p>
+
+<h3>5.3 · Paso 2 — promedio y normalización (<code>_error_signal</code>)</h3>
+<p>En el momento de densificar, <code>_error_signal(clip=10.0)</code> (<code>gaussian_model.py:536</code>) convierte lo acumulado en la señal final:</p>
+<pre><code><span class="tok-v">g</span>    = xyz_gradient_accum / denom.<span class="tok-f">clamp</span>(min=<span class="tok-s">1.0</span>)   <span class="tok-c"># gradiente medio del intervalo</span>
+<span class="tok-v">mean</span> = g[g &gt; <span class="tok-s">0</span>].<span class="tok-f">mean</span>()                        <span class="tok-c"># media SOLO sobre splats con señal</span>
+<span class="tok-v">err</span>  = (g / mean).<span class="tok-f">clamp</span>(max=<span class="tok-s">10.0</span>)            <span class="tok-c"># normalizado (media≈1) y con tope</span></code></pre>
+<div class="eq">err<sub>i</sub> &nbsp;=&nbsp; clamp<sub>[0, 10]</sub>&nbsp;( &nbsp; <span style="color:#7ee787">g<sub>i</sub></span> / <span style="color:#ffb454">mean<sub>j: g<sub>j</sub>&gt;0</sub>(g<sub>j</sub>)</span> &nbsp; ) &nbsp;,&nbsp;&nbsp; <span style="color:#7ee787">g<sub>i</sub> = accum<sub>i</sub> / max(denom<sub>i</sub>, 1)</span></div>
+<table>
+  <thead><tr><th>Operación</th><th>Por qué</th></tr></thead>
+  <tbody>
+    <tr><td><code>accum / denom</code></td><td>media del gradiente en el intervalo (no la suma) → independiente de cuántas veces se vio el splat</td></tr>
+    <tr><td>dividir por la <b>media</b></td><td>vuelve la señal <b>adimensional</b> con media ≈ 1, para que λ tenga el mismo significado en cualquier escena/iteración</td></tr>
+    <tr><td><code>clamp(max=10)</code></td><td>evita que un outlier (gradiente explosivo) domine el muestreo multinomial</td></tr>
+    <tr><td><code>g ≤ 0 → err = 0</code></td><td>splats no vistos en el intervalo caen a muestreo por opacidad pura (no se penalizan ni premian)</td></tr>
+  </tbody>
+</table>
+
+<figure>
+<svg viewBox="0 0 900 250" role="img" aria-label="Pipeline de la señal de error">
+  <defs>
+    <marker id="ar3" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#9aa3b2"/>
+    </marker>
+  </defs>
+  <rect x="25" y="90" width="175" height="70" rx="10" fill="#0b0d13" stroke="#7ee787" stroke-width="1.4"/>
+  <text x="112" y="118" fill="#7ee787" font-size="12.5" text-anchor="middle" font-weight="700">‖∇viewspace‖₂</text>
+  <text x="112" y="138" fill="#9aa3b2" font-size="11" text-anchor="middle">cada iter, por splat</text>
+
+  <rect x="250" y="90" width="175" height="70" rx="10" fill="#0b0d13" stroke="#6ea8fe" stroke-width="1.4"/>
+  <text x="337" y="112" fill="#6ea8fe" font-size="12.5" text-anchor="middle" font-weight="700">acumular</text>
+  <text x="337" y="132" fill="#9aa3b2" font-size="11" text-anchor="middle">accum += ‖·‖</text>
+  <text x="337" y="148" fill="#9aa3b2" font-size="11" text-anchor="middle">denom += 1</text>
+
+  <rect x="475" y="90" width="175" height="70" rx="10" fill="#0b0d13" stroke="#6ea8fe" stroke-width="1.4"/>
+  <text x="562" y="112" fill="#6ea8fe" font-size="12.5" text-anchor="middle" font-weight="700">g = accum/denom</text>
+  <text x="562" y="132" fill="#9aa3b2" font-size="11" text-anchor="middle">media del intervalo</text>
+  <text x="562" y="148" fill="#9aa3b2" font-size="11" text-anchor="middle">+ normalizar /mean</text>
+
+  <rect x="700" y="90" width="175" height="70" rx="10" fill="#0b0d13" stroke="#ffb454" stroke-width="1.8"/>
+  <text x="787" y="118" fill="#ffb454" font-size="13" text-anchor="middle" font-weight="800">err ∈ [0, 10]</text>
+  <text x="787" y="138" fill="#9aa3b2" font-size="11" text-anchor="middle">media ≈ 1</text>
+
+  <line x1="200" y1="125" x2="248" y2="125" stroke="#9aa3b2" stroke-width="1.5" marker-end="url(#ar3)"/>
+  <line x1="425" y1="125" x2="473" y2="125" stroke="#9aa3b2" stroke-width="1.5" marker-end="url(#ar3)"/>
+  <line x1="650" y1="125" x2="698" y2="125" stroke="#9aa3b2" stroke-width="1.5" marker-end="url(#ar3)"/>
+
+  <text x="450" y="40" fill="#9aa3b2" font-size="13" text-anchor="middle">cada iteración ───────────────────►  en el paso de densificación (cada 100)</text>
+  <text x="450" y="200" fill="#9aa3b2" font-size="11.5" text-anchor="middle">densification_postfix resetea accum y denom a 0 → la señal se reconstruye en el siguiente intervalo</text>
+</svg>
+<figcaption>De gradiente bruto a señal adimensional. El reset tras cada densificación hace que <code>err</code> mida siempre el error <em>del último intervalo de 100 iters</em>, no el histórico completo.</figcaption>
+</figure>
+
+<h3>5.4 · Paso 3 — cómo entra <code>error_weight</code></h3>
+<p>La señal <code>err</code> (media ≈ 1) se combina con la opacidad mediante λ = <code>error_weight</code>:</p>
+<div class="eq">probs<sub>i</sub> &nbsp;∝&nbsp; opacity<sub>i</sub> · ( 1 + <span style="color:#ffb454">λ</span> · err<sub>i</sub> )</div>
+<p>
+Como <code>err</code> tiene media ≈ 1, el factor <code>(1 + λ·err)</code> vale en promedio
+<code>1 + λ</code>. Con <b>λ = 2.0</b>, un splat de error <em>medio</em> ve su probabilidad
+multiplicada por ≈ 3; uno de error alto (<code>err</code> cercano al tope 10) por ≈ 21; uno de
+error nulo queda igual (×1, muestreo por opacidad pura). <b>λ regula cuánta prioridad gana el
+error sobre la opacidad.</b>
+</p>
+
+<div class="callout">
+  <h4>¿Por qué λ = 2.0 y no un valor derivado?</h4>
+  <p>No sale de ninguna ecuación: es una <b>elección de diseño</b> (documentada en CLAUDE.md como
+  "blend constante"). Se descartó un <em>schedule</em> temporal (error→opacidad) porque la señal
+  de error es ruidosa al inicio y el cap se llena tempranísimo. λ = 2.0 da un sesgo claro hacia el
+  error sin anular la opacidad (que sigue como factor multiplicativo). Es un <b>dial a tunear</b>:
+  <code>--mcmc_error_weight 0</code> recupera el comportamiento del oficial; subirlo prioriza más
+  los huecos. El segundo dial es <code>clip</code> (= 10) dentro de <code>_error_signal</code>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="jitter">6 · <code>jitter_scale</code>: sembrar el INTERIOR de los huecos</h2>
+<p>
+El paso 6 esconde la limitación clave: <b><code>add_new_gs</code> clona en la misma posición que
+la fuente</b>. Como las fuentes de alto error viven en el <em>borde</em> de un hueco, los clones
+también nacen en el borde → el interior del hueco nunca se rellena con un solo paso. Hay que
+esperar a que el borde se cubra, el error se desplace hacia adentro, y repetir — lento.
+</p>
+<p>
+<code>jitter_scale</code> rompe ese ciclo: desplaza cada clon en una <b>dirección 3D aleatoria</b>
+con magnitud proporcional al <b>error</b> y al <b>tamaño</b> de la fuente. Un splat de borde con
+error alto lanza su clon <em>hacia dentro</em> del hueco; un splat de foreground bien resuelto
+(error ≈ 0) no se mueve y el clon es normal.
+</p>
+
+<figure>
+<svg viewBox="0 0 900 300" role="img" aria-label="Mecanismo del jitter">
+  <!-- WITHOUT jitter -->
+  <text x="225" y="28" fill="#9aa3b2" font-size="13" text-anchor="middle" font-weight="700">jitter_scale = 0 (default)</text>
+  <rect x="40" y="45" width="370" height="220" rx="10" fill="#0b0d13" stroke="#2a2f3c"/>
+  <ellipse cx="250" cy="155" rx="95" ry="75" fill="rgba(255,123,114,.06)" stroke="#ff7b72" stroke-width="1.3" stroke-dasharray="5 4"/>
+  <text x="250" y="160" fill="#ff7b72" font-size="12" text-anchor="middle">hueco</text>
+  <!-- edge source -->
+  <circle cx="158" cy="150" r="9" fill="#ffb454"/>
+  <text x="120" y="135" fill="#ffb454" font-size="10" text-anchor="middle">src (borde)</text>
+  <!-- clone same pos -->
+  <circle cx="158" cy="150" r="5" fill="#7ee787" stroke="#0b0d13"/>
+  <text x="158" y="200" fill="#7ee787" font-size="10.5" text-anchor="middle">clon = misma posición</text>
+  <text x="225" y="252" fill="#9aa3b2" font-size="11" text-anchor="middle">→ el interior sigue vacío</text>
+
+  <!-- WITH jitter -->
+  <text x="675" y="28" fill="#9aa3b2" font-size="13" text-anchor="middle" font-weight="700">jitter_scale &gt; 0</text>
+  <rect x="490" y="45" width="370" height="220" rx="10" fill="#0b0d13" stroke="#2a2f3c"/>
+  <ellipse cx="700" cy="155" rx="95" ry="75" fill="rgba(126,231,135,.06)" stroke="#ffb454" stroke-width="1.3"/>
+  <text x="700" y="95" fill="#9aa3b2" font-size="11" text-anchor="middle">hueco</text>
+  <circle cx="608" cy="150" r="9" fill="#ffb454"/>
+  <text x="572" y="135" fill="#ffb454" font-size="10" text-anchor="middle">src (borde)</text>
+  <!-- jittered clones inside -->
+  <defs>
+    <marker id="ar2" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#7ee787"/>
+    </marker>
+  </defs>
+  <line x1="615" y1="150" x2="685" y2="135" stroke="#7ee787" stroke-width="1.6" marker-end="url(#ar2)" stroke-dasharray="3 3"/>
+  <line x1="615" y1="153" x2="700" y2="180" stroke="#7ee787" stroke-width="1.6" marker-end="url(#ar2)" stroke-dasharray="3 3"/>
+  <line x1="615" y1="148" x2="660" y2="205" stroke="#7ee787" stroke-width="1.6" marker-end="url(#ar2)" stroke-dasharray="3 3"/>
+  <circle cx="690" cy="133" r="5" fill="#7ee787" stroke="#0b0d13"/>
+  <circle cx="704" cy="182" r="5" fill="#7ee787" stroke="#0b0d13"/>
+  <circle cx="662" cy="208" r="5" fill="#7ee787" stroke="#0b0d13"/>
+  <text x="700" y="252" fill="#7ee787" font-size="11" text-anchor="middle">→ los clones siembran el interior</text>
+</svg>
+<figcaption>Sin jitter, el clon nace pegado a la fuente y solo engrosa el borde. Con jitter, los clones de fuentes de alto error se dispersan hacia el interior del hueco. La dirección es aleatoria por clon (cada uno usa su propio <code>randn</code>).</figcaption>
+</figure>
+
+<div class="callout">
+  <h4>Acoplamiento con el error</h4>
+  <p>El jitter <b>solo se aplica si <code>error_weight &gt; 0</code></b> (condición <code>jitter_scale &gt; 0.0 and use_error</code>
+  en <code>:644</code>). Necesita la señal <code>err</code> tanto para elegir fuentes como para
+  modular el desplazamiento: sin error, no sabría a qué fuentes empujar ni cuánto.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="magnitud">7 · La magnitud del jitter, término a término</h2>
+<p>Código exacto (<code>gaussian_model.py:649-653</code>):</p>
+<pre><code><span class="tok-v">src_scale</span> = self.get_scaling[src_idx].<span class="tok-f">norm</span>(dim=-<span class="tok-s">1</span>, keepdim=<span class="tok-k">True</span>)  <span class="tok-c"># tamaño in-plane del surfel (world)</span>
+<span class="tok-v">direction</span> = torch.<span class="tok-f">randn_like</span>(new_xyz)
+<span class="tok-v">direction</span> = direction / direction.<span class="tok-f">norm</span>(dim=-<span class="tok-s">1</span>, keepdim=<span class="tok-k">True</span>).<span class="tok-f">clamp</span>(min=<span class="tok-s">1e-8</span>)  <span class="tok-c"># vector unitario 3D</span>
+<span class="tok-v">err_src</span> = err[src_idx].<span class="tok-f">unsqueeze</span>(-<span class="tok-s">1</span>)
+<span class="tok-v">new_xyz</span> = new_xyz + direction * src_scale * (jitter_scale * err_src)</code></pre>
+
+<div class="eq">Δx &nbsp;=&nbsp; <span style="color:#d2a8ff">û</span> &nbsp;·&nbsp; <span style="color:#7ee787">‖scale<sub>src</sub>‖</span> &nbsp;·&nbsp; <span style="color:#ffb454">jitter_scale</span> &nbsp;·&nbsp; <span style="color:#ff7b72">err<sub>src</sub></span></div>
+
+<table>
+  <thead><tr><th>Factor</th><th>Qué es</th><th>Efecto sobre el desplazamiento</th></tr></thead>
+  <tbody>
+    <tr><td><span style="color:#d2a8ff">û</span> — dirección</td><td><code>randn</code> normalizado a norma 1, distinto por clon</td><td>reparte los clones en todas las direcciones (no introduce sesgo, solo dispersión)</td></tr>
+    <tr><td><span style="color:#7ee787">‖scale<sub>src</sub>‖</span></td><td>norma del vector de escala 2D del surfel fuente (en world coords)</td><td>splats grandes saltan más lejos (cubren huecos grandes); splats finos saltan poco</td></tr>
+    <tr><td><span style="color:#ffb454">jitter_scale</span></td><td>el dial del usuario (<code>--mcmc_jitter_scale</code>)</td><td>ganancia global; <b>0 = desactivado</b></td></tr>
+    <tr><td><span style="color:#ff7b72">err<sub>src</sub></span></td><td>error normalizado de la fuente, ∈ [0, clip=10], media ≈ 1</td><td>la "puerta": fuentes bien resueltas (err≈0) no se mueven; fuentes de hueco (err alto) saltan lejos</td></tr>
+  </tbody>
+</table>
+
+<div class="callout ok">
+  <h4>Intuición de los órdenes de magnitud</h4>
+  <p>Para un splat de borde con <code>err ≈ 5</code>, escala <code>‖scale‖ ≈ 0.02</code> (world) y
+  <code>jitter_scale = 1</code>, el desplazamiento es <code>≈ 0.02·1·5 = 0.1</code> world-units en
+  dirección aleatoria — suficiente para cruzar al interior de un hueco mediano. Para un splat de
+  foreground con <code>err ≈ 0</code>, Δx ≈ 0 → clon normal pegado a la fuente. El factor
+  <code>err</code> hace que el jitter sea <b>autoselectivo</b>: actúa donde hace falta y se apaga
+  donde no.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="anclaje">8 · Después del jitter: colocación única, no fuerza continua</h2>
+<p>Un malentendido frecuente: pensar que el jitter es un ruido que se vuelve a sumar en cada
+iteración y que, por ser <em>aleatorio</em>, podría volver a sacar al clon del hueco en el que
+acaba de caer. <b>No es así.</b> El <code>randn</code> de <code>add_new_gs</code> se evalúa
+<span class="hl">una sola vez</span>, en el instante en que el clon nace: decide <em>dónde
+aparece</em> y desaparece. A partir de ahí el clon es un splat normal — no se le sigue
+empujando al azar.</p>
+
+<div class="callout key">
+  <h4>Entonces, ¿qué lo mantiene dentro del hueco?</h4>
+  <p>No es el jitter — es el <b>gradiente fotométrico</b> (la pérdida L1 + SSIM). El jitter solo
+  <em>siembra</em>; la pérdida <em>selecciona</em> quién sobrevive y dónde se queda:</p>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <span class="badge b-add">clon útil</span>
+    <p>Cae en una zona mal cubierta (el hueco). Reducir el error ahí <b>premia</b> esa posición →
+    el optimizador (<code>xyz_lr</code>) lo ancla y le sube la opacidad. Al subir la opacidad, el
+    <b>ruido posicional</b> <code>(1−op)¹⁰⁰·noise_lr</code> se apaga (factor → 0): el splat queda
+    <span class="hlb">clavado</span> automáticamente.</p>
+  </div>
+  <div class="card">
+    <span class="badge b-jit">clon inútil</span>
+    <p>Cae en un sitio que no ayuda (zona ya cubierta o todavía vacía sin señal). Se queda casi
+    transparente → o lo recicla <code>relocate_gs</code> (<code>opacity ≤ opacity_cull</code>, ver
+    §9), o el ruido posicional lo manda a otra parte. <b>No estorba</b>: el sistema lo limpia.</p>
+  </div>
+</div>
+
+<figure>
+<svg viewBox="0 0 860 250" role="img" aria-label="Ciclo sembrar-seleccionar">
+  <defs>
+    <marker id="ar4" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#9aa3b2"/>
+    </marker>
+  </defs>
+  <rect x="30" y="95" width="150" height="60" rx="10" fill="#1e222e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="105" y="120" text-anchor="middle" fill="#7ee787" font-size="13" font-family="monospace">add_new_gs</text>
+  <text x="105" y="140" text-anchor="middle" fill="#9aa3b2" font-size="11">+ jitter (1 vez)</text>
+
+  <rect x="240" y="95" width="170" height="60" rx="10" fill="#1e222e" stroke="#6ea8fe" stroke-width="1.5"/>
+  <text x="325" y="120" text-anchor="middle" fill="#6ea8fe" font-size="13" font-family="monospace">pérdida + xyz_lr</text>
+  <text x="325" y="140" text-anchor="middle" fill="#9aa3b2" font-size="11">ancla los útiles</text>
+
+  <rect x="470" y="55" width="170" height="55" rx="10" fill="#1e222e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="555" y="79" text-anchor="middle" fill="#e6e8ee" font-size="12">útil → opacidad ↑</text>
+  <text x="555" y="97" text-anchor="middle" fill="#9aa3b2" font-size="11">ruido se apaga, clavado</text>
+
+  <rect x="470" y="140" width="170" height="55" rx="10" fill="#1e222e" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="555" y="164" text-anchor="middle" fill="#e6e8ee" font-size="12">inútil → transparente</text>
+  <text x="555" y="182" text-anchor="middle" fill="#9aa3b2" font-size="11">relocate_gs lo recicla</text>
+
+  <line x1="180" y1="125" x2="236" y2="125" stroke="#9aa3b2" stroke-width="1.6" marker-end="url(#ar4)"/>
+  <line x1="410" y1="118" x2="466" y2="90" stroke="#9aa3b2" stroke-width="1.6" marker-end="url(#ar4)"/>
+  <line x1="410" y1="132" x2="466" y2="160" stroke="#9aa3b2" stroke-width="1.6" marker-end="url(#ar4)"/>
+  <path d="M555,195 C555,225 105,225 105,158" fill="none" stroke="#ff7b72" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#ar4)"/>
+  <text x="330" y="242" text-anchor="middle" fill="#ff7b72" font-size="11">el slot muerto vuelve al pool y se vuelve a sembrar</text>
+</svg>
+<figcaption>El jitter dispara una vez. Lo que decide si el clon <b>se queda</b> en el hueco es la
+pérdida, no el jitter. Los clones útiles se anclan (su opacidad sube y el ruido posicional se
+desactiva); los inútiles se reciclan vía <code>relocate_gs</code>.</figcaption>
+</figure>
+
+<div class="callout">
+  <h4>El grano de verdad: la dirección aleatoria sí desperdicia clones</h4>
+  <p>De los clones que lanza una fuente del borde, <b>solo una fracción apunta hacia el interior</b>
+  del hueco; el resto cae en zonas ya cubiertas (redundantes). Es un esquema de
+  <em>escopeta</em>: dispersa al azar y deja que la pérdida elija. La alternativa —sesgar la
+  dirección hacia el vacío— exigiría calcular la geometría del hueco, que hoy no se computa. Se
+  eligió lo barato (dirección aleatoria · magnitud ∝ error·escala) confiando en que el optimizador
+  limpia lo mal colocado. El desperdicio es real pero acotado, y es el precio de no tener que
+  modelar dónde están los huecos.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="relocate">9 · <code>relocate_gs</code>: reciclar los splats muertos</h2>
+<p>Mientras <code>add_new_gs</code> <em>aumenta</em> el número de splats, <code>relocate_gs</code>
+(<code>gaussian_model.py:558</code>) <b>no cambia el conteo</b>: recoge los splats que ya no
+aportan nada y los <span class="hl">teletransporta</span> encima de splats vivos prometedores. Es
+el "reciclaje" del MCMC, alineado con el Beta Splatting oficial. Corre en cada paso de
+densificación, <b>antes</b> de <code>add_new_gs</code> (<code>train.py:171</code>).</p>
+
+<h3>9.1 · Quién está "muerto"</h3>
+<p>El propio <code>train.py:170</code> calcula la máscara y se la pasa:</p>
+<pre><code><span class="tok-v">dead_mask</span> = (gaussians.get_opacity &lt;= opt.<span class="tok-v">opacity_cull</span>).<span class="tok-f">squeeze</span>(-<span class="tok-s">1</span>)
+gaussians.<span class="tok-f">relocate_gs</span>(dead_mask=dead_mask, error_weight=opt.mcmc_error_weight)</code></pre>
+<p>Muerto = <b>opacidad por debajo de <code>opacity_cull</code></b> (default 0.005). Son splats casi
+transparentes que no contribuyen al render → en vez de borrarlos (y reducir el presupuesto), se
+reaprovechan sus slots.</p>
+
+<h3>9.2 · A dónde se mueven — el mismo muestreo sesgado que add_new_gs</h3>
+<p>Las fuentes hacia las que se mueven los muertos se eligen con <b>idéntica fórmula de
+probabilidad</b> que en §4:</p>
+<div class="eq">probs<sub>i</sub> &nbsp;∝&nbsp; opacity<sub>i</sub> · ( 1 + error_weight · err<sub>i</sub> )</div>
+<p>…pero calculada <b>solo sobre los splats vivos</b> (<code>alive_idx</code>,
+<code>gaussian_model.py:575-585</code>). Así, los muertos no se distribuyen al azar: aterrizan
+encima de splats vivos de alta opacidad y/o alto error de reconstrucción — las mismas zonas mal
+cubiertas que prioriza <code>add_new_gs</code>.</p>
+
+<h3>9.3 · Qué copia y la regla de la opacidad a la mitad</h3>
+<div class="step"><div class="n">1</div><div><b>Elegir fuentes</b> — <code>src_idx = multinomial(weights, n_dead, replacement=True)</code> sobre los vivos. Tantas fuentes como muertos haya.</div></div>
+<div class="step"><div class="n">2</div><div><b>Copiar todos los parámetros</b> de la fuente al slot muerto: <code>_xyz</code>, color (<code>_features_dc/rest</code>), <code>_scaling</code>, <code>_rotation</code>, <code>_beta</code>. El muerto <em>se convierte</em> en una copia del vivo, <span class="hl">en su misma posición</span> (sin jitter — la perturbación llega después con el ruido posicional).</div></div>
+<div class="step"><div class="n">3</div><div><b>Conservar transmittance</b> — igual que en <code>add_new_gs</code>: <code>new_alpha = src_alpha · 0.5</code>, aplicado <em>a la fuente y al destino</em>. Dos splats al 50 % ≈ uno al 100 %.</div></div>
+<div class="step"><div class="n">4</div><div><b>Reset de contadores del muerto</b> — <code>low_opacity_counter</code>, <code>xyz_gradient_accum</code>, <code>denom</code>, <code>max_radii2D</code> a 0: empieza vida nueva.</div></div>
+<div class="step"><div class="n">5</div><div><b>Limpiar momentum</b> — <code>_reset_optimizer_state(dead ∪ src)</code> pone a 0 el estado de Adam de ambos, porque su opacidad cambió de golpe (evita que el momentum residual los dispare).</div></div>
+
+<div class="callout danger">
+  <h4>relocate vs add_new — la diferencia clave</h4>
+  <p><code>add_new_gs</code> <b>crea</b> splats nuevos (sube el conteo hacia <code>cap_max</code>) y
+  puede <b>jitterear</b> la posición. <code>relocate_gs</code> <b>recicla</b> los muertos (conteo
+  constante), <b>sin jitter</b>: deja al recién-reubicado pegado a su fuente y confía en el ruido
+  posterior para separarlos. Por eso, una vez el cap está lleno (lo habitual en este proyecto desde
+  iter ~7 000), <code>add_new_gs</code> deja de hacer nada y <b>todo el trabajo de densificación
+  recae en <code>relocate_gs</code></b>: la calidad tardía depende de a qué slots vivos migran los
+  muertos.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 860 230" role="img" aria-label="relocate_gs">
+  <defs>
+    <marker id="ar5" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#ffb454"/>
+    </marker>
+  </defs>
+  <!-- antes -->
+  <text x="150" y="30" text-anchor="middle" fill="#9aa3b2" font-size="12">antes</text>
+  <circle cx="90" cy="90" r="20" fill="#6ea8fe" opacity="0.85"/>
+  <text x="90" y="125" text-anchor="middle" fill="#9aa3b2" font-size="10">vivo (op alta)</text>
+  <circle cx="200" cy="160" r="7" fill="#ff7b72" opacity="0.4"/>
+  <text x="200" y="185" text-anchor="middle" fill="#9aa3b2" font-size="10">muerto (op ≤ cull)</text>
+
+  <line x1="370" y1="110" x2="470" y2="110" stroke="#ffb454" stroke-width="2" marker-end="url(#ar5)"/>
+  <text x="420" y="100" text-anchor="middle" fill="#ffb454" font-size="11">relocate</text>
+
+  <!-- despues -->
+  <text x="690" y="30" text-anchor="middle" fill="#9aa3b2" font-size="12">después</text>
+  <circle cx="650" cy="90" r="15" fill="#6ea8fe" opacity="0.6"/>
+  <circle cx="650" cy="90" r="15" fill="none" stroke="#7ee787" stroke-width="1.5" stroke-dasharray="3,3"/>
+  <text x="650" y="125" text-anchor="middle" fill="#9aa3b2" font-size="10">fuente: op/2</text>
+  <circle cx="700" cy="90" r="15" fill="#7ee787" opacity="0.6"/>
+  <text x="700" y="145" text-anchor="middle" fill="#9aa3b2" font-size="10">muerto reubicado:</text>
+  <text x="700" y="160" text-anchor="middle" fill="#9aa3b2" font-size="10">copia de la fuente, op/2</text>
+</svg>
+<figcaption>El slot muerto deja su posición transparente y reaparece como copia de un vivo de alta
+prioridad (alta opacidad/error). Ambos quedan a media opacidad para no alterar la imagen. El ruido
+posicional posterior los separa ligeramente.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="clasico">10 · Cómo lo hacen 3DGS y 2DGS — y qué te falta para los huecos</h2>
+<p>Este repo cambió la densificación clásica por <b>MCMC puro</b> (relocate + add_new) para
+alinearse con el Beta Splatting oficial. Pero los repos de referencia
+(<code>gaussian_splatting_profesor/gaussian-splatting</code> y <code>2d-gaussian-splatting</code>)
+usan la receta original de Kerbl et al. 2023, que ataca los huecos de otra forma. Compararlas
+revela qué herramientas anti-hueco se dejaron por el camino.</p>
+
+<h3>10.1 · La receta clásica: clone + split + prune (gradiente)</h3>
+<p>Idéntica en 3DGS y 2DGS (<code>gaussian_model.py:374-403</code> en 2DGS;
+<code>:409-469</code> en 3DGS). Cada <code>densification_interval=100</code> iters, entre
+<code>densify_from_iter=500</code> y <code>densify_until_iter=15000</code>, se calcula el
+gradiente medio de viewspace por splat (<code>grads = xyz_gradient_accum / denom</code>) y se
+ramifica en dos casos según el <b>tamaño</b> del splat:</p>
+
+<table>
+  <thead><tr><th>Operación</th><th>Disparador</th><th>Qué hace</th><th>Para qué hueco</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>densify_and_clone</code></td>
+      <td>‖∇‖ ≥ <code>0.0002</code> <b>Y</b> splat <span class="hl">pequeño</span> (<code>scale ≤ percent_dense·extent</code>)</td>
+      <td><b>Duplica en la MISMA posición</b>, hereda <span class="hlb">opacidad completa</span>. El optimizador separa el par en los pasos siguientes.</td>
+      <td><b>Sub-reconstrucción</b>: zona con detalle que un splat pequeño no alcanza a cubrir. Crece la densidad desde el borde hacia adentro.</td>
+    </tr>
+    <tr>
+      <td><code>densify_and_split</code></td>
+      <td>‖∇‖ ≥ <code>0.0002</code> <b>Y</b> splat <span class="hl">grande</span> (<code>scale &gt; percent_dense·extent</code>)</td>
+      <td>Crea <b>N=2</b> hijos en <span class="hl">posiciones muestreadas</span> <code>x + N(0, scale)</code>, escala <code>/1.6</code>, <b>poda al padre</b>.</td>
+      <td><b>Sobre-reconstrucción</b>: un splat grande borroso sobre una zona con variación → se reparte en vecinos más finos.</td>
+    </tr>
+    <tr>
+      <td><code>prune</code></td>
+      <td>opacidad <code>&lt; 0.005</code>, o radio en pantalla <code>&gt; 20px</code>, o escala world <code>&gt; 0.1·extent</code></td>
+      <td>Elimina el splat (baja el conteo) y libera presupuesto.</td>
+      <td>Limpia flotantes y splats gigantes que tapan zonas → indirectamente destapa huecos.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout key">
+  <h4>La clave anti-hueco del clásico: <code>split</code> SIEMBRA en el vecindario</h4>
+  <p>Mientras <code>clone</code> duplica en el sitio, <code>split</code> <b>muestrea posiciones
+  nuevas</b> con <code>torch.normal(mean=0, std=scale)</code> alrededor del padre — exactamente
+  el tipo de dispersión espacial que rellena el área alrededor de una primitiva. Es el ancestro
+  directo del <code>jitter</code> de este repo (§6): el jitter es una reinvención casera de ese
+  muestreo, pero <span class="hl">gateada por error y apagada por defecto</span>.</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 860 230" role="img" aria-label="clone vs split">
+  <defs>
+    <marker id="ar6" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#9aa3b2"/>
+    </marker>
+  </defs>
+  <text x="150" y="28" text-anchor="middle" fill="#7ee787" font-size="13" font-weight="700">clone (splat pequeño)</text>
+  <circle cx="110" cy="110" r="10" fill="#6ea8fe" opacity="0.85"/>
+  <line x1="200" y1="110" x2="270" y2="110" stroke="#9aa3b2" stroke-width="1.6" marker-end="url(#ar6)"/>
+  <circle cx="320" cy="110" r="10" fill="#6ea8fe" opacity="0.7"/>
+  <circle cx="322" cy="108" r="10" fill="#7ee787" opacity="0.5"/>
+  <text x="320" y="150" text-anchor="middle" fill="#9aa3b2" font-size="10">copia in-situ, op completa</text>
+  <text x="320" y="166" text-anchor="middle" fill="#9aa3b2" font-size="10">→ el optimizador las separa</text>
+
+  <line x1="430" y1="40" x2="430" y2="190" stroke="#2a2f3c" stroke-width="1"/>
+
+  <text x="640" y="28" text-anchor="middle" fill="#ffb454" font-size="13" font-weight="700">split (splat grande)</text>
+  <circle cx="540" cy="110" r="26" fill="#6ea8fe" opacity="0.6"/>
+  <line x1="585" y1="110" x2="650" y2="110" stroke="#9aa3b2" stroke-width="1.6" marker-end="url(#ar6)"/>
+  <circle cx="700" cy="90" r="15" fill="#ffb454" opacity="0.7"/>
+  <circle cx="735" cy="130" r="15" fill="#ffb454" opacity="0.7"/>
+  <text x="715" y="170" text-anchor="middle" fill="#9aa3b2" font-size="10">2 hijos muestreados N(0,scale)</text>
+  <text x="715" y="186" text-anchor="middle" fill="#9aa3b2" font-size="10">escala /1.6, padre podado</text>
+</svg>
+<figcaption><code>clone</code> densifica copiando en el sitio (crece desde el borde); <code>split</code>
+dispersa hijos en el vecindario y poda al padre. Las dos juntas propagan cobertura hacia las zonas
+mal resueltas.</figcaption>
+</figure>
+
+<h3>10.2 · Lo que añade 2DGS sobre 3DGS</h3>
+<ul>
+  <li><b>Split en el plano del surfel</b> (<code>gaussian_model.py:358</code>): como el surfel
+  tiene <code>scale</code> de 2 componentes, antes de muestrear hace
+  <code>stds = cat([stds, 0·...])</code> → la 3ª componente del offset es <b>0</b>. Los hijos
+  nacen <span class="hl">en el plano tangente</span>, no fuera de la superficie.</li>
+  <li><b>Regularización de normales y distorsión</b> (<code>lambda_normal=0.05</code>,
+  <code>lambda_dist</code>): no atacan huecos directamente — fuerzan que los surfels se alineen
+  con una pseudo-superficie de profundidad para que no "floten". Indirectamente evitan los huecos
+  que aparecerían si los surfels se dispersaran en 3D sin coherencia. <b>En este repo están en 0</b>.</li>
+</ul>
+
+<h3>10.3 · Clásico vs este repo (MCMC) — el diff que importa</h3>
+<table>
+  <thead><tr><th>Aspecto</th><th>3DGS / 2DGS clásico</th><th>Este repo (MCMC Beta)</th></tr></thead>
+  <tbody>
+    <tr><td>Disparador</td><td>gradiente viewspace ≥ 0.0002</td><td>opacidad · (1 + λ·err); <code>err</code> = mismo gradiente</td></tr>
+    <tr><td>Crear splats</td><td>clone (pequeños) + split (grandes)</td><td><code>add_new_gs</code> (clona los más probables)</td></tr>
+    <tr><td><b>Posición del nuevo</b></td><td>clone: misma · <b>split: muestreada N(0,scale)</b></td><td>misma (<b>jitter apagado</b>, <code>jitter_scale=0</code>)</td></tr>
+    <tr><td><b>Opacidad del nuevo</b></td><td><span class="hlb">hereda la completa</span> → contribuye ya</td><td><span class="hl">α/2</span> → nace tenue, tarda en cubrir</td></tr>
+    <tr><td>Eliminar / reciclar</td><td><code>prune</code> borra (baja el conteo)</td><td><code>relocate_gs</code> recicla muertos (conteo fijo)</td></tr>
+    <tr><td>Tope de splats</td><td>sin tope duro → crece libre</td><td><code>cap_max</code> duro (se llena hacia iter ~7k)</td></tr>
+    <tr><td><code>reset_opacity</code></td><td>cada 3000 iters (purga flotantes)</td><td><b>desactivado</b> (interval ≈ 1e9)</td></tr>
+    <tr><td>Reg. de superficie</td><td>2DGS: normal + distorsión</td><td><b>desactivada</b> (λ=0)</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <h4>Qué te falta para los huecos — diagnóstico accionable</h4>
+  <p>Comparando columnas, las herramientas anti-hueco del clásico que este repo <b>no</b> está
+  usando hoy son, por impacto probable:</p>
+  <ol>
+    <li><b>El muestreo espacial de <code>split</code> está apagado.</b> En el clásico, <code>split</code>
+    reparte hijos en <code>N(0,scale)</code> alrededor del padre — siembra el vecindario. Aquí su
+    equivalente es el <code>jitter</code> (§6-7), pero <code>jitter_scale=0</code>. <span class="hl">Es el
+    primer dial a encender</span> si los huecos persisten: replica justo el mecanismo que el clásico
+    usa para crecer hacia el área vacía.</li>
+    <li><b>Los splats nuevos nacen a media opacidad (α/2).</b> El clone clásico hereda la opacidad
+    <em>completa</em>, así que un clon que cae en un hueco visible <b>contribuye de inmediato</b>.
+    Aquí la regla de transmittance MCMC los hace tenues → un splat que aterriza en el hueco empieza
+    casi invisible y tarda muchos pasos en oscurecer/cubrir. Esto explica por qué los huecos se
+    rellenan <em>lento</em> aunque el muestreo ya los apunte.</li>
+    <li><b>No hay <code>reset_opacity</code> ni <code>prune</code> por tamaño.</b> El clásico purga
+    flotantes cada 3000 iters y poda splats gigantes, <span class="hl">reclamando presupuesto</span> que
+    se reasigna a zonas mal cubiertas. Aquí, con <code>cap_max</code> lleno desde iter ~7k y sin reset,
+    el presupuesto queda "congelado": <code>relocate_gs</code> recicla solo lo que cae bajo
+    <code>opacity_cull</code>, que es poco.</li>
+    <li><b>La regularización 2DGS (normal/dist) está en 0.</b> No rellena huecos por sí sola, pero
+    sin ella los surfels pueden desalinearse de la superficie y abrir huecos donde antes había
+    cobertura. Es un sospechoso secundario.</li>
+  </ol>
+  <p><b>Pero ojo — la limitación que comparten TODOS:</b> el gradiente de viewspace (y por tanto
+  <code>err</code>, clone y split) <span class="hl">solo existe donde ya hay un splat</span>. Ninguno de
+  los tres métodos rellena de golpe una región <em>totalmente vacía</em> (cielo/césped sin puntos
+  SfM): todos crecen desde los bordes hacia adentro. El clásico compensa dejando que los splats
+  <b>crezcan en escala</b> sin tope para cubrir zonas lisas grandes; aquí <code>scale_reg</code> y la
+  regla α/2 frenan justo eso. Por eso subir <code>cap_max</code> ayudó pero no cerró los huecos del
+  todo: el cuello no es solo cantidad, es <b>cómo</b> se siembra y con cuánta opacidad nace cada splat.</p>
+</div>
+
+<div class="callout ok">
+  <h4>Estado: encendidas en <code>bonsai_beta_run4</code> (2026-05-29)</h4>
+  <p>Tres de las cuatro herramientas de §10.3 se activaron a la vez en <code>train.sh</code>
+  (los defaults de <code>arguments/__init__.py</code> siguen intactos; se sobreescriben por flag):</p>
+  <ul>
+    <li><b>jitter</b> — <code>--mcmc_jitter_scale 1.5</code> (ya venía de run3).</li>
+    <li><b>reset_opacity</b> — <code>--opacity_reset_interval 3000</code> (era 1e9 = apagado).</li>
+    <li><b>regularización de superficie</b> — <code>--lambda_normal 0.05 --lambda_dist 100</code>
+    (eran 0). <code>lambda_dist=100</code> es la receta mip360 de 2DGS; vigilar sobre-regularización
+    (en Run 1, <code>lambda_dist=10</code> ya tumbó el PSNR).</li>
+  </ul>
+  <p>El punto #2 sobre la opacidad α/2 <b>no</b> se cambió (sigue siendo la regla MCMC oficial). Run
+  comparado contra run3 (solo-jitter) para aislar el efecto del paquete reset + superficie. Ver
+  <code>CLAUDE.md → Run bonsai4</code> para las interacciones a vigilar (sobre todo reset × ruido MCMC).</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="params">11 · Parámetros y valores por defecto</h2>
+<table>
+  <thead><tr><th>Parámetro</th><th>Default actual</th><th>Dónde</th><th>Rol</th></tr></thead>
+  <tbody>
+    <tr><td><code>cap_max</code></td><td>100000 <span class="muted">(train.sh sube a 1M–5M)</span></td><td>arguments:86</td><td>techo duro de splats; palanca dominante de calidad</td></tr>
+    <tr><td><code>densification_interval</code></td><td>100</td><td>arguments:94</td><td>cada cuántas iters corre el bloque</td></tr>
+    <tr><td><code>opacity_cull</code></td><td>0.005</td><td>arguments / train.sh</td><td>umbral de "muerto" para <code>relocate_gs</code> (<code>opacity ≤ cull</code>)</td></tr>
+    <tr><td><code>mcmc_error_weight</code> (λ)</td><td><b>2.0</b></td><td>arguments:113</td><td>peso del sesgo por error en el muestreo; 0 = opacidad pura</td></tr>
+    <tr><td><code>mcmc_jitter_scale</code></td><td><b>0.0</b> <span class="muted">(desactivado)</span></td><td>arguments:121</td><td>ganancia del jitter posicional; solo activo si λ&gt;0</td></tr>
+    <tr><td><code>_error_signal(clip)</code></td><td>clip = 10.0</td><td>gaussian_model:536</td><td>tope del error normalizado contra outliers</td></tr>
+    <tr><td>regla de crecimiento</td><td>×1.05 / paso</td><td>gaussian_model:619</td><td><code>target = min(cap_max, ⌈1.05·N⌉)</code></td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <h4>Estado a 2026-05-28</h4>
+  <p><code>mcmc_jitter_scale</code> está en <b>0.0 por defecto</b>: la maquinaria del jitter existe
+  y está probada, pero <u>no se ha activado en ningún run todavía</u>. El último experimento de
+  muestreo sesgado (bonsai_run2) usa <code>error_weight = 2.0</code> pero <code>jitter_scale = 0</code>.
+  Activar el jitter es el siguiente dial natural si los huecos <em>totalmente vacíos</em> persisten
+  tras el sesgo por error solo.</p>
+</div>
+
+<hr>
+<p class="muted" style="font-size:.85rem">
+Generado para el proyecto 2DGS → Beta Splatting. Fuentes: <code>scene/gaussian_model.py</code>
+(<code>add_new_gs</code> :609, <code>_error_signal</code> :536), <code>train.py</code> :158-185,
+<code>arguments/__init__.py</code> :86-121. Documento hermano: <code>docs/mcmc_densificacion.html</code>.
+</p>
+
+</div>
+</body>
+</html>

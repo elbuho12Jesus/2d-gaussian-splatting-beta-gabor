@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diagnóstico de los lóbulos SB — run flowers6</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.95rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto;display:block;margin:8px auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700} .hl3{color:var(--accent);font-weight:700}
+  .center{text-align:center}
+  .big{font-size:1.3rem;font-weight:700}
+  .figcap{color:var(--muted);font-size:.85rem;text-align:center;margin:2px 0 14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Diagnóstico de los lóbulos SB — run <code>flowers6</code></h1>
+<p class="sub">Por qué los Spherical Betas (<code>--sh_degree 0 --sb_number 2</code>) <b>empeoraron</b> el resultado (test 20.65 vs 21.14 de run5) y de dónde sale el fondo "alterado": quemados blancos en el cielo y aspecto aceitoso. Conclusión en una frase: <b>el optimizador vació el color base (DC) y lo metió entero en los lóbulos direccionales, que se convirtieron en "faros" afilados apuntando a las cámaras de train</b> — desde una vista test, el faro o te da en los ojos (mancha blanca quemada) o no te llega (oscuro/turbio).</p>
+
+<div class="note"><b>Todos los números de este documento son medidos</b>, no estimados: salen de los plys reales <code>iteration_7000 / 30000 / 50000</code> de <code>output/m360/flowers_beta_run6</code> (7.5M splats) y de <code>flowers6.log</code>. El port se verificó línea a línea contra el oficial (kernel, clamps, dirección, lr, init): <b>el código no es el problema; lo que aprende, sí</b>.</p></div>
+
+<h2>1. Recordatorio: qué es un lóbulo SB y cómo <i>debía</i> funcionar</h2>
+
+<p>Con <code>sh_degree=0</code> + <code>sb_number=2</code>, el color de cada splat visto desde la dirección <code>v</code> es:</p>
+
+<div class="eq">C(v) = clamp(DC, 0) &nbsp;+&nbsp; Σᵢ cᵢ · max(dot(μᵢ, v), 0)<sup>4·exp(bᵢ)</sup></div>
+
+<ul>
+  <li><b>DC</b> = color base, igual desde cualquier ángulo (lo que en SH es la banda 0).</li>
+  <li>Cada lóbulo <code>i</code> tiene: color <code>cᵢ</code> (softplus → <b>solo puede SUMAR luz</b>, nunca restar), eje <code>μᵢ</code> (θ, φ) y nitidez <code>bᵢ</code>.</li>
+  <li>El exponente <code>n = 4·exp(b)</code> controla el <b>ancho angular</b> del lóbulo. Es la palanca clave de este diagnóstico.</li>
+</ul>
+
+<svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="22" fill="#e6e8ee" font-size="15" font-weight="bold" text-anchor="middle">El mando b: intensidad relativa del lóbulo según el ángulo al eje</text>
+  <!-- ejes -->
+  <line x1="80" y1="260" x2="900" y2="260" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="80" y1="40" x2="80" y2="260" stroke="#2a2f3c" stroke-width="1.5"/>
+  <text x="490" y="292" fill="#9aa3b2" font-size="12" text-anchor="middle">ángulo entre la vista y el eje del lóbulo (grados)</text>
+  <text x="40" y="150" fill="#9aa3b2" font-size="12" transform="rotate(-90 40 150)" text-anchor="middle">intensidad (norm.)</text>
+  <!-- ticks x: 0..90 deg -> 80..900 px (9.11 px/deg) -->
+  <g fill="#9aa3b2" font-size="11" text-anchor="middle">
+    <text x="80" y="276">0°</text><text x="217" y="276">15°</text><text x="353" y="276">30°</text>
+    <text x="490" y="276">45°</text><text x="627" y="276">60°</text><text x="763" y="276">75°</text><text x="900" y="276">90°</text>
+  </g>
+  <g fill="#9aa3b2" font-size="11" text-anchor="end">
+    <text x="74" y="64">1.0</text><text x="74" y="154">0.5</text><text x="74" y="263">0.0</text>
+  </g>
+  <line x1="80" y1="150" x2="900" y2="150" stroke="#2a2f3c" stroke-dasharray="3 5"/>
+  <!-- n=4 (init, semiancho 33deg): y = 260 - 200*cos(t)^4 -->
+  <polyline fill="none" stroke="#7ee787" stroke-width="2.5"
+    points="80,60 144,64 217,86 280,124 353,148 416,190 490,210 553,235 627,247 700,256 763,259 900,260"/>
+  <!-- n=25 (semiancho 13deg) -->
+  <polyline fill="none" stroke="#6ea8fe" stroke-width="2.5"
+    points="80,60 125,78 171,124 217,176 262,218 307,243 353,254 398,259 444,260 900,260"/>
+  <!-- n=100 (semiancho 6.7deg) -->
+  <polyline fill="none" stroke="#ffb454" stroke-width="2.5"
+    points="80,60 107,86 125,123 153,185 171,217 198,245 217,254 262,260 900,260"/>
+  <!-- n=2475 (semiancho 1.4deg) -->
+  <polyline fill="none" stroke="#ff7b72" stroke-width="2.5"
+    points="80,60 89,123 98,216 107,253 116,259 125,260 900,260"/>
+  <!-- leyenda -->
+  <g font-size="12">
+    <rect x="560" y="48" width="330" height="92" rx="8" fill="#171a23" stroke="#2a2f3c"/>
+    <line x1="575" y1="66" x2="605" y2="66" stroke="#7ee787" stroke-width="3"/><text x="612" y="70" fill="#e6e8ee">n=4 (init, b=0) — semiancho 33°</text>
+    <line x1="575" y1="88" x2="605" y2="88" stroke="#6ea8fe" stroke-width="3"/><text x="612" y="92" fill="#e6e8ee">n=25 — 13°  (3.8% de lóbulos &gt; esto)</text>
+    <line x1="575" y1="110" x2="605" y2="110" stroke="#ffb454" stroke-width="3"/><text x="612" y="114" fill="#e6e8ee">n=100 — 6.7°  (0.36% de lóbulos)</text>
+    <line x1="575" y1="132" x2="605" y2="132" stroke="#ff7b72" stroke-width="3"/><text x="612" y="136" fill="#e6e8ee">n=2475 — 1.4° (el máximo aprendido)</text>
+  </g>
+</svg>
+<p class="figcap">Fig. 1 — <code>cos(θ)ⁿ</code> normalizado. Con b libre, el lóbulo va de "iluminación suave" (n=4) a <b>aguja de 1.4°</b> (n=2475). SH grado 3 no puede generar nada más estrecho que ~30-40°: esa es la diferencia de capacidad que acabó usándose para memorizar.</p>
+
+<p>La hipótesis del port era: <i>"15 parámetros de color (DC + 2 lóbulos) &lt; 48 de SH3 → menos memorización por-vista"</i>. <span class="hl">Resultó falsa</span>: lo que importa no es el <b>número</b> de parámetros sino su <b>frecuencia angular máxima</b>. SH3 está limitado por construcción a variaciones suaves; un lóbulo con exponente libre puede ser una delta.</p>
+
+<h2>2. Lo que aprendió de verdad: la descomposición degenerada</h2>
+
+<p>Lo esperado era "DC lleva el color, el lóbulo es una corrección pequeña". Lo medido en el ply de 50k es exactamente lo contrario:</p>
+
+<table>
+<tr><th>Magnitud (ply 50k, 7.5M splats)</th><th>Esperado</th><th>Medido</th></tr>
+<tr><td>Amplitud total de lóbulos (media RGB, suma de los 2)</td><td>~0.1–0.3 (corrección)</td><td class="hl">media 2.08, p90 4.6, max 14.4 — en un espacio de color [0,1]</td></tr>
+<tr><td>Ratio lóbulo/DC (splats con op&gt;0.3)</td><td>&lt;1</td><td class="hl">mediana 7, p90 ~400</td></tr>
+<tr><td>Splats con DC medio &lt; 0 (base clampada a negro)</td><td>~0%</td><td class="hl">33% (44% de los canales RGB)</td></tr>
+<tr><td>Splats cuyo color pico (DC+lóbulos) supera 1.0 (blanco)</td><td>pocos</td><td class="hl">75%  (&gt;2.0: 54%)</td></tr>
+<tr><td>Nitidez n=4·e<sup>b</sup></td><td>~4 (suave)</td><td>mediana 4, pero p99 57 y <span class="hl">max 2475</span></td></tr>
+</table>
+
+<svg viewBox="0 0 960 330" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="22" fill="#e6e8ee" font-size="15" font-weight="bold" text-anchor="middle">Cómo debía repartirse el color de un splat… y cómo se repartió</text>
+  <!-- escala: 1 unidad de color = 90 px; base y=290 -->
+  <!-- panel esperado -->
+  <text x="240" y="50" fill="#7ee787" font-size="13" font-weight="bold" text-anchor="middle">ESPERADO (lóbulo = corrección)</text>
+  <line x1="60" y1="290" x2="420" y2="290" stroke="#2a2f3c" stroke-width="1.5"/>
+  <!-- linea blanco=1.0 -->
+  <line x1="60" y1="200" x2="420" y2="200" stroke="#9aa3b2" stroke-dasharray="4 4"/>
+  <text x="64" y="194" fill="#9aa3b2" font-size="11">1.0 = blanco</text>
+  <!-- DC 0.45 -->
+  <rect x="150" y="249.5" width="80" height="40.5" fill="#6ea8fe"/>
+  <text x="190" y="305" fill="#9aa3b2" font-size="11" text-anchor="middle">DC = 0.45</text>
+  <!-- DC + lobe peak 0.45+0.15 -->
+  <rect x="270" y="249.5" width="80" height="40.5" fill="#6ea8fe"/>
+  <rect x="270" y="236" width="80" height="13.5" fill="#7ee787"/>
+  <text x="310" y="305" fill="#9aa3b2" font-size="11" text-anchor="middle">pico: DC + 0.15</text>
+  <text x="310" y="228" fill="#7ee787" font-size="11" text-anchor="middle">0.60 ✓</text>
+  <!-- panel medido -->
+  <text x="700" y="50" fill="#ff7b72" font-size="13" font-weight="bold" text-anchor="middle">MEDIDO — splat real #4956307 (fondo, op=1.0)</text>
+  <line x1="500" y1="290" x2="920" y2="290" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="500" y1="200" x2="920" y2="200" stroke="#9aa3b2" stroke-dasharray="4 4"/>
+  <text x="504" y="194" fill="#9aa3b2" font-size="11">1.0 = blanco</text>
+  <!-- DC = -0.03 (clampado a 0) -->
+  <rect x="560" y="290" width="80" height="3" fill="#ff7b72"/>
+  <text x="600" y="305" fill="#9aa3b2" font-size="11" text-anchor="middle">DC = −0.03 → 0</text>
+  <text x="600" y="282" fill="#ff7b72" font-size="11" text-anchor="middle">negro</text>
+  <!-- pico: 10.6 -> truncado con onda. 10.6*90=954px no cabe: barra rota -->
+  <rect x="700" y="70" width="80" height="220" fill="#ffb454"/>
+  <path d="M700,110 q20,-12 40,0 q20,12 40,0" fill="#0f1117" stroke="#0f1117" stroke-width="8"/>
+  <text x="740" y="305" fill="#9aa3b2" font-size="11" text-anchor="middle">pico: 0 + lóbulos</text>
+  <text x="740" y="62" fill="#ffb454" font-size="13" font-weight="bold" text-anchor="middle">10.6 (¡×10.6 blanco!)</text>
+  <!-- vista fuera del cono -->
+  <rect x="820" y="290" width="80" height="2" fill="#9aa3b2"/>
+  <text x="860" y="305" fill="#9aa3b2" font-size="11" text-anchor="middle">a &gt;27° del eje</text>
+  <text x="860" y="282" fill="#9aa3b2" font-size="11" text-anchor="middle">0.0 negro</text>
+</svg>
+<p class="figcap">Fig. 2 — Izquierda: la semántica que esperábamos. Derecha: un splat real del ply (fondo, a 1.21·extent, opacidad 1.0): base negra (DC negativo clampado) y dos lóbulos <b>apuntando al mismo eje</b> (θ=2.13, φ=3.73 idénticos, n=62 y 55) que suman un pico de <b>10.6</b>. Es un foco de teatro: negro desde casi todas partes, blanco cegador desde un cono de ~9°.</p>
+
+<h3>2.1 El "faro": perfil angular real del splat-ejemplo</h3>
+
+<svg viewBox="0 0 960 320" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="22" fill="#e6e8ee" font-size="15" font-weight="bold" text-anchor="middle">Color renderizado del splat #4956307 según el ángulo de la cámara a su eje</text>
+  <!-- area: x 80..900 (0..33 deg -> 24.8 px/deg), y 280..50 (0..11 -> 20.9 px/unidad) -->
+  <line x1="80" y1="280" x2="900" y2="280" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="80" y1="50" x2="80" y2="280" stroke="#2a2f3c" stroke-width="1.5"/>
+  <g fill="#9aa3b2" font-size="11" text-anchor="middle">
+    <text x="80" y="296">0°</text><text x="229" y="296">6°</text><text x="378" y="296">12°</text>
+    <text x="527" y="296">18°</text><text x="676" y="296">24°</text><text x="825" y="296">30°</text>
+  </g>
+  <g fill="#9aa3b2" font-size="11" text-anchor="end">
+    <text x="74" y="56">11</text><text x="74" y="160">5.5</text><text x="74" y="263">1.0</text><text x="74" y="284">0</text>
+  </g>
+  <!-- banda saturada (>1.0): y < 259 -->
+  <rect x="80" y="50" width="820" height="209" fill="#ff7b72" opacity="0.07"/>
+  <line x1="80" y1="259" x2="900" y2="259" stroke="#ff7b72" stroke-dasharray="4 4"/>
+  <text x="890" y="252" fill="#ff7b72" font-size="11" text-anchor="end">1.0 = ya es blanco puro en pantalla</text>
+  <!-- curva: puntos medidos (deg, val): 0,10.57 3,9.75 6,7.66 9,5.12 12,2.91 15,1.40 18,0.57 21,0.19 24,0.06 27,0.01 30,0 -->
+  <!-- x = 80+24.85*deg ; y = 280 - 20.9*val -->
+  <polyline fill="none" stroke="#ffb454" stroke-width="3"
+    points="80,59 155,76 229,120 304,173 378,219 453,251 527,268 602,276 676,279 751,280 825,280 900,280"/>
+  <!-- zonas -->
+  <text x="200" y="105" fill="#ff7b72" font-size="12" font-weight="bold">QUEMADO (hasta 16°: color &gt; 1)</text>
+  <text x="585" y="240" fill="#9aa3b2" font-size="12">PENUMBRA → NEGRO (&gt;27°: aporta 0)</text>
+  <!-- marcas de camaras -->
+  <circle cx="130" cy="59" r="5" fill="#7ee787"/><text x="130" y="46" fill="#7ee787" font-size="11" text-anchor="middle">cámaras train</text>
+  <circle cx="180" cy="80" r="5" fill="#7ee787"/>
+  <circle cx="240" cy="126" r="5" fill="#7ee787"/>
+  <circle cx="480" cy="258" r="6" fill="#ff7b72"/><text x="480" y="243" fill="#ff7b72" font-size="11" text-anchor="middle">cámara test</text>
+</svg>
+<p class="figcap">Fig. 3 — Perfil medido del splat-ejemplo (valores reales del ply). Combinado con el blending del rasterizer, los píxeles donde cae este splat <b>saturan a blanco hasta ~16°</b> de su eje y se apagan del todo a 27°. Las cámaras de train (verdes) viven dentro del cono y el ajuste fotométrico cuadra; una cámara test unos grados más allá recibe o un quemado o un agujero oscuro. Hay <b>726 splats</b> así de extremos solo en el fondo (op&gt;0.5, DC&lt;0, n&gt;25, amp&gt;3) — y decenas de miles en versiones más suaves.</p>
+
+<h2>3. El mecanismo del artefacto, vista a vista</h2>
+
+<svg viewBox="0 0 960 430" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="24" fill="#e6e8ee" font-size="15" font-weight="bold" text-anchor="middle">Por qué se ve bien desde train y revienta desde test</text>
+  <!-- parterre central -->
+  <ellipse cx="480" cy="290" rx="90" ry="38" fill="#1e222e" stroke="#2a2f3c"/>
+  <ellipse cx="480" cy="285" rx="70" ry="26" fill="#7a2d2d"/>
+  <text x="480" y="290" fill="#e6e8ee" font-size="11" text-anchor="middle">parterre (primer plano)</text>
+  <!-- anillo de camaras train -->
+  <g fill="#7ee787">
+    <circle cx="300" cy="350" r="7"/><circle cx="390" cy="372" r="7"/><circle cx="480" cy="378" r="7"/>
+    <circle cx="570" cy="372" r="7"/><circle cx="660" cy="350" r="7"/>
+    <circle cx="282" cy="312" r="7"/><circle cx="678" cy="312" r="7"/>
+  </g>
+  <text x="480" y="408" fill="#7ee787" font-size="12" text-anchor="middle">anillo de cámaras de TRAIN (orbitan el parterre, mirando hacia dentro)</text>
+  <!-- splat de fondo: copa de arbol -->
+  <circle cx="480" cy="90" r="14" fill="#ffb454"/>
+  <text x="480" y="68" fill="#ffb454" font-size="12" font-weight="bold" text-anchor="middle">splat de fondo (copa/cielo) con lóbulo-faro</text>
+  <!-- cono del lobulo hacia las camaras train de un lado -->
+  <path d="M480,90 L330,345 L450,372 Z" fill="#ffb454" opacity="0.18"/>
+  <path d="M480,90 L330,345" stroke="#ffb454" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <path d="M480,90 L450,372" stroke="#ffb454" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="368" y="240" fill="#ffb454" font-size="11" transform="rotate(60 368 240)">cono del lóbulo (~9-30°)</text>
+  <!-- camara test dentro del cono pero distinta posicion -->
+  <circle cx="400" cy="330" r="8" fill="#ff7b72"/>
+  <text x="398" y="318" fill="#ff7b72" font-size="11" text-anchor="middle">test A: DENTRO del cono</text>
+  <text x="398" y="350" fill="#ff7b72" font-size="11" text-anchor="middle">→ quemado blanco</text>
+  <!-- camara test fuera del cono -->
+  <circle cx="640" cy="260" r="8" fill="#ff7b72"/>
+  <text x="660" y="248" fill="#ff7b72" font-size="11" text-anchor="middle">test B: FUERA del cono</text>
+  <text x="660" y="278" fill="#ff7b72" font-size="11" text-anchor="middle">→ base DC=0 → negro/turbio</text>
+  <!-- nota -->
+  <rect x="40" y="50" width="250" height="120" rx="8" fill="#171a23" stroke="#2a2f3c"/>
+  <text x="55" y="72" fill="#e6e8ee" font-size="11" font-weight="bold">El fondo solo se ve desde un cono</text>
+  <text x="55" y="90" fill="#9aa3b2" font-size="11">estrecho de direcciones (las cámaras</text>
+  <text x="55" y="106" fill="#9aa3b2" font-size="11">orbitan el parterre): el lóbulo puede</text>
+  <text x="55" y="122" fill="#9aa3b2" font-size="11">casar TODAS las vistas train sin que</text>
+  <text x="55" y="138" fill="#9aa3b2" font-size="11">nada lo obligue a comportarse bien</text>
+  <text x="55" y="154" fill="#9aa3b2" font-size="11">unos grados más allá.</text>
+</svg>
+<p class="figcap">Fig. 4 — Geometría del problema. El primer plano se ve desde <b>todo el anillo</b> de cámaras (cobertura angular densa) → sus lóbulos, aunque grandes, quedan obligados a interpolar bien y el parterre se renderiza perfecto. El fondo (copas, cielo entre hojas, césped rasante) se ve desde un <b>cono estrecho</b> → el lóbulo solo está restringido dentro de ese cono, y fuera hace lo que quiera. Esto explica el dato de la tabla: el primer plano tiene lóbulos aún más grandes (amp mediana 2.63, pico&gt;1 en 91% de splats) y <b>no</b> se rompe; el daño no depende del tamaño del lóbulo sino de la <b>cobertura angular</b> de la zona.</p>
+
+<table>
+<tr><th>Zona (ply 50k)</th><th>% splats</th><th>amp lóbulos (mediana)</th><th>DC&lt;0</th><th>pico&gt;1</th><th>¿se rompe en test?</th></tr>
+<tr><td>Primer plano (r &lt; 1·extent)</td><td>66.8%</td><td>2.63</td><td>36.5%</td><td>91%</td><td class="hl2">No — cobertura angular densa lo disciplina</td></tr>
+<tr><td>Fondo (r &gt; 1·extent)</td><td>33.2%</td><td>0.20</td><td>26.5%</td><td>43.7%</td><td class="hl">Sí — cono estrecho: el lóbulo extrapola libre</td></tr>
+</table>
+
+<h2>4. Por qué el optimizador eligió esta solución (el trinquete del DC)</h2>
+
+<p>Hay dos asimetrías estructurales que empujan hacia la degeneración:</p>
+
+<div class="grid2">
+<div class="card">
+<h3 style="margin-top:0">a) Los lóbulos solo suman</h3>
+<p>La activación softplus hace <code>cᵢ ≥ 0</code>. Si una vista de train necesita que el splat se vea <b>más oscuro</b>, el único camino fotométrico es <b>bajar el DC</b> (el lóbulo no puede restar). El DC acaba haciendo de "compensador global hacia abajo" mientras los lóbulos ponen el color real por direcciones.</p>
+</div>
+<div class="card">
+<h3 style="margin-top:0">b) El clamp del DC es un trinquete</h3>
+<p>El render hace <code>clamp(DC, 0)</code>. En cuanto el DC cruza a negativo, <b>su gradiente fotométrico se hace exactamente 0</b> (la zona clampada es plana) → ya nada lo empuja de vuelta. Queda congelado justo debajo de cero — y de hecho <b>el 100% de los DC negativos medidos están en (−0.25, 0)</b>, aparcados al otro lado de la puerta. Desde ahí, el splat es 100% lóbulos.</p>
+</div>
+</div>
+
+<svg viewBox="0 0 960 270" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="22" fill="#e6e8ee" font-size="15" font-weight="bold" text-anchor="middle">El trinquete: gradiente del DC a través de clamp(DC, 0)</text>
+  <!-- eje -->
+  <line x1="80" y1="200" x2="900" y2="200" stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="490" y1="60" x2="490" y2="220" stroke="#9aa3b2" stroke-dasharray="4 4"/>
+  <text x="490" y="240" fill="#9aa3b2" font-size="12" text-anchor="middle">DC = 0</text>
+  <text x="250" y="240" fill="#ff7b72" font-size="12" text-anchor="middle">DC &lt; 0 (33% de splats viven aquí)</text>
+  <text x="730" y="240" fill="#9aa3b2" font-size="12" text-anchor="middle">DC &gt; 0</text>
+  <!-- salida del clamp -->
+  <polyline fill="none" stroke="#6ea8fe" stroke-width="3" points="80,200 490,200 900,90"/>
+  <text x="800" y="100" fill="#6ea8fe" font-size="12">color base renderizado</text>
+  <!-- gradiente -->
+  <rect x="80" y="60" width="410" height="36" rx="6" fill="#ff7b72" opacity="0.15"/>
+  <text x="285" y="83" fill="#ff7b72" font-size="12" font-weight="bold" text-anchor="middle">∂L/∂DC = 0 — zona muerta: nadie puede sacarlo de aquí</text>
+  <rect x="500" y="60" width="400" height="36" rx="6" fill="#7ee787" opacity="0.12"/>
+  <text x="700" y="83" fill="#7ee787" font-size="12" text-anchor="middle">gradiente vivo</text>
+  <!-- flecha trinquete -->
+  <path d="M560,160 L440,160" stroke="#ffb454" stroke-width="2.5" marker-end="url(#arr)"/>
+  <defs><marker id="arr" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#ffb454"/></marker></defs>
+  <text x="500" y="150" fill="#ffb454" font-size="11" text-anchor="middle">entra fácil…</text>
+  <text x="500" y="178" fill="#ffb454" font-size="11" text-anchor="middle">…no sale nunca</text>
+</svg>
+<p class="figcap">Fig. 5 — El oficial tiene el mismo clamp (gsplat <code>rendering.py:399</code>), así que esto <b>no es un bug del port</b>: es una dinámica que en el contexto del oficial (primitiva 3D vista desde muchos ángulos, 30k iters) no llega a degenerar, y aquí sí.</p>
+
+<h2>5. La evolución temporal: los lóbulos son el motor de la memorización tardía</h2>
+
+<table>
+<tr><th>Checkpoint</th><th>amp lóbulos (media)</th><th>DC medio &lt;0</th><th>nitidez p99 / max</th><th>pico&gt;1</th><th>PSNR test</th><th>PSNR train</th></tr>
+<tr><td>it 7 000</td><td>0.57</td><td>9.7%</td><td>12 / 53</td><td>49%</td><td>19.56</td><td>20.20</td></tr>
+<tr><td>it 30 000</td><td>1.55</td><td>31.2%</td><td>29 / 908</td><td>69%</td><td class="hl2">21.05 (pico)</td><td>24.57</td></tr>
+<tr><td>it 50 000</td><td class="hl">2.08 (+34%)</td><td class="hl">33.2%</td><td class="hl">57 / 2476 (×2)</td><td class="hl">75%</td><td class="hl">20.65 (−0.40)</td><td>24.28</td></tr>
+</table>
+
+<svg viewBox="0 0 960 320" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="22" fill="#e6e8ee" font-size="15" font-weight="bold" text-anchor="middle">Mientras los lóbulos crecen, el test cae</text>
+  <!-- x: it 0..50k -> 100..880 ; puntos 7k=209, 30k=568, 50k=880 -->
+  <line x1="100" y1="270" x2="900" y2="270" stroke="#2a2f3c" stroke-width="1.5"/>
+  <g fill="#9aa3b2" font-size="11" text-anchor="middle">
+    <text x="209" y="290">7k</text><text x="568" y="290">30k</text><text x="880" y="290">50k</text>
+  </g>
+  <!-- amp: 0.57,1.55,2.08 escala 0..2.2 -> y=270-95*v -->
+  <polyline fill="none" stroke="#ffb454" stroke-width="3" points="209,216 568,123 880,72"/>
+  <circle cx="209" cy="216" r="5" fill="#ffb454"/><circle cx="568" cy="123" r="5" fill="#ffb454"/><circle cx="880" cy="72" r="5" fill="#ffb454"/>
+  <text x="320" y="140" fill="#ffb454" font-size="12" font-weight="bold">amplitud media de lóbulos (0.57 → 1.55 → 2.08)</text>
+  <!-- test psnr: 19.56,21.05,20.65 ; escala 19..21.5 -> y = 270 - (v-19)*84 -->
+  <polyline fill="none" stroke="#6ea8fe" stroke-width="3" stroke-dasharray="6 4" points="209,223 568,98 880,131"/>
+  <circle cx="209" cy="223" r="5" fill="#6ea8fe"/><circle cx="568" cy="98" r="5" fill="#6ea8fe"/><circle cx="880" cy="131" r="5" fill="#6ea8fe"/>
+  <text x="620" y="75" fill="#6ea8fe" font-size="12" font-weight="bold">PSNR test (19.56 → 21.05 → 20.65)</text>
+  <!-- zona dañina -->
+  <rect x="568" y="40" width="312" height="230" fill="#ff7b72" opacity="0.07"/>
+  <text x="724" y="255" fill="#ff7b72" font-size="12" text-anchor="middle">30k→50k: amp +34%, nitidez p99 ×2, test −0.40</text>
+</svg>
+<p class="figcap">Fig. 6 — La caída 30k→50k de run6 (−0.40 dB) es <b>2.5× mayor</b> que la de run5 (−0.16) y run4 (−0.12): los lóbulos dan a la fase tardía un instrumento de memorización que SH3 no tenía. Nótese que hasta el train baja un poco (24.57→24.28): la solución degenerada ni siquiera es buena memorizando.</p>
+
+<h2>6. Distribuciones completas (ply 50k)</h2>
+
+<svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="20" fill="#e6e8ee" font-size="14" font-weight="bold" text-anchor="middle">Amplitud total de lóbulos por splat (media RGB, suma de los 2 lóbulos) — % de splats</text>
+  <!-- barras: bins [0-.25 25.6][.25-.5 3.5][.5-1 7.0][1-1.5 8.4][1.5-2 9.1][2-3 17.5][3-4 13.4][4-6 12.3][6-9 2.9][9-15 0.2] -->
+  <!-- x base 80, ancho 82, escala y: 100% -> 230px (8.98/%) ; base 260 -->
+  <g>
+    <rect x="85"  y="30"  width="74" height="230" fill="#6ea8fe"/>
+    <rect x="167" y="229" width="74" height="31"  fill="#6ea8fe"/>
+    <rect x="249" y="197" width="74" height="63"  fill="#6ea8fe"/>
+    <rect x="331" y="185" width="74" height="75"  fill="#ffb454"/>
+    <rect x="413" y="178" width="74" height="82"  fill="#ffb454"/>
+    <rect x="495" y="103" width="74" height="157" fill="#ff7b72"/>
+    <rect x="577" y="140" width="74" height="120" fill="#ff7b72"/>
+    <rect x="659" y="150" width="74" height="110" fill="#ff7b72"/>
+    <rect x="741" y="234" width="74" height="26"  fill="#ff7b72"/>
+    <rect x="823" y="258" width="74" height="2"   fill="#ff7b72"/>
+  </g>
+  <g fill="#e6e8ee" font-size="11" text-anchor="middle">
+    <text x="122" y="44">25.6%</text><text x="204" y="223">3.5</text><text x="286" y="191">7.0</text>
+    <text x="368" y="179">8.4</text><text x="450" y="172">9.1</text><text x="532" y="97">17.5</text>
+    <text x="614" y="134">13.4</text><text x="696" y="144">12.3</text><text x="778" y="228">2.9</text><text x="860" y="252">0.2</text>
+  </g>
+  <line x1="80" y1="260" x2="900" y2="260" stroke="#2a2f3c" stroke-width="1.5"/>
+  <g fill="#9aa3b2" font-size="10" text-anchor="middle">
+    <text x="122" y="276">0–.25</text><text x="204" y="276">.25–.5</text><text x="286" y="276">.5–1</text>
+    <text x="368" y="276">1–1.5</text><text x="450" y="276">1.5–2</text><text x="532" y="276">2–3</text>
+    <text x="614" y="276">3–4</text><text x="696" y="276">4–6</text><text x="778" y="276">6–9</text><text x="860" y="276">9–15</text>
+  </g>
+  <text x="480" y="296" fill="#9aa3b2" font-size="11" text-anchor="middle">amplitud (1.0 = blanco puro) — en azul lo razonable, en rojo lo degenerado: el 46% de los splats supera 2.0</text>
+</svg>
+
+<svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="20" fill="#e6e8ee" font-size="14" font-weight="bold" text-anchor="middle">Nitidez n = 4·e^b por lóbulo (15M lóbulos) — % de lóbulos</text>
+  <!-- bins: [<1 17.5][1-2 8.8][2-3.9 14.1][=4 init 15.4][4-8 24.1][8-16 12.6][16-32 4.9][32-64 1.75][64-128 .6][128-256 .18][>256 .04] -->
+  <!-- escala 24.1% -> 200px (8.3/%) base 260 -->
+  <g>
+    <rect x="85"  y="115" width="66" height="145" fill="#7ee787"/>
+    <rect x="159" y="187" width="66" height="73"  fill="#7ee787"/>
+    <rect x="233" y="143" width="66" height="117" fill="#7ee787"/>
+    <rect x="307" y="132" width="66" height="128" fill="#9aa3b2"/>
+    <rect x="381" y="60"  width="66" height="200" fill="#6ea8fe"/>
+    <rect x="455" y="155" width="66" height="105" fill="#6ea8fe"/>
+    <rect x="529" y="219" width="66" height="41"  fill="#ffb454"/>
+    <rect x="603" y="245" width="66" height="15"  fill="#ff7b72"/>
+    <rect x="677" y="255" width="66" height="5"   fill="#ff7b72"/>
+    <rect x="751" y="258" width="66" height="2"   fill="#ff7b72"/>
+    <rect x="825" y="259" width="66" height="1"   fill="#ff7b72"/>
+  </g>
+  <g fill="#e6e8ee" font-size="11" text-anchor="middle">
+    <text x="118" y="109">17.5%</text><text x="192" y="181">8.8</text><text x="266" y="137">14.1</text>
+    <text x="340" y="126">15.4</text><text x="414" y="54">24.1</text><text x="488" y="149">12.6</text>
+    <text x="562" y="213">4.9</text><text x="636" y="239">1.8</text><text x="710" y="249">0.6</text>
+    <text x="784" y="252">0.2</text><text x="858" y="253">.04</text>
+  </g>
+  <line x1="80" y1="260" x2="900" y2="260" stroke="#2a2f3c" stroke-width="1.5"/>
+  <g fill="#9aa3b2" font-size="10" text-anchor="middle">
+    <text x="118" y="276">&lt;1</text><text x="192" y="276">1–2</text><text x="266" y="276">2–4</text>
+    <text x="340" y="276">=4 (init)</text><text x="414" y="276">4–8</text><text x="488" y="276">8–16</text>
+    <text x="562" y="276">16–32</text><text x="636" y="276">32–64</text><text x="710" y="276">64–128</text>
+    <text x="784" y="276">128–256</text><text x="858" y="276">&gt;256</text>
+  </g>
+  <text x="480" y="296" fill="#9aa3b2" font-size="11" text-anchor="middle">verde = más ancho que el init (difuso, sano) · gris = congelado en el init · naranja/rojo = agujas (n&gt;16, semiancho ≲17°): 7.5% ≈ 1.1M lóbulos (n&gt;25: 3.8% ≈ 570k)</text>
+</svg>
+
+<svg viewBox="0 0 960 290" xmlns="http://www.w3.org/2000/svg">
+  <text x="480" y="20" fill="#e6e8ee" font-size="14" font-weight="bold" text-anchor="middle">Color base DC (medio RGB) por splat — % de splats</text>
+  <!-- bins: [-0.25-0 33.2][0-.25 17.6][.25-.5 14.9][.5-.75 10.5][.75-1 8.6][1-1.5 10.0][1.5-5 5.2] -->
+  <!-- escala 33.2 -> 210 (6.32/%) base 250 -->
+  <g>
+    <rect x="100" y="40"  width="100" height="210" fill="#ff7b72"/>
+    <rect x="210" y="139" width="100" height="111" fill="#6ea8fe"/>
+    <rect x="320" y="156" width="100" height="94"  fill="#6ea8fe"/>
+    <rect x="430" y="184" width="100" height="66"  fill="#6ea8fe"/>
+    <rect x="540" y="196" width="100" height="54"  fill="#6ea8fe"/>
+    <rect x="650" y="187" width="100" height="63"  fill="#ffb454"/>
+    <rect x="760" y="217" width="100" height="33"  fill="#ffb454"/>
+  </g>
+  <g fill="#e6e8ee" font-size="11" text-anchor="middle">
+    <text x="150" y="34">33.2%</text><text x="260" y="133">17.6</text><text x="370" y="150">14.9</text>
+    <text x="480" y="178">10.5</text><text x="590" y="190">8.6</text><text x="700" y="181">10.0</text><text x="810" y="211">5.2</text>
+  </g>
+  <line x1="90" y1="250" x2="880" y2="250" stroke="#2a2f3c" stroke-width="1.5"/>
+  <g fill="#9aa3b2" font-size="10" text-anchor="middle">
+    <text x="150" y="266">(−0.25, 0) clampado</text><text x="260" y="266">0–0.25</text><text x="370" y="266">0.25–0.5</text>
+    <text x="480" y="266">0.5–0.75</text><text x="590" y="266">0.75–1</text><text x="700" y="266">1–1.5</text><text x="810" y="266">&gt;1.5</text>
+  </g>
+  <text x="480" y="286" fill="#9aa3b2" font-size="11" text-anchor="middle">un tercio de los splats tiene la base aparcada en negativo (= negro renderizado, gradiente muerto) — todos justo bajo el 0, la firma del trinquete</text>
+</svg>
+
+<p>Otros dos datos curiosos de las distribuciones:</p>
+<ul>
+  <li><b>15.4% de lóbulos siguen exactamente en n=4</b> (su b nunca se movió del init) — son splats ocluidos o irrelevantes; ruido de fondo de la población.</li>
+  <li><b>13% de los splats tienen sus 2 lóbulos casi alineados</b> (cos &gt; 0.9; 4% prácticamente idénticos como el splat-ejemplo): en vez de cubrir dos direcciones, se apilan para hacer un faro más potente. Es otro síntoma de que la solución óptima local es "memoriza el cono de train", no "modela view-dependence real".</li>
+</ul>
+
+<h2>7. ¿Y por qué al oficial sí le funciona?</h2>
+
+<table>
+<tr><th></th><th>Beta Splatting oficial</th><th>Este repo (run6)</th></tr>
+<tr><td>Primitiva</td><td>Elipsoide 3D (beta kernel) — opaca y compacta, se ve desde <b>muchos ángulos</b></td><td>Surfel 2D — el fondo lo cubren <b>pilas translúcidas de splats rasantes</b> vistos desde un cono estrecho</td></tr>
+<tr><td>Iteraciones</td><td><b>30 000</b> (densify hasta 25k)</td><td>50 000 (densify hasta 45k) — justo las 20k extra donde los lóbulos degeneran (Fig. 6)</td></tr>
+<tr><td>Regularización de SB</td><td>Ninguna (no la necesita en su régimen)</td><td>Ninguna (heredado) — y aquí sí hace falta</td></tr>
+<tr><td>Cobertura angular del fondo</td><td>La que dé el dataset, pero la primitiva 3D obliga a consistencia geométrica</td><td>Cobertura rasante: el surfel puede orientarse para casar el cono y mentir fuera de él</td></tr>
+</table>
+
+<div class="note warn-box"><b>La conclusión honesta:</b> los SB no son malos en sí — son un amplificador. Sobre una geometría bien restringida añaden view-dependence real; sobre nuestra geometría de fondo (rasante, translúcida, infra-restringida) amplifican la memorización. El problema de fondo sigue siendo el mismo que diagnosticamos en run4/run5: <b>cobertura rasante del surfel 2D</b>. Los lóbulos solo le dieron una herramienta más afilada para sobreajustar.</div>
+
+<h2>8. Opciones sobre la mesa (sin aplicar nada aún)</h2>
+
+<table>
+<tr><th>#</th><th>Opción</th><th>Qué ataca de lo medido</th><th>Coste</th><th>Riesgo</th></tr>
+<tr><td>A</td><td><b>Regularizar amplitud</b>: <code>λ_sb·amp.mean()</code> en la loss (análogo a <code>opacity_reg</code>)</td><td>amp media 2.08 → fuerza "DC lleva el color, lóbulo corrige". Ataca directamente la Fig. 2</td><td>1 línea Python</td><td>λ a calibrar; si se pasa, mata la view-dependence útil</td></tr>
+<tr><td>B</td><td><b>Acotar la nitidez</b>: clamp/activación en b (p.ej. n ≤ 25, semiancho ≥ 13°)</td><td>Las agujas (~570k lóbulos con semiancho &lt;13°, max 1.4°). Ataca la Fig. 1/3</td><td>1 línea Python</td><td>Bajo — SH3 vivía bien sin nada más fino que ~30°</td></tr>
+<tr><td>C</td><td><b>Early-stop ~30k</b> (o decaer lr y densify como el oficial)</td><td>La fase 30k→50k donde el test SIEMPRE cae (runs 4, 5 y 6). Ataca la Fig. 6</td><td>Gratis</td><td>Ninguno; aun así el pico (21.05) no supera a run5 (21.30) — no basta solo</td></tr>
+<tr><td>D</td><td><b>sh_degree 1 + sb 2</b> (base direccional suave + lóbulos domados con A/B)</td><td>Da al DC algo de view-dependence suave para que no toda la carga caiga en los lóbulos</td><td>Config</td><td>+params; sin A/B probablemente degenera igual</td></tr>
+<tr><td>E</td><td><b>Migración a gsplat/3D</b> (palanca estructural #5b)</td><td>La causa raíz: cobertura rasante del surfel 2D (sección 7). Todos los runs 4-6 apuntan aquí</td><td>Alto (semanas)</td><td>Es otro proyecto; pero cada run barato que falla lo hace más inevitable</td></tr>
+</table>
+
+<div class="note ok-box"><b>Lectura recomendada de la tabla:</b> A+B+C juntos son un experimento barato y bien aislado ("SB domado") que responde la pregunta <i>¿los lóbulos aportan algo una vez no pueden memorizar?</i>. Si con A+B+C el test no supera claramente a run5 (21.14), la familia "paramétrica de color" queda agotada con dos resultados negativos y la señal a favor de E (3D) sería ya muy difícil de ignorar.</div>
+
+<p class="meta">Generado el 2026-06-07 · datos de <code>output/m360/flowers_beta_run6</code> (plys 7k/30k/50k) y <code>logs/flowers6.log</code> · relacionado: <code>diagnostico_ruido_flowers1.html</code>, <code>lambda_dist_2dgs_vs_beta.html</code></p>
+
+</div>
+</body>
+</html>

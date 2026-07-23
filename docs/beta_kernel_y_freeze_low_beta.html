@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>El parámetro β del kernel Beta — umbral β&lt;0.1 y el freeze del backward</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.9rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.45rem;margin:2.0em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.12rem;margin:1.5em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;font-family:"JetBrains Mono",monospace;font-size:.95rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  .legend{font-family:"JetBrains Mono",monospace;font-size:.85rem;margin:6px 0 0;display:flex;gap:14px;flex-wrap:wrap}
+  svg{max-width:100%;height:auto}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>El parámetro <b>β</b> del kernel Beta — el umbral <code>β&lt;0.1</code> y el <i>freeze</i> del backward</h1>
+<p class="sub">Qué es β, por qué los splats con β pequeña son "platos planos" del fondo, y qué congela exactamente el FIX #2 de run9. Doc de apoyo para <b>run30</b> (= run16 + <code>--freeze_low_beta</code>).</p>
+
+<div class="card note">
+<b>Aviso de nomenclatura:</b> el umbral del código NO es <code>β&lt;1</code> sino <code>β&lt;0.1</code>. β=1 es el caso de <i>referencia</i> (caída lineal, un cono). Lo que se congelaba son los splats con β <u>muy pequeña</u> (β&lt;0.1), que son casi planos. Abajo se ve por qué ese valor es especial.
+</div>
+
+<h2>1 · ¿Qué es β? La forma del splat</h2>
+<p>Cada splat reparte su peso sobre un disco según la distancia² al centro, <code>ρ</code> (0 = centro, 1 = borde; fuera del disco el peso es 0). El kernel de este repo es:</p>
+<div class="eq">G(ρ) = (1 − ρ)<sup>β</sup>　　　　α = opacidad · G(ρ)</div>
+<p>β es el <b>exponente que controla la forma</b> de esa caída. No cambia el tamaño del splat (eso es la escala), sino <i>cómo de concentrado o plano</i> está su peso dentro del disco:</p>
+<ul>
+<li><b class="lo">β → 0 (p. ej. 0.05):</b> <code>(1−ρ)<sup>0.05</sup></code> ≈ 1 en casi todo el disco → <b>meseta plana</b> ("plato"): pinta el disco entero casi con el mismo peso.</li>
+<li><b>β = 1:</b> caída <b>lineal</b> (un cono / tienda de campaña). Es el valor por defecto y la referencia.</li>
+<li><b class="hi">β grande (2, 5…):</b> pico <b>afilado</b> en el centro que cae rápido → splat puntual, de <b>detalle</b>.</li>
+</ul>
+
+<div class="card">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg">
+<line x1="60" y1="260.0" x2="700" y2="260.0" stroke="#2a2f3c" stroke-width="1"/>
+<text x="52" y="264.0" fill="#9aa3b2" font-size="11" text-anchor="end">0.00</text>
+<line x1="60" y1="200.0" x2="700" y2="200.0" stroke="#2a2f3c" stroke-width="1"/>
+<text x="52" y="204.0" fill="#9aa3b2" font-size="11" text-anchor="end">0.25</text>
+<line x1="60" y1="140.0" x2="700" y2="140.0" stroke="#2a2f3c" stroke-width="1"/>
+<text x="52" y="144.0" fill="#9aa3b2" font-size="11" text-anchor="end">0.50</text>
+<line x1="60" y1="80.0" x2="700" y2="80.0" stroke="#2a2f3c" stroke-width="1"/>
+<text x="52" y="84.0" fill="#9aa3b2" font-size="11" text-anchor="end">0.75</text>
+<line x1="60" y1="20.0" x2="700" y2="20.0" stroke="#2a2f3c" stroke-width="1"/>
+<text x="52" y="24.0" fill="#9aa3b2" font-size="11" text-anchor="end">1.00</text>
+<line x1="60.0" y1="20" x2="60.0" y2="260" stroke="#2a2f3c" stroke-width="1"/>
+<text x="60.0" y="276" fill="#9aa3b2" font-size="11" text-anchor="middle">0.00</text>
+<line x1="220.0" y1="20" x2="220.0" y2="260" stroke="#2a2f3c" stroke-width="1"/>
+<text x="220.0" y="276" fill="#9aa3b2" font-size="11" text-anchor="middle">0.25</text>
+<line x1="380.0" y1="20" x2="380.0" y2="260" stroke="#2a2f3c" stroke-width="1"/>
+<text x="380.0" y="276" fill="#9aa3b2" font-size="11" text-anchor="middle">0.50</text>
+<line x1="540.0" y1="20" x2="540.0" y2="260" stroke="#2a2f3c" stroke-width="1"/>
+<text x="540.0" y="276" fill="#9aa3b2" font-size="11" text-anchor="middle">0.75</text>
+<line x1="700.0" y1="20" x2="700.0" y2="260" stroke="#2a2f3c" stroke-width="1"/>
+<text x="700.0" y="276" fill="#9aa3b2" font-size="11" text-anchor="middle">1.00</text>
+<polyline points="60.0,20.0 66.4,20.1 72.8,20.2 79.2,20.4 85.6,20.5 92.0,20.6 98.4,20.7 104.8,20.9 111.2,21.0 117.6,21.1 124.0,21.3 130.4,21.4 136.8,21.5 143.2,21.7 149.6,21.8 156.0,21.9 162.4,22.1 168.8,22.2 175.2,22.4 181.6,22.5 188.0,22.7 194.4,22.8 200.8,23.0 207.2,23.1 213.6,23.3 220.0,23.4 226.4,23.6 232.8,23.7 239.2,23.9 245.6,24.1 252.0,24.2 258.4,24.4 264.8,24.6 271.2,24.8 277.6,24.9 284.0,25.1 290.4,25.3 296.8,25.5 303.2,25.7 309.6,25.9 316.0,26.1 322.4,26.2 328.8,26.4 335.2,26.7 341.6,26.9 348.0,27.1 354.4,27.3 360.8,27.5 367.2,27.7 373.6,27.9 380.0,28.2 386.4,28.4 392.8,28.6 399.2,28.9 405.6,29.1 412.0,29.4 418.4,29.7 424.8,29.9 431.2,30.2 437.6,30.5 444.0,30.7 450.4,31.0 456.8,31.3 463.2,31.6 469.6,32.0 476.0,32.3 482.4,32.6 488.8,32.9 495.2,33.3 501.6,33.7 508.0,34.0 514.4,34.4 520.8,34.8 527.2,35.2 533.6,35.6 540.0,36.1 546.4,36.5 552.8,37.0 559.2,37.5 565.6,38.0 572.0,38.6 578.4,39.1 584.8,39.7 591.2,40.3 597.6,41.0 604.0,41.7 610.4,42.5 616.8,43.3 623.2,44.1 629.6,45.1 636.0,46.1 642.4,47.2 648.8,48.5 655.2,49.9 661.6,51.5 668.0,53.4 674.4,55.7 680.8,58.6 687.2,62.6 693.6,69.4" fill="none" stroke="#ff7b72" stroke-width="2.4"/>
+<polyline points="60.0,20.0 66.4,20.2 72.8,20.5 79.2,20.7 85.6,21.0 92.0,21.2 98.4,21.5 104.8,21.7 111.2,22.0 117.6,22.3 124.0,22.5 130.4,22.8 136.8,23.0 143.2,23.3 149.6,23.6 156.0,23.9 162.4,24.1 168.8,24.4 175.2,24.7 181.6,25.0 188.0,25.3 194.4,25.6 200.8,25.9 207.2,26.2 213.6,26.5 220.0,26.8 226.4,27.1 232.8,27.4 239.2,27.8 245.6,28.1 252.0,28.4 258.4,28.7 264.8,29.1 271.2,29.4 277.6,29.8 284.0,30.1 290.4,30.5 296.8,30.8 303.2,31.2 309.6,31.6 316.0,32.0 322.4,32.3 328.8,32.7 335.2,33.1 341.6,33.5 348.0,33.9 354.4,34.3 360.8,34.8 367.2,35.2 373.6,35.6 380.0,36.1 386.4,36.5 392.8,37.0 399.2,37.5 405.6,37.9 412.0,38.4 418.4,38.9 424.8,39.4 431.2,39.9 437.6,40.5 444.0,41.0 450.4,41.6 456.8,42.1 463.2,42.7 469.6,43.3 476.0,43.9 482.4,44.5 488.8,45.2 495.2,45.8 501.6,46.5 508.0,47.2 514.4,47.9 520.8,48.7 527.2,49.5 533.6,50.2 540.0,51.1 546.4,51.9 552.8,52.8 559.2,53.7 565.6,54.7 572.0,55.7 578.4,56.7 584.8,57.8 591.2,59.0 597.6,60.2 604.0,61.5 610.4,62.8 616.8,64.3 623.2,65.9 629.6,67.5 636.0,69.4 642.4,71.4 648.8,73.6 655.2,76.0 661.6,78.9 668.0,82.1 674.4,86.1 680.8,91.0 687.2,97.7 693.6,108.6" fill="none" stroke="#ffb454" stroke-width="2.4"/>
+<polyline points="60.0,20.0 66.4,21.2 72.8,22.4 79.2,23.6 85.6,24.8 92.0,26.1 98.4,27.3 104.8,28.6 111.2,29.8 117.6,31.1 124.0,32.3 130.4,33.6 136.8,34.9 143.2,36.1 149.6,37.4 156.0,38.7 162.4,40.0 168.8,41.3 175.2,42.7 181.6,44.0 188.0,45.3 194.4,46.7 200.8,48.0 207.2,49.4 213.6,50.8 220.0,52.2 226.4,53.5 232.8,54.9 239.2,56.4 245.6,57.8 252.0,59.2 258.4,60.6 264.8,62.1 271.2,63.6 277.6,65.0 284.0,66.5 290.4,68.0 296.8,69.5 303.2,71.0 309.6,72.6 316.0,74.1 322.4,75.7 328.8,77.2 335.2,78.8 341.6,80.4 348.0,82.0 354.4,83.6 360.8,85.3 367.2,86.9 373.6,88.6 380.0,90.3 386.4,92.0 392.8,93.7 399.2,95.5 405.6,97.2 412.0,99.0 418.4,100.8 424.8,102.6 431.2,104.5 437.6,106.3 444.0,108.2 450.4,110.1 456.8,112.1 463.2,114.0 469.6,116.0 476.0,118.0 482.4,120.1 488.8,122.1 495.2,124.2 501.6,126.4 508.0,128.5 514.4,130.8 520.8,133.0 527.2,135.3 533.6,137.6 540.0,140.0 546.4,142.4 552.8,144.9 559.2,147.4 565.6,150.0 572.0,152.7 578.4,155.4 584.8,158.2 591.2,161.0 597.6,164.0 604.0,167.0 610.4,170.2 616.8,173.5 623.2,176.9 629.6,180.4 636.0,184.1 642.4,188.0 648.8,192.1 655.2,196.5 661.6,201.2 668.0,206.3 674.4,212.0 680.8,218.4 687.2,226.1 693.6,236.0" fill="none" stroke="#e0af68" stroke-width="2.4"/>
+<polyline points="60.0,20.0 66.4,22.4 72.8,24.8 79.2,27.2 85.6,29.6 92.0,32.0 98.4,34.4 104.8,36.8 111.2,39.2 117.6,41.6 124.0,44.0 130.4,46.4 136.8,48.8 143.2,51.2 149.6,53.6 156.0,56.0 162.4,58.4 168.8,60.8 175.2,63.2 181.6,65.6 188.0,68.0 194.4,70.4 200.8,72.8 207.2,75.2 213.6,77.6 220.0,80.0 226.4,82.4 232.8,84.8 239.2,87.2 245.6,89.6 252.0,92.0 258.4,94.4 264.8,96.8 271.2,99.2 277.6,101.6 284.0,104.0 290.4,106.4 296.8,108.8 303.2,111.2 309.6,113.6 316.0,116.0 322.4,118.4 328.8,120.8 335.2,123.2 341.6,125.6 348.0,128.0 354.4,130.4 360.8,132.8 367.2,135.2 373.6,137.6 380.0,140.0 386.4,142.4 392.8,144.8 399.2,147.2 405.6,149.6 412.0,152.0 418.4,154.4 424.8,156.8 431.2,159.2 437.6,161.6 444.0,164.0 450.4,166.4 456.8,168.8 463.2,171.2 469.6,173.6 476.0,176.0 482.4,178.4 488.8,180.8 495.2,183.2 501.6,185.6 508.0,188.0 514.4,190.4 520.8,192.8 527.2,195.2 533.6,197.6 540.0,200.0 546.4,202.4 552.8,204.8 559.2,207.2 565.6,209.6 572.0,212.0 578.4,214.4 584.8,216.8 591.2,219.2 597.6,221.6 604.0,224.0 610.4,226.4 616.8,228.8 623.2,231.2 629.6,233.6 636.0,236.0 642.4,238.4 648.8,240.8 655.2,243.2 661.6,245.6 668.0,248.0 674.4,250.4 680.8,252.8 687.2,255.2 693.6,257.6" fill="none" stroke="#6ea8fe" stroke-width="2.4"/>
+<polyline points="60.0,20.0 66.4,24.8 72.8,29.5 79.2,34.2 85.6,38.8 92.0,43.4 98.4,47.9 104.8,52.4 111.2,56.9 117.6,61.3 124.0,65.6 130.4,69.9 136.8,74.1 143.2,78.3 149.6,82.5 156.0,86.6 162.4,90.7 168.8,94.7 175.2,98.6 181.6,102.5 188.0,106.4 194.4,110.2 200.8,114.0 207.2,117.7 213.6,121.4 220.0,125.0 226.4,128.6 232.8,132.1 239.2,135.6 245.6,139.0 252.0,142.4 258.4,145.7 264.8,149.0 271.2,152.3 277.6,155.5 284.0,158.6 290.4,161.7 296.8,164.7 303.2,167.7 309.6,170.7 316.0,173.6 322.4,176.5 328.8,179.3 335.2,182.0 341.6,184.7 348.0,187.4 354.4,190.0 360.8,192.6 367.2,195.1 373.6,197.6 380.0,200.0 386.4,202.4 392.8,204.7 399.2,207.0 405.6,209.2 412.0,211.4 418.4,213.5 424.8,215.6 431.2,217.7 437.6,219.7 444.0,221.6 450.4,223.5 456.8,225.3 463.2,227.1 469.6,228.9 476.0,230.6 482.4,232.3 488.8,233.9 495.2,235.4 501.6,236.9 508.0,238.4 514.4,239.8 520.8,241.2 527.2,242.5 533.6,243.8 540.0,245.0 546.4,246.2 552.8,247.3 559.2,248.4 565.6,249.4 572.0,250.4 578.4,251.3 584.8,252.2 591.2,253.1 597.6,253.9 604.0,254.6 610.4,255.3 616.8,255.9 623.2,256.5 629.6,257.1 636.0,257.6 642.4,258.1 648.8,258.5 655.2,258.8 661.6,259.1 668.0,259.4 674.4,259.6 680.8,259.8 687.2,259.9 693.6,260.0" fill="none" stroke="#7ee787" stroke-width="2.4"/>
+<polyline points="60.0,20.0 66.4,31.8 72.8,43.1 79.2,53.9 85.6,64.3 92.0,74.3 98.4,83.9 104.8,93.0 111.2,101.8 117.6,110.2 124.0,118.3 130.4,126.0 136.8,133.3 143.2,140.4 149.6,147.1 156.0,153.5 162.4,159.6 168.8,165.5 175.2,171.0 181.6,176.3 188.0,181.4 194.4,186.2 200.8,190.7 207.2,195.0 213.6,199.1 220.0,203.0 226.4,206.7 232.8,210.2 239.2,213.6 245.6,216.7 252.0,219.7 258.4,222.5 264.8,225.1 271.2,227.6 277.6,229.9 284.0,232.2 290.4,234.2 296.8,236.2 303.2,238.0 309.6,239.7 316.0,241.3 322.4,242.8 328.8,244.2 335.2,245.6 341.6,246.8 348.0,247.9 354.4,249.0 360.8,250.0 367.2,250.9 373.6,251.7 380.0,252.5 386.4,253.2 392.8,253.9 399.2,254.5 405.6,255.1 412.0,255.6 418.4,256.0 424.8,256.5 431.2,256.9 437.6,257.2 444.0,257.5 450.4,257.8 456.8,258.1 463.2,258.3 469.6,258.5 476.0,258.7 482.4,258.9 488.8,259.1 495.2,259.2 501.6,259.3 508.0,259.4 514.4,259.5 520.8,259.6 527.2,259.7 533.6,259.7 540.0,259.8 546.4,259.8 552.8,259.8 559.2,259.9 565.6,259.9 572.0,259.9 578.4,259.9 584.8,260.0 591.2,260.0 597.6,260.0 604.0,260.0 610.4,260.0 616.8,260.0 623.2,260.0 629.6,260.0 636.0,260.0 642.4,260.0 648.8,260.0 655.2,260.0 661.6,260.0 668.0,260.0 674.4,260.0 680.8,260.0 687.2,260.0 693.6,260.0" fill="none" stroke="#c792ea" stroke-width="2.4"/>
+<text x="380" y="296" fill="#9aa3b2" font-size="12" text-anchor="middle">ρ  (distancia² al centro del splat — 0=centro, 1=borde)</text>
+<text x="16" y="140" fill="#9aa3b2" font-size="12" text-anchor="middle" transform="rotate(-90 16 140)">G(ρ) = peso del splat</text>
+</svg>
+<div class="legend"><span style="color:#ff7b72">━ β=0.05</span> <span style="color:#ffb454">━ β=0.1</span> <span style="color:#e0af68">━ β=0.5</span> <span style="color:#6ea8fe">━ β=1.0</span> <span style="color:#7ee787">━ β=2.0</span> <span style="color:#c792ea">━ β=5.0</span></div>
+<p class="meta" style="margin-top:10px">Mismas opacidad y tamaño; sólo cambia β. Fíjate en la curva <b class="lo">roja (β=0.05)</b>: se queda pegada arriba (peso ≈ 1) hasta casi el borde = <b>plato plano</b>. La <b class="hi">morada (β=5)</b> se desploma enseguida = <b>pico</b>. (Curvas recortadas en ρ=0.99; justo en ρ=1 el rasterizer aplica un <code>clamp 1e-6</code> y hay un escalón que aquí se omite.)</p>
+</div>
+
+<h3>¿Quién usa β pequeña en la práctica?</h3>
+<p>Los <b>fondos planos y grandes</b> (césped, cielo, pared rasante): un splat enorme y casi uniforme cubre mucha área con poco detalle → la red empuja su β hacia abajo. Son justo los splats del <b>velo / error de fondo</b> del proyecto. Por eso si tocar su gradiente cambia algo, se notaría en el fondo.</p>
+
+<h2>2 · Por qué <code>β&lt;0.1</code> es un umbral especial (riesgo de NaN)</h2>
+<p>En el backward, el gradiente de la <b>propia β</b> es:</p>
+<div class="eq">∂α/∂β = α · ln(1 − ρ)</div>
+<p>El <code>ln(1−ρ)</code> se va a <b>−∞</b> cuando ρ→1 (el borde del disco). Con β diminuta el kernel es casi plano, así que muchísimos píxeles caen cerca del borde con peso aún apreciable → ese <code>ln</code> puede <b>explotar a NaN</b>. Por eso el código <b>salta el cálculo del gradiente de β</b> cuando <code>β&lt;0.1</code>. Hasta aquí, idéntico en la versión vieja y en la de run9.</p>
+<p><b>La diferencia entre las dos versiones</b> está en <i>qué más</i> se saltaba con ese umbral:</p>
+
+<h2>3 · El <i>freeze</i>: qué congela exactamente el FIX #2</h2>
+<table>
+<tr><th>Gradiente</th><th>Versión PRE-run9 (<span class="bad">freeze ON</span>)</th><th>Versión run9 (<span class="ok">freeze OFF · default</span>)</th></tr>
+<tr><td><b>Color</b> (SH)</td><td>✅ se calcula</td><td>✅ se calcula</td></tr>
+<tr><td><b>Normal</b></td><td>✅ se calcula</td><td>✅ se calcula</td></tr>
+<tr><td><b>β</b> (∂α/∂β)</td><td>❌ saltado (NaN)</td><td>❌ saltado (NaN)</td></tr>
+<tr><td><b>Posición / escala / rotación</b> (∂α/∂ρ)</td><td><b class="bad">❌ CONGELADO</b></td><td><b class="ok">✅ se calcula</b></td></tr>
+<tr><td><b>Opacidad</b> (∂α/∂opa)</td><td><b class="bad">❌ CONGELADO</b></td><td><b class="ok">✅ se calcula</b></td></tr>
+</table>
+<p>En el código viejo había un <code>continue</code> que, para los splats con β&lt;0.1, saltaba <b>todo</b> el resto del bucle. Color y normal sobreviven porque se calculan <i>antes</i> de ese punto; pero <b>geometría y opacidad quedaban congeladas</b>: esos splats no se podían mover, redimensionar ni cambiar de opacidad. run9 movió el guard para que <u>sólo</u> saltara el gradiente de β y dejó geometría/opacidad vivas.</p>
+
+<pre><code>// backward.cu  (--freeze_low_beta reproduce el camino viejo)
+if (freeze_low_beta &amp;&amp; beta_j &lt; 0.1f)
+    continue;                 // ← ON: congela geometría+opacidad+β del splat
+if (beta_j &gt;= 0.1f) { ... grad de β ... }   // saltado igual en ambos
+// ... grad de geometría/opacidad ...   // OFF (default): siempre vivo</code></pre>
+
+<h2>4 · Ejemplo de juguete (1 splat, 1 píxel)</h2>
+<p>Un solo splat con <b>opacidad 0.8</b>, y un píxel que cae a media distancia del centro (<b>ρ = 0.5</b>, así <code>1−ρ = 0.5</code>). Calculamos los gradientes para tres β. Recuerda <code>α = 0.8·G</code> y <code>∂α/∂opa = G</code>:</p>
+<table>
+<tr><th>β</th><th>G=(0.5)<sup>β</sup></th><th>α</th><th>∂α/∂ρ <span class="meta">(→ pos/escala/rot)</span></th><th>∂α/∂opa <span class="meta">(→ opacidad)</span></th><th>∂α/∂β <span class="meta">(→ β)</span></th></tr>
+<tr><td><b class="lo">0.05</b></td><td>0.9659</td><td>0.7727</td><td><b class="lo">−0.077</b></td><td>0.966</td><td>−0.536 <span class="meta">(saltado)</span></td></tr>
+<tr><td>1.0</td><td>0.5000</td><td>0.4000</td><td>−0.800</td><td>0.500</td><td>−0.277</td></tr>
+<tr><td><b class="hi">5.0</b></td><td>0.0312</td><td>0.0250</td><td>−0.250</td><td>0.031</td><td>−0.017 <span class="meta">(activo)</span></td></tr>
+</table>
+
+<div class="card warn-box">
+<b>La clave del juguete:</b> mira <code>∂α/∂ρ</code> para β=0.05: vale <b class="lo">−0.077</b>, ~10× más pequeño que para β=1 (−0.80). Esto NO es casualidad:
+<div class="eq">∂α/∂ρ = −β · α / (1−ρ)</div>
+ese factor <b>β</b> multiplicando hace que el gradiente de geometría de un splat de β diminuta sea <b>de por sí minúsculo</b>. Es decir: aunque NO lo congeles (run9), un splat con β=0.05 <b>apenas se mueve</b> por esta vía. Por eso la hipótesis de run30 es que el <i>freeze</i> sea <b>casi un no-op</b> — congelar algo que ya era casi cero.
+</div>
+
+<h3>¿Qué hace cada versión con la fila β=0.05?</h3>
+<ul>
+<li><span class="bad">freeze ON (viejo / run30):</span> pone a <b>0</b> las tres columnas de geometría/opacidad/β → ese splat queda clavado en su sitio, tamaño y opacidad. Sólo cambia su color.</li>
+<li><span class="ok">freeze OFF (run9 / run16):</span> aplica <code>∂α/∂ρ=−0.077</code> y <code>∂α/∂opa=0.966</code> (sólo se salta la β). El splat puede reajustarse, aunque poco por la vía de ρ.</li>
+</ul>
+<p>Ojo a un matiz: <code>∂α/∂opa = G = 0.966</code> NO es pequeño. Aunque el movimiento de geometría sea ínfimo, la <b>opacidad</b> de los splats de fondo SÍ recibe un gradiente sano que el freeze mataría. Ahí podría estar la diferencia real entre run30 y run16.</p>
+
+<h2>5 · Qué mide run30</h2>
+<p><b>run30 = run16 + <code>--freeze_low_beta</code></b> (todo lo demás idéntico: MCMC, cap 7.5M, lambda_dist 10, ruido run9). Es el A/B aislado y bit-exacto del FIX #2:</p>
+<table>
+<tr><th>Resultado run30 vs run16 (honesto)</th><th>Interpretación</th></tr>
+<tr><td><b>≈ igual</b></td><td>El FIX #2 es casi un <b>no-op</b> (pocos splats con β&lt;0.1, o su gradiente ya era ínfimo). La "mejora de run9" venía de FIX #1/#3, no de este.</td></tr>
+<tr><td><b>run30 PEOR</b></td><td>Descongelar geometría/opacidad de los splats de fondo <b>SÍ ayudaba</b> → el FIX #2 estaba justificado.</td></tr>
+<tr><td><b>run30 MEJOR</b></td><td>Sorpresa: congelarlos sería preferible (esos splats movibles alimentaban el velo). El fix habría sido contraproducente.</td></tr>
+</table>
+<div class="note">A vigilar en el log de run30: <b>cuántos splats tienen β&lt;0.1</b>. Si son ~0, el A/B saldrá plano por construcción y no concluye nada. Requiere recompilar el rasterizer en el servidor (cambió la ABI del backward).</div>
+
+<p class="meta" style="margin-top:32px">Relacionado: <code>docs/backward_logica_y_diagnostico_run7_run8.html</code> (los 3 fixes del backward) · <code>CLAUDE.md</code> (flag <code>--freeze_low_beta</code>, historial). Generado para run30.</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clamp de radio, huecos negros y el techo del rasterizer</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .hl{color:var(--danger);font-weight:700}
+  .hl2{color:var(--accent2);font-weight:700}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  ul{margin:.5em 0 .5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .bar{height:14px;border-radius:7px;background:linear-gradient(90deg,#6ea8fe,#ff7b72);display:inline-block;vertical-align:middle}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Clamp de radio, huecos negros y el techo del rasterizer</h1>
+<p class="sub">Por qué recortar el radio en <code>forward.cu</code> puede agravar los huecos negros, y por qué el rasterizer 2DGS se desborda con la geometría pesada de run4. Con mediciones reales sobre el modelo de run3 (bonsai, 2.5M splats).</p>
+<p class="meta">Doc generado a partir del análisis del crash <code>OOM "1050566 GiB"</code> en bonsai_beta_run4 (iter ~11k).</p>
+
+<h2>1. Qué es el "radio" de un splat</h2>
+<div class="card">
+<p>Cuando un surfel se proyecta a la pantalla ocupa una elipse. El <code>radius</code> (en <code>forward.cu:234</code>) es el <b>tamaño en píxeles de esa huella</b>: cuántos píxeles alrededor del centro cubre ese splat.</p>
+<p>Ese radio decide <b>a cuántos tiles (bloques de 16×16 px) toca</b> el splat y, por tanto, <b>a cuántos píxeles aporta su color</b>. Un surfel grande de fondo, o uno pequeño pero muy cerca de la cámara, puede proyectarse a cientos o miles de píxeles.</p>
+</div>
+
+<svg viewBox="0 0 920 220" role="img" aria-label="Diagrama: splat completo vs splat recortado a 200px">
+  <rect x="0" y="0" width="920" height="220" fill="#0b0d13" rx="10"/>
+  <!-- izquierda: splat completo -->
+  <text x="150" y="28" fill="#9aa3b2" font-size="14" text-anchor="middle">Splat grande de fondo (real)</text>
+  <rect x="30" y="40" width="240" height="150" fill="#10131b" stroke="#2a2f3c"/>
+  <ellipse cx="150" cy="115" rx="115" ry="70" fill="#6ea8fe" opacity="0.35"/>
+  <ellipse cx="150" cy="115" rx="115" ry="70" fill="none" stroke="#6ea8fe"/>
+  <text x="150" y="119" fill="#e6e8ee" font-size="12" text-anchor="middle">cubre toda la zona</text>
+  <!-- centro: flecha -->
+  <text x="460" y="110" fill="#ffb454" font-size="13" text-anchor="middle">clamp 200px</text>
+  <path d="M 410 120 L 510 120" stroke="#ffb454" stroke-width="2" marker-end="url(#a)"/>
+  <defs><marker id="a" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#ffb454"/></marker></defs>
+  <!-- derecha: splat recortado -->
+  <text x="770" y="28" fill="#9aa3b2" font-size="14" text-anchor="middle">Tras clamp: cola eliminada</text>
+  <rect x="650" y="40" width="240" height="150" fill="#10131b" stroke="#2a2f3c"/>
+  <ellipse cx="770" cy="115" rx="115" ry="70" fill="#ff7b72" opacity="0.12" stroke="#ff7b72" stroke-dasharray="4 4"/>
+  <ellipse cx="770" cy="115" rx="42" ry="42" fill="#6ea8fe" opacity="0.5"/>
+  <ellipse cx="770" cy="115" rx="42" ry="42" fill="none" stroke="#6ea8fe"/>
+  <text x="770" y="170" fill="#ff7b72" font-size="12" text-anchor="middle">periferia → fondo NEGRO</text>
+</svg>
+
+<h2>2. Por qué un clamp a 200px puede crear/agravar huecos</h2>
+<div class="card danger-box">
+<p>Si fijo <code>radius = min(radius, 200)</code>, le digo al rasterizer:</p>
+<p style="margin-left:14px;color:var(--warn)">«Este splat, por grande que sea de verdad, solo puede pintar un círculo de 200px de radio. Más allá de eso, <b>no existe</b>.»</p>
+<p>El problema es <b>quién</b> cubre las zonas grandes de fondo. Tus huecos negros (césped, cielo, paredes) son regiones amplias con <b>pocos</b> splats, y los que hay son <b>grandes</b> precisamente para tapar mucha superficie con poca primitiva. Si truncas su radio a 200px:</p>
+<ul>
+  <li>El splat sigue existiendo, pero su <b>"cola"</b> (lo que pintaba más allá de 200px) <b>desaparece de golpe</b>.</li>
+  <li>Esa periferia que tapaba el fondo queda <b>sin cubrir</b> → se ve el fondo negro detrás.</li>
+  <li>Es decir: <b>el clamp convierte un splat que tapaba un hueco en uno recortado que lo deja ver.</b></li>
+</ul>
+<p>Es el mecanismo <b>contrario</b> al que necesitas: quieres <b>más</b> cobertura en los fondos, y el clamp <b>quita</b> cobertura justo a los splats que más área tapan.</p>
+</div>
+
+<div class="card ok-box">
+<h3 style="margin-top:.2em">El matiz</h3>
+<p>No es seguro que empeore — depende de si esos splats grandes son:</p>
+<ul>
+  <li><b>Legítimos</b> (tapan fondo de verdad) → el clamp <b>sí</b> abre huecos.</li>
+  <li><b>Degenerados</b> (proyección rota, casi sobre la cámara, gigantes por <code>opacity_reset</code>) → el clamp <b>no</b> duele; esos había que matarlos igual.</li>
+</ul>
+<p>En la práctica hay de los dos, así que el clamp es un instrumento <b>romo</b>. <b>La sección 4 mide cuántos hay de cada tipo.</b></p>
+</div>
+
+<h2>3. El techo duro del rasterizer (la causa real del OOM)</h2>
+<div class="card">
+<p>El crash <code>Tried to allocate 1050566.83 GiB</code> <b>no es falta de VRAM</b> (la GPU tiene 95 GB libres). Es un <b>desbordamiento de entero</b> dentro del rasterizer:</p>
+<table>
+<tr><th>Lugar</th><th style="text-align:left">Qué pasa</th></tr>
+<tr><td><code>rasterizer_impl.cu:285</code></td><td style="text-align:left"><code>int num_rendered;</code> — contador de 32 bits</td></tr>
+<tr><td><code>rasterizer_impl.cu:282</code></td><td style="text-align:left">suma acumulada de <code>tiles_touched</code> de todos los splats</td></tr>
+<tr><td><code>rasterizer_impl.cu:313</code></td><td style="text-align:left"><code>cub::DeviceRadixSort</code> recibe <code>num_items</code> como <b>int</b> (máx ≈ 2.147e9)</td></tr>
+</table>
+<p><code>num_rendered</code> = nº total de intersecciones <code>splat × tile</code> en un frame. Cuando supera <span class="hl">~2.147e9</span>, el <code>int</code> da la vuelta a negativo → <code>required(negativo)</code> se castea a <code>size_t</code> → tamaño absurdo → OOM fantasma de ~2⁶⁰ bytes. El valor casi idéntico en cada crash es la firma del desbordamiento.</p>
+<p class="note"><b>Subir los buffers a int64 NO sirve:</b> <code>cub::DeviceRadixSort</code> está limitado a <code>num_items</code> de tipo <code>int</code>. Es un <b>techo arquitectónico</b> del rasterizer 2DGS: no puede ordenar más de ~2.147e9 intersecciones por frame, venga de donde venga.</p>
+</div>
+
+<h2>4. Medición real — ¿cuántos splats grandes hay?</h2>
+<p class="meta">Sobre <code>bonsai_beta_run3 / iteration_50000</code> (2.5M splats, mismo dataset y cap que run4, pero <b>sin</b> los extras run4 — y <b>completó</b> sin desbordar). Render aprox 1600×1066, grid 100×67 = 6700 tiles. Radio en pantalla ≈ <code>3·scale_mundo·fx/profundidad</code>, promediado sobre 20 cámaras.</p>
+
+<div class="card card2">
+<h3 style="margin-top:.2em">4a. Uso del techo de intersecciones</h3>
+<table>
+<tr><th>Métrica</th><th>Valor</th><th>% del techo (2.147e9)</th></tr>
+<tr><td>Intersecciones por frame (media)</td><td>1.119e9</td><td>52.1%</td></tr>
+<tr><td>Intersecciones por frame (cámara peor)</td><td class="hl">1.918e9</td><td class="hl">89.3%</td></tr>
+</table>
+<p class="note danger-box"><b>run3 ya vivía al 89% del techo</b> en su peor cámara. Casi no hay margen. run4 (con <code>opacity_reset</code> + <code>lambda_dist</code>) añade cobertura sobre una geometría parecida → cruza el techo hacia el iter ~11k. <b>El cuello no es un bug puntual: es que esta escena, a 2.5M y 1600px, ya está al límite físico del rasterizer.</b></p>
+</div>
+
+<div class="card card2">
+<h3 style="margin-top:.2em">4b. Splats "grandes" por umbral de radio en pantalla</h3>
+<table>
+<tr><th>Umbral (px)</th><th># splats (media)</th><th>% del total</th><th>% de intersecciones que aportan</th></tr>
+<tr><td>&gt; 50</td><td>824,612</td><td>33.0%</td><td>97.9%</td></tr>
+<tr><td class="hl">&gt; 200</td><td class="hl">266,434</td><td class="hl">10.7%</td><td class="hl">86.8%</td></tr>
+<tr><td>&gt; 500</td><td>115,605</td><td>4.6%</td><td>63.7%</td></tr>
+<tr><td>&gt; 1000</td><td>60,172</td><td>2.4%</td><td>35.5%</td></tr>
+<tr><td>&gt; 2000</td><td>30,690</td><td>1.2%</td><td>18.1%</td></tr>
+</table>
+<p class="note danger-box"><b>Veredicto sobre el clamp a 200px:</b> tocaría <b>~266k splats</b> (10.7% del total) que cargan el <span class="hl">86.8% de todo el trabajo de render</span>. Son los splats grandes <b>legítimos</b> que tapan el fondo. Recortarlos a 200px <b>destrozaría la cobertura → más huecos negros, no menos.</b> Confirma tu intuición: a 200px es mala idea.</p>
+</div>
+
+<div class="card card2">
+<h3 style="margin-top:.2em">4c. Outliers en escala de mundo (degenerados de verdad)</h3>
+<p class="meta">Extensión de escena (radius) = 5.166 → el clamp de <code>get_scaling</code> a <code>0.1·extent</code> = 0.517.</p>
+<table>
+<tr><th>scale_mundo &gt;</th><th># splats</th><th>% del total</th></tr>
+<tr><td>0.517 (= clamp actual)</td><td>40,426</td><td>1.62%</td></tr>
+<tr><td>1.0</td><td>17,945</td><td>0.72%</td></tr>
+<tr><td>2.0</td><td>7,131</td><td>0.29%</td></tr>
+<tr><td>5.0</td><td>1,348</td><td>0.05%</td></tr>
+</table>
+<p>Distribución de escala mundo: media 0.083, <b>p50 0.038, p99 0.76, máx 41.2</b>. Ese <b>máx = 41.2</b> (≈540× la mediana) es claramente degenerado. Hay una cola pequeña (&lt;0.3%) de splats verdaderamente patológicos; el clamp de mundo y un corte de radio <b>alto</b> (≥1500px) los atrapan sin tocar a los legítimos.</p>
+</div>
+
+<h2>5. Conclusión y opciones reencuadradas</h2>
+<div class="card">
+<p>El techo (~2.147e9 intersecciones/frame) es <b>arquitectónico</b> y run3 ya lo roza al 89%. Por tanto, para mantener la dinámica run4 (que añade cobertura) hay que <b>comprar margen</b>. Las vías, con el coste real medido:</p>
+<table>
+<tr><th>Opción</th><th style="text-align:left">Efecto sobre el techo</th><th style="text-align:left">Riesgo de huecos</th></tr>
+<tr><td class="hl">Clamp radio 200px</td><td style="text-align:left">Gran margen</td><td style="text-align:left" class="hl">ALTO — corta 87% de la cobertura</td></tr>
+<tr><td>Clamp radio <b>alto</b> (~1500px)</td><td style="text-align:left">Margen modesto (solo cola degenerada)</td><td style="text-align:left">Bajo</td></tr>
+<tr><td class="hl2">Bajar resolución (<code>-r 2</code> → 800px)</td><td style="text-align:left"><b>~4× margen</b> (tiles ∝ resolución²)</td><td style="text-align:left">Ninguno (pierde detalle, no cobertura)</td></tr>
+<tr><td>Bajar <code>cap_max</code> (2.5M→1.5M)</td><td style="text-align:left">~1.6× margen (lineal)</td><td style="text-align:left">Medio (menos presupuesto = menos detalle)</td></tr>
+<tr><td>Domar dinámica tipo run3</td><td style="text-align:left">Vuelve a ~89% (run3)</td><td style="text-align:left">Bajo, pero descarta el experimento run4</td></tr>
+</table>
+<p class="note ok-box"><b>Lectura recomendada de los datos:</b> el clamp a 200px queda descartado. La palanca de mayor margen y sin coste de cobertura es <b>bajar la resolución de render</b> (el techo escala con el nº de tiles ≈ resolución²); a 800px de ancho ganas ~4× de margen y run4 cabe holgado. Si quieres conservar 1600px, combina un <b>clamp de radio alto (~1500px, solo mata la cola degenerada)</b> con <code>scale_reg 0.01</code>, asumiendo que el margen es más justo.</p>
+</div>
+
+<p class="meta">Script de medición: <code>/tmp/measure_splats.py</code> · Fuente: <code>output/m360/bonsai_beta_run3</code> · Techo cub: <code>num_items (int)</code> en <code>cub::DeviceRadixSort</code>, <code>rasterizer_impl.cu:313</code>.</p>
+
+</div>
+</body>
+</html>

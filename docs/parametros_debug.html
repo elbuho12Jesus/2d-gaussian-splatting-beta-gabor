@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parámetros de debug — variables de entorno e instrumentación del log</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.9rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  ol{margin:.5em 0;padding-left:1.3em} ol li{margin:.4em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700} .hl3{color:var(--accent);font-weight:700}
+  .center{text-align:center}
+  .kv{font-family:"JetBrains Mono",monospace;font-size:.85rem;color:var(--accent)}
+  figcaption{color:var(--muted);font-size:.85rem;text-align:center;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Parámetros de <span class="hl3">debug</span> del entrenamiento</h1>
+<p class="sub">Las variables de entorno que activan la instrumentación del log en <code>train.py</code> y <code>scene/gaussian_model.py</code>: qué imprime cada una, qué significa cada campo y cómo leerlas para diagnosticar. Toda la instrumentación es <b>opcional</b> y se controla por env var — no toca la lógica de entrenamiento.</p>
+
+<div class="note"><b>Resumen de un vistazo.</b> Hay <b>tres</b> palancas de debug. Dos son del camino <b>MCMC</b> (<code>DEBUG_MEM</code>, <code>DEBUG_NOISE</code>) y van <b>apagadas por defecto</b>; una es del camino <b>clásico</b> (<code>DEBUG_DENSIFY</code>, la más nueva) y va <b>encendida por defecto</b>. <span class="hl2">Qué logs ves depende del camino que corras</span> (<code>--classic_densify</code> o MCMC), no solo del valor de la env var.</p></div>
+
+<h2>1. Tabla maestra</h2>
+<table>
+  <tr><th>Env var</th><th>Tipo / default</th><th>Camino</th><th>Etiquetas que imprime</th><th>Para qué sirve</th></tr>
+  <tr>
+    <td><code>DEBUG_MEM</code></td>
+    <td>entero <code>N</code> · default <code>0</code> = off</td>
+    <td>cualquiera</td>
+    <td><code>[MEM it…]</code>, <code>[antes_reset]</code>/<code>[después_reset]</code></td>
+    <td>Memoria VRAM (alloc/reserved/pico/libre) cada <code>N</code> iters. Caza OOM y procesos zombie.</td>
+  </tr>
+  <tr>
+    <td><code>DEBUG_NOISE</code></td>
+    <td>entero <code>N</code> · default <code>0</code> = off</td>
+    <td><b>MCMC</b></td>
+    <td><code>[NOISE it…]</code>, <code>[FLOATER it…]</code>, <code>[GRAD it…]</code></td>
+    <td>Ruido posicional MCMC + cull de floaters + paso de gradiente. ¿Qué splats se mueven y cuánto?</td>
+  </tr>
+  <tr>
+    <td><code>DEBUG_DENSIFY</code></td>
+    <td>booleano · default <b>ON</b> (<code>"1"</code>) · <code>=0</code> para silenciar</td>
+    <td><b>clásico</b></td>
+    <td><code>[DENSIFY iter…]</code>, <code>[RESET iter…]</code></td>
+    <td>Gradiente que entra a clone/split + desglose del prune + reset de opacidad. Mide el éxito de la densificación.</td>
+  </tr>
+</table>
+
+<div class="note warn-box"><b>Cadencia.</b> <code>DEBUG_MEM</code> y <code>DEBUG_NOISE</code> toman un <b>entero</b> que es la cadencia: <code>DEBUG_MEM=200</code> imprime cada 200 iters; <code>DEBUG_NOISE=5</code> imprime cada 5 <em>pasos de densificación</em> (no iters: la cadencia se mide en <code>iteration // densification_interval</code>). <code>DEBUG_DENSIFY</code> es <b>booleano</b>: imprime en <em>todos</em> los pasos de <code>densify_and_prune</code> (cada <code>densification_interval</code>, ~100 iters → ~150 líneas en un run de 30k; coste despreciable).</p></div>
+
+<h2>2. <span class="kv">DEBUG_MEM</span> — memoria de VRAM</h2>
+<p>Activación: <code>DEBUG_MEM=N</code> (entero). Reinicia el pico de memoria al inicio de cada iteración medida (<code>reset_peak_memory_stats</code>) para que <code>peak_*</code> sea el máximo <b>dentro</b> de esa iteración — delata el spike del binning del rasterizer. Se imprime en tres puntos del step (<code>post_render</code> / <code>post_backward</code> / <code>post_step</code>) vía <code>mem_probe</code>, y alrededor de cada <code>reset_opacity</code> vía <code>print_memory</code>.</p>
+<pre><code>[MEM it5000 post_render] alloc=8.31 reserved=9.02 peak_alloc=9.88 peak_reserved=10.40 dev_free=82.11/95.00GB npts=1203455</code></pre>
+<table>
+  <tr><th>Campo</th><th>Significado</th></tr>
+  <tr><td><code>alloc</code> / <code>reserved</code></td><td>GB ocupados por tensores vivos / reservados por el caching allocator de PyTorch (ahora mismo).</td></tr>
+  <tr><td><code>peak_alloc</code> / <code>peak_reserved</code></td><td>Pico GB <b>dentro de esta iteración</b> (tras el reset al inicio del step). El <code>peak_reserved</code> es el que delata el spike del rasterizer.</td></tr>
+  <tr><td><code>dev_free / total</code></td><td>VRAM <b>libre real</b> del device según el driver. Si baja sin que suba tu <code>reserved</code> → hay otro proceso comiendo VRAM (zombie).</td></tr>
+  <tr><td><code>npts</code></td><td>Nº de primitivas en ese momento (cuando se pasa).</td></tr>
+</table>
+<p>La variante <code>print_memory(tag)</code> imprime una línea más corta — <code>[después_reset] allocated=… reserved=… max_reserved=…</code> — y se dispara siempre que hay <code>DEBUG_MEM</code> alrededor de un reset MCMC.</p>
+
+<h2>3. <span class="kv">DEBUG_NOISE</span> — ruido posicional MCMC <span class="tag">solo camino MCMC</span></h2>
+<p>Activación: <code>DEBUG_NOISE=N</code>. Imprime cada <code>N</code> pasos de densificación. Solo tiene sentido en el camino <b>MCMC</b> (sin <code>--classic_densify</code>): en el clásico no hay ruido y estas líneas no aparecen. Agrupa tres sub-etiquetas.</p>
+
+<h3>3.1 <code>[NOISE it…]</code> — el ruido aplicado</h3>
+<p>El ruido MCMC es <code>noise = base · (1−opacidad)^100 · noise_lr · xyz_lr</code>. La puerta <code>(1−o)^100</code> hace que <b>solo se muevan los splats casi-muertos</b> (opacidad baja). Esta línea verifica eso.</p>
+<pre><code>[NOISE it3000] N=812345 op(mean=0.214 min=0.004) mult(mean=3.1e-03 max=9.6e-01) activos=18204 (2.24%) |disp|(mean=4.2e-05 med=0.0e+00 max=1.1e-02) xyz_lr=1.6e-04 noise_lr=5.0e+05 extent=4.512</code></pre>
+<table>
+  <tr><th>Campo</th><th>Significado / lectura</th></tr>
+  <tr><td><code>N</code></td><td>Nº total de splats.</td></tr>
+  <tr><td><code>op(mean,min)</code></td><td>Opacidad media y mínima. Tras un <code>reset</code> la media cae a ~0.01 (ojo: abre la puerta del ruido).</td></tr>
+  <tr><td><code>mult(mean,max)</code></td><td>El factor <code>(1−o)^100</code>. Si <code>mean</code> es alto → mucha nube perturbable (peligro de terremoto). Sano: <code>mean</code> muy pequeño.</td></tr>
+  <tr><td><code>activos (%)</code></td><td>Splats con <code>mult&gt;1e-3</code> = los que realmente se mueven. Debe ser una <b>minoría</b>. Si se dispara tras un reset → señal del colapso (run10/11/12).</td></tr>
+  <tr><td><code>|disp|(mean,med,max)</code></td><td>Desplazamiento real <code>|Δxyz|</code>. Comparar con <code>extent</code>: si <code>max</code> se acerca a <code>extent</code> hay teletransporte.</td></tr>
+  <tr><td><code>xyz_lr</code></td><td>LR posicional (decae ×70 durante el run). El ruido escala con él → casi nulo al final.</td></tr>
+</table>
+
+<h3>3.2 <code>[FLOATER it…]</code> — cull anti-floater</h3>
+<p>Solo si <code>--floater_cull_dist &gt; 0</code>. Marca como muertos los splats que viven más cerca de una cámara que cualquier geometría legítima.</p>
+<pre><code>[FLOATER it3000] cull_r=1.128 n_culled=842 (0.104%)</code></pre>
+<p><code>cull_r</code> = radio de corte (<code>floater_cull_dist · extent</code>); <code>n_culled</code> = cuántos se reciclan vía relocate.</p>
+
+<h3>3.3 <code>[GRAD it…]</code> — paso de gradiente posicional</h3>
+<p>Mide el <b>término 1</b> de la ecuación MCMC: <code>μ ← μ − λ·∇L</code> (paso de Adam), capturando <code>_xyz</code> antes/después. Permite comparar el desplazamiento por <b>gradiente</b> contra el del <b>ruido</b> (<code>[NOISE]</code>).</p>
+<pre><code>[GRAD it3000] |grad_xyz|(mean=1.8e-05 max=4.1e-03) |disp_grad|(mean=2.0e-06 med=9.1e-07 max=3.3e-04) ...</code></pre>
+
+<h2>4. <span class="kv">DEBUG_DENSIFY</span> — densificación clásica <span class="tag ok">NUEVO · default ON</span></h2>
+<p>Activación: encendido por defecto. Para silenciar: <code>DEBUG_DENSIFY=0</code>. Imprime en cada <code>densify_and_prune</code> del camino <b>clásico</b> (<code>--classic_densify</code>) y en cada <code>reset_opacity</code>. Es la instrumentación creada para diagnosticar el <b>fondo negro del run14</b>: responde dos preguntas — <span class="hl3">¿cuánto error de gradiente queda?</span> y <span class="hl">¿qué criterio poda el fondo?</span></p>
+
+<h3>4.1 <code>[DENSIFY iter=…]</code> línea 1 — gradiente que entra a clone/split</h3>
+<p>El gradiente de posición viewspace acumulado por splat (<code>xyz_gradient_accum / denom</code>) es la <b>señal que dirige</b> la densificación. Esta línea resume su distribución sobre los splats <b>vistos</b> (<code>denom&gt;0</code>).</p>
+<pre><code>[DENSIFY iter=3000] N=812345 vistos=801203 grad_pos(thr=2.0e-04): mean=1.3e-04 med=9.1e-05 p90=2.8e-04 p99=6.2e-04 max=4.1e-03 | &gt;=thr=98012 (12.06%)</code></pre>
+<table>
+  <tr><th>Campo</th><th>Significado / lectura</th></tr>
+  <tr><td><code>N</code> / <code>vistos</code></td><td>Total de splats / cuántos fueron vistos al menos una vez (los que tienen gradiente válido).</td></tr>
+  <tr><td><code>thr</code></td><td>El umbral <code>densify_grad_threshold</code> (0.0002). Por encima → el splat se clona o divide.</td></tr>
+  <tr><td><code>mean/med/p90/p99/max</code></td><td>Distribución del <code>‖∂L/∂μ₂D‖</code>. Es el <b>error residual</b> de posición.</td></tr>
+  <tr><td><code>&gt;=thr (%)</code></td><td>Cuántos splats <b>superan</b> el umbral = los que entran a densificación este paso.</td></tr>
+</table>
+<div class="note ok-box"><b>Cómo leer la evolución (de 500 a 15000):</b> si <code>mean</code>/<code>p90</code> y el <code>%&gt;=thr</code> <b>bajan</b> con las iteraciones → la densificación está <b>convergiendo</b> (cada vez menos error que cubrir = éxito). Si se <b>estancan altos</b> al acercarse a <code>densify_until_iter</code> → queda error sin resolver: o falta capacidad donde no llega, o tiene sentido <b>cortar antes</b>. Es exactamente la pregunta que querías responder: «¿paramos la densificación aquí o seguimos teniendo éxito?»</p></div>
+
+<h3>4.2 <code>[DENSIFY iter=…]</code> línea 2 — qué se crea y qué se poda</h3>
+<pre><code>[DENSIFY iter=3000] +clone=98012 +split=4120 (sel=4120) | PRUNE total=210 [alpha_sostenido(&gt;50)=0, area=180, screen=30] | opac&lt;0.005_ahora=12 | N:914477-&gt;914267</code></pre>
+<table>
+  <tr><th>Campo</th><th>Significado / lectura</th></tr>
+  <tr><td><code>+clone</code></td><td>Splats clonados (zonas vacías: gradiente alto + escala pequeña). Cada uno añade 1 copia.</td></tr>
+  <tr><td><code>+split</code></td><td>Splats divididos (detalle: gradiente alto + escala grande). Neto +<code>sel</code> (añade 2·sel, poda los sel originales).</td></tr>
+  <tr><td class="hl"><code>PRUNE total</code></td><td>Total de splats podados este paso, desglosado en los 3 criterios siguientes.</td></tr>
+  <tr><td><code>alpha_sostenido(&gt;50)</code></td><td>Podados por <b>opacidad baja sostenida</b>: opacidad &lt; <code>opacity_cull</code> durante &gt;50 llamadas de densify (≈5000 iters). <b>NO</b> es un cull inmediato.</td></tr>
+  <tr><td><code>area</code></td><td>Podados por <b>área tangencial excesiva</b>: <code>s₀·s₁ &gt; (0.1·extent)²</code>. Caza surfels gigantes.</td></tr>
+  <tr><td><code>screen</code></td><td>Podados por <b>radio en pantalla</b> &gt; <code>size_threshold</code> (=20, activo solo tras el primer reset).</td></tr>
+  <tr><td><code>opac&lt;0.005_ahora</code></td><td>Splats con opacidad bajo el umbral <b>en este instante</b> (todavía no sostenida). Útil para ver cuántos están <em>en camino</em> de ser podados por <code>alpha_sostenido</code>.</td></tr>
+  <tr><td><code>N:…-&gt;…</code></td><td>Nº de splats antes → después de aplicar el prune.</td></tr>
+</table>
+
+<div class="note danger-box"><b>El matiz que invalida la hipótesis intuitiva.</b> Se podría pensar «<code>reset_opacity</code> → <code>opacity_cull</code> poda el fondo». <span class="hl">El código no hace eso:</span> (1) la poda clásica <code>opacity &lt; min_opacity</code> está <b>comentada</b> en <code>densify_and_prune</code> (<code>gaussian_model.py:543-550</code>); en su lugar hay un prune «DBS» que solo poda por opacidad si está baja <b>sostenida &gt;50 densifies</b>. (2) <code>reset_opacity</code> baja a <b>0.01</b>, que es <b>mayor</b> que <code>opacity_cull=0.005</code> → el reset por sí solo <b>nunca</b> dispara el prune por opacidad. Por eso la línea 2 separa <code>alpha_sostenido</code> (el que realmente poda) de <code>opac&lt;0.005_ahora</code> (instantáneo). Sospecha a confirmar con el log: el fondo lo vacían <code>area</code>/<code>screen</code>, no la opacidad.</p></div>
+
+<h3>4.3 <code>[RESET iter=…]</code> — reset de opacidad</h3>
+<pre><code>[RESET iter=3000] reset_opacity -> 0.01 | bajados (opac>0.01)=910340/914267 | opac<0.005 antes=12</code></pre>
+<table>
+  <tr><th>Campo</th><th>Significado</th></tr>
+  <tr><td><code>bajados (opac&gt;0.01)</code></td><td>Cuántos splats tenían opacidad &gt; 0.01 y se clampan a 0.01 / total. Mide el alcance del reset.</td></tr>
+  <tr><td><code>opac&lt;0.005 antes</code></td><td>Cuántos ya estaban bajo el cull justo antes del reset.</td></tr>
+</table>
+<p class="meta">En el camino clásico el reset solo se llama mientras <code>iteration &lt; densify_until_iter</code> (run14: &lt;15000), así que sus líneas <code>[RESET]</code> aparecen en 3000/6000/9000/12000 y luego nunca más → 15k iters limpios de recuperación. En el camino MCMC el reset está gateado por <code>reset_cutoff</code> (ver <code>train.py</code>) y por defecto desactivado (<code>interval=1e9</code>).</p>
+
+<h2>5. Qué logs ves según el camino</h2>
+<div class="grid2">
+  <div class="card card2">
+    <span class="tag">clásico</span> <code>--classic_densify</code>
+    <ul>
+      <li><span class="hl2">SÍ:</span> <code>[DENSIFY]</code>, <code>[RESET]</code> (on por defecto)</li>
+      <li><span class="hl2">SÍ:</span> <code>[MEM]</code> si <code>DEBUG_MEM=N</code></li>
+      <li><span class="hl">NO:</span> <code>[NOISE]</code>/<code>[FLOATER]</code>/<code>[GRAD]</code> (no hay ruido MCMC)</li>
+    </ul>
+  </div>
+  <div class="card card2">
+    <span class="tag">MCMC</span> (sin el flag)
+    <ul>
+      <li><span class="hl2">SÍ:</span> <code>[NOISE]</code>/<code>[GRAD]</code>/<code>[FLOATER]</code> si <code>DEBUG_NOISE=N</code></li>
+      <li><span class="hl2">SÍ:</span> <code>[MEM]</code> si <code>DEBUG_MEM=N</code></li>
+      <li><span class="hl2">SÍ:</span> <code>[RESET]</code> si hay reset (pero por defecto el reset está off)</li>
+      <li><span class="hl">NO:</span> <code>[DENSIFY]</code> (no se llama <code>densify_and_prune</code>)</li>
+    </ul>
+  </div>
+</div>
+
+<h2>6. Recetas de uso</h2>
+<table>
+  <tr><th>Quiero…</th><th>Comando</th></tr>
+  <tr><td>Diagnosticar la densificación clásica (run14)</td><td>nada — <code>DEBUG_DENSIFY</code> ya está ON. Captura el stdout: <code>… 2&gt;&amp;1 | tee run14.log</code></td></tr>
+  <tr><td>Silenciar los <code>[DENSIFY]</code></td><td><code>DEBUG_DENSIFY=0 python train.py …</code></td></tr>
+  <tr><td>Ver memoria cada 500 iters</td><td><code>DEBUG_MEM=500 python train.py …</code></td></tr>
+  <tr><td>Auditar el ruido MCMC cada 5 densifies</td><td><code>DEBUG_NOISE=5 python train.py …</code> (sin <code>--classic_densify</code>)</td></tr>
+</table>
+
+<div class="note"><b>Dónde vive cada cosa.</b> <code>DEBUG_MEM</code>/<code>DEBUG_NOISE</code>: <code>train.py</code> (defs en <code>train.py:38-39</code>, prints en el bucle de densificación). <code>DEBUG_DENSIFY</code>: <code>scene/gaussian_model.py</code> (<code>reset_opacity:268</code>, <code>densify_and_prune:537</code>); las llamadas pasan <code>iteration=</code> desde <code>train.py</code>. Docs hermanos: <code>clone_split_logica_huecos.html</code> (qué gradiente dirige clone/split), <code>densificacion_clasica_antes_de_mcmc.html</code> (timeline + reset), <code>add_new_gs_jitter.html</code> y <code>ruido_isotropico_vs_covarianza.html</code> (ruido MCMC).</p></div>
+
+<p class="meta center" style="margin-top:40px">Doc generado para el proyecto 2DGS→Beta Splatting · instrumentación de debug al 2026-06-16.</p>
+
+</div>
+</body>
+</html>

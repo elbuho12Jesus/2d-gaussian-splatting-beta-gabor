@@ -1,0 +1,13 @@
+services:
+  surfel_env:
+    build: .
+    image: surfel_splatting_image
+    container_name: surfel_splatting_container
+    runtime: nvidia
+    volumes:
+      - .:/workspace
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${GPU_ID:-1}  # Por defecto GPU 1
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    stdin_open: true
+    tty: true

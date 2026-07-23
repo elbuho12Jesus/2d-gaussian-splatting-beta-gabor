@@ -1,0 +1,30 @@
+name: surfel_splatting_modificate
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - ffmpeg=4.2.2
+  - pillow=10.2.0
+  - pip=23.3.1
+  - python=3.10
+  - typing_extensions=4.9.0
+  - pip:
+    # PyTorch con CUDA 12.8 (soporte Blackwell sm_120). --index-url fuerza los wheels cu128;
+    # --extra-index-url deja que el resto de paquetes salgan de PyPI.
+    - --index-url https://download.pytorch.org/whl/cu128
+    - --extra-index-url https://pypi.org/simple
+    - torch==2.7.1
+    - torchvision==0.22.1
+    - torchaudio==2.7.1
+    - numpy<2
+    - open3d==0.18.0
+    - mediapy==1.1.2
+    - lpips==0.1.4
+    - scikit-image==0.21.0
+    - tqdm==4.66.2
+    - trimesh==4.3.2
+    - plyfile
+    - opencv-python
+    # NOTA: diff-surfel-rasterization y simple-knn NO van aquí: su setup.py importa torch
+    # en fase de egg_info, antes de que pip instale torch. Se compilan en el Dockerfile
+    # (pasos pip install ./submodules/...) ya con torch presente.

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dead_sustain (relocate) vs prune sostenido en el MCMC</title>
+<style>
+  :root{
+    --bg:#0f1419; --card:#1a212b; --ink:#e6edf3; --mut:#9aa7b4; --line:#2b3744;
+    --mcmc:#7aa2f7; --classic:#bb9af7; --good:#9ece6a; --bad:#f7768e; --warn:#e0af68;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:32px 20px}
+  .wrap{max-width:980px;margin:0 auto}
+  h1{font-size:23px;margin:0 0 4px} h2{font-size:18px;margin:30px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  h3{font-size:15.5px;margin:18px 0 6px;color:#cdd9e5}
+  .sub{color:var(--mut);margin:0 0 20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:14px 0}
+  code{background:#222b38;padding:1px 6px;border-radius:5px;font-size:12.5px;color:#cdd9e5}
+  ul{margin:8px 0;padding-left:20px} li{margin:4px 0}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11.5px;font-weight:600}
+  .tMCMC{background:rgba(122,162,247,.16);color:var(--mcmc)}
+  .tCLA{background:rgba(187,154,247,.16);color:var(--classic)}
+  .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)} .mut{color:var(--mut)}
+  table{border-collapse:collapse;width:100%;background:var(--card);border-radius:10px;overflow:hidden;font-size:13.5px;margin:10px 0}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#222b38;font-weight:600}
+  tr:last-child td{border-bottom:none}
+  .b{font-weight:700}
+  .step{background:#222b38;border-radius:6px;padding:2px 7px;font-size:12px;color:#cdd9e5;font-weight:600}
+  .arrow{color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>¿Qué significa <code>dead_sustain = 25</code> en el MCMC?</h1>
+  <p class="sub">Y por qué <b>no</b> es lo mismo que el "prune sostenido" del clásico. Aclaración para run19 (corriendo) y propuesta run20. · 2026-06-17</p>
+
+  <div class="card">
+    <b>Resumen en una línea:</b> el <code>mcmc_dead_sustain</code> controla cada cuánto el MCMC
+    <span class="b" style="color:var(--mcmc)">REUBICA</span> (mueve) un splat moribundo — <b>no lo elimina</b>.
+    El "prune sostenido" que tú querías <span class="b" style="color:var(--bad)">ELIMINA</span> el splat. Mismo contador, destino opuesto.
+  </div>
+
+  <h2>1 · El mecanismo común: <code>low_opacity_counter</code></h2>
+  <p>Las dos rutas comparten el mismo contador por splat. En cada paso de densificación (cada 100 iters):</p>
+  <div class="card">
+    <span class="step">si opacidad &le; cull</span> <span class="arrow">→</span> <code>counter += 1</code> &nbsp;&nbsp;|&nbsp;&nbsp;
+    <span class="step">si opacidad &gt; cull</span> <span class="arrow">→</span> <code>counter = 0</code> (se "salvó")
+    <br><br>
+    Cuando <code>counter &gt; N</code> el splat se considera <b>muerto sostenido</b> (lleva N checks seguidos por debajo del umbral de opacidad).
+    Con <b>N = 25</b> eso son <b>25 × 100 = 2500 iters</b> agonizando antes de actuar. <span class="mut">Le da tiempo a recuperar opacidad por gradiente antes de tocarlo.</span>
+  </div>
+
+  <h2>2 · El mismo contador, DOS destinos opuestos</h2>
+
+  <!-- Diagrama SVG -->
+  <svg viewBox="0 0 920 300" width="100%" style="background:#141a22;border:1px solid var(--line);border-radius:10px;margin:6px 0">
+    <style>
+      .lbl{fill:#e6edf3;font:13px sans-serif} .lblb{fill:#e6edf3;font:bold 13px sans-serif}
+      .sm{fill:#9aa7b4;font:11.5px sans-serif} .ttl{fill:#cdd9e5;font:bold 14px sans-serif}
+    </style>
+    <!-- divisor -->
+    <line x1="460" y1="20" x2="460" y2="280" stroke="#2b3744" stroke-dasharray="4 4"/>
+
+    <!-- IZQUIERDA: MCMC relocate -->
+    <text x="40" y="38" class="ttl">MCMC · <tspan fill="#7aa2f7">dead_sustain</tspan> (run19) = RELOCATE</text>
+    <!-- antes -->
+    <text x="40" y="70" class="sm">Antes:</text>
+    <circle cx="90" cy="110" r="16" fill="#3a4150" stroke="#6b7686"/><text x="90" y="140" class="sm" text-anchor="middle">muerto</text>
+    <circle cx="170" cy="110" r="20" fill="#7aa2f7" opacity="0.85"/><text x="170" y="142" class="sm" text-anchor="middle">vivo (alto error)</text>
+    <!-- flecha -->
+    <text x="220" y="95" class="sm">counter&gt;25</text>
+    <path d="M120 110 Q145 75 152 95" fill="none" stroke="#7aa2f7" stroke-width="2" marker-end="url(#a1)"/>
+    <!-- despues -->
+    <text x="40" y="190" class="sm">Después:</text>
+    <circle cx="170" cy="225" r="20" fill="#7aa2f7" opacity="0.85"/>
+    <circle cx="120" cy="225" r="20" fill="#7aa2f7" opacity="0.55" stroke="#7aa2f7" stroke-dasharray="3 3"/>
+    <text x="145" y="262" class="sm" text-anchor="middle">copia reubicada (encima del vivo)</text>
+    <text x="40" y="288" class="lblb" fill="#7aa2f7">Población: IGUAL (se mueve, no se quita)</text>
+
+    <!-- DERECHA: prune sostenido -->
+    <text x="500" y="38" class="ttl">MCMC · <tspan fill="#f7768e">prune sostenido</tspan> (run20, tu idea) = ELIMINAR</text>
+    <text x="500" y="70" class="sm">Antes:</text>
+    <circle cx="560" cy="110" r="16" fill="#3a4150" stroke="#6b7686"/><text x="560" y="140" class="sm" text-anchor="middle">muerto</text>
+    <circle cx="650" cy="110" r="20" fill="#7aa2f7" opacity="0.85"/><text x="650" y="142" class="sm" text-anchor="middle">vivo</text>
+    <text x="700" y="95" class="sm">counter&gt;25</text>
+    <line x1="548" y1="98" x2="572" y2="122" stroke="#f7768e" stroke-width="2.5"/>
+    <line x1="572" y1="98" x2="548" y2="122" stroke="#f7768e" stroke-width="2.5"/>
+    <text x="500" y="190" class="sm">Después:</text>
+    <circle cx="650" cy="225" r="20" fill="#7aa2f7" opacity="0.85"/>
+    <text x="560" y="230" class="sm" text-anchor="middle" fill="#f7768e">(vacío)</text>
+    <text x="500" y="288" class="lblb" fill="#f7768e">Población: BAJA (se elimina de verdad)</text>
+
+    <defs><marker id="a1" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#7aa2f7"/></marker></defs>
+  </svg>
+
+  <table>
+    <thead><tr><th>Aspecto</th><th><span class="tag tMCMC">MCMC relocate</span> = run19 (<code>dead_sustain</code>)</th><th><span class="tag tCLA">prune sostenido</span> = run18 clásico / run20 MCMC</th></tr></thead>
+    <tbody>
+      <tr><td class="b">Qué hace al splat muerto</td><td>Lo <b>sobrescribe</b> con una copia de un splat vivo de alto error (<code>relocate_gs</code>, l.719: <code>_xyz[dead]=_xyz[src]</code>)</td><td>Lo <b>borra</b> del modelo (<code>prune_points</code>)</td></tr>
+      <tr><td class="b">Población de splats</td><td class="warn">Constante (mueve capacidad de sitio)</td><td class="good">Disminuye (libera capacidad)</td></tr>
+      <tr><td class="b">Efecto sobre el VELO del fondo</td><td class="bad">El floater translúcido del fondo se mueve a otra zona — <b>el velo persiste</b>, solo se redistribuye</td><td class="good">El floater translúcido del fondo <b>desaparece</b> — ataca el velo en su causa</td></tr>
+      <tr><td class="b">Dónde vive en el código</td><td>Camino MCMC en <code>train.py</code> (l.241–272): <code>dead_mask → relocate_gs</code></td><td>Clásico: <code>densify_and_prune</code> (<code>--classic_prune_sustain</code>). En MCMC <b>aún no existe</b></td></tr>
+      <tr><td class="b">Valor N actual</td><td>run16 = 5 · <b>run19 = 25</b></td><td>run18 (clásico) = 25 · run20 (MCMC) = por decidir</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3 · Qué corre AHORA (run19)</h2>
+  <div class="card">
+    <code>--mcmc_dead_sustain 25</code> + <code>cap_max 5M</code>. Es <b>relocate sostenido</b>: los splats del fondo
+    que agonizan 2500 iters se <b>reubican</b> (no se podan). Comparado con run16 (N=5), el MCMC recicla
+    <b>menos y más tarde</b> → más splats de fondo sobreviven en su sitio. <span class="mut">En el log se ve como
+    <code>[DEADGATE] sostenido(&gt;25)=…</code> mucho menor que con N=5.</span>
+    <br><br>
+    <span class="warn b">OJO:</span> como mantiene la población, run19 <b>no ataca el velo directamente</b> — solo cambia
+    cuánto se reubica. Por eso lo que tú pediste se queda para el siguiente run.
+  </div>
+
+  <h2>4 · Lo que tú querías → propuesta run20</h2>
+  <div class="card">
+    <h3 style="margin-top:0">Prune sostenido en el MCMC (eliminar, no reubicar)</h3>
+    <p>Añadir al camino MCMC un <b>prune real</b>: cuando un splat lleve <b>N=25</b> checks muerto, <b>eliminarlo</b>
+    con <code>prune_points</code> en vez de (o además de) reubicarlo. Lógica:</p>
+    <ul>
+      <li><b>El velo del MCMC son floaters translúcidos de baja opacidad</b> en el fondo rasante.</li>
+      <li>El <span style="color:var(--mcmc)">relocate</span> los mueve → el velo no baja. El <span style="color:var(--bad)">prune</span> los quita → el velo <b>sí</b> debería bajar.</li>
+      <li>Es la versión MCMC de lo que el prune sostenido hizo en el clásico (run18), pero aquí <b>sin reset</b> de por medio (el MCMC tiene <code>opacity_reset</code> OFF), así que el contador cuenta limpio hasta 25 sin diente de sierra.</li>
+    </ul>
+    <p class="mut">Decisión pendiente para run20: ¿el prune <b>sustituye</b> al relocate de los muertos sostenidos
+    (población baja, ataca velo) o <b>convive</b> (relocate normal + un prune extra de los más viejos)? Lo definimos
+    antes de implementar. Nuevo flag candidato: <code>--mcmc_prune_sustain N</code>.</p>
+  </div>
+
+  <p class="mut" style="margin-top:24px">Relacionados: <code>comparativa_runs.html</code> ·
+  <code>low_opacity_counter_y_reset.html</code> · <code>mcmc_densificacion.html</code> ·
+  <code>densificacion_clasica_antes_de_mcmc.html</code></p>
+
+</div>
+</body>
+</html>

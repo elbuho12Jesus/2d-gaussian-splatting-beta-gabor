@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>add_new_gs — línea por línea + ejemplo de juguete</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .tok-c{color:#8b949e;font-style:italic}
+  .tok-k{color:#ff7b72}
+  .tok-f{color:#d2a8ff}
+  .tok-s{color:#a5d6ff}
+  .tok-v{color:#79c0ff}
+  .badge{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+    padding:2px 9px;border-radius:999px;text-transform:uppercase}
+  .b-add{background:rgba(126,231,135,.13);color:var(--accent2);border:1px solid rgba(126,231,135,.4)}
+  .b-jit{background:rgba(255,180,84,.13);color:var(--warn);border:1px solid rgba(255,180,84,.4)}
+  .b-key{background:rgba(110,168,254,.15);color:var(--accent);border:1px solid rgba(110,168,254,.4)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:18px 0}
+  .callout{border-left:4px solid var(--accent);background:var(--panel2);border-radius:0 10px 10px 0;padding:14px 18px;margin:18px 0}
+  .callout.key{border-left-color:var(--warn)}
+  .callout.danger{border-left-color:var(--danger)}
+  .callout.ok{border-left-color:var(--accent2)}
+  .callout h4{margin:.1em 0 .3em;font-size:1rem}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.88rem}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--accent)}
+  td.num,th.num{text-align:right;font-family:"JetBrains Mono",monospace}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 22px}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .muted{color:var(--muted)}
+  .hl{background:rgba(255,180,84,.16);border-radius:4px;padding:0 3px}
+  .hlb{background:rgba(126,231,135,.16);border-radius:4px;padding:0 3px}
+  .hlr{background:rgba(255,123,114,.16);border-radius:4px;padding:0 3px}
+  hr{border:none;border-top:1px solid var(--line);margin:2.4em 0}
+  .eq{text-align:center;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:1.02rem;
+    background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px;margin:16px 0;color:#a5d6ff}
+  .ln{color:#6b7280;user-select:none;display:inline-block;width:2.4em;text-align:right;margin-right:1em}
+  .lineblock{margin:16px 0}
+  .lineblock .desc{padding:8px 4px 4px;color:var(--muted);font-size:.92rem}
+  svg{max-width:100%;height:auto;background:var(--panel2);border:1px solid var(--line);border-radius:12px}
+  figure{margin:22px 0;text-align:center}
+  figcaption{color:var(--muted);font-size:.86rem;margin-top:8px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1><code>add_new_gs(cap_max, error_weight, jitter_scale)</code></h1>
+<p class="sub">Densificación MCMC del repo (2DGS → Beta Splatting) · <code>scene/gaussian_model.py:737</code> · explicación línea por línea + ejemplo de juguete numérico completo · 2026-07-01</p>
+
+<div class="toc">
+  <strong>Contenido</strong>
+  <ol>
+    <li><a href="#que">Qué hace en una frase</a></li>
+    <li><a href="#firma">La firma y sus tres parámetros</a></li>
+    <li><a href="#lineas">Línea por línea</a></li>
+    <li><a href="#juguete">Ejemplo de juguete (números reales)</a></li>
+    <li><a href="#return">Qué devuelve y qué deja tocado</a></li>
+    <li><a href="#mejoras">Ideas para mejorarla</a></li>
+  </ol>
+</div>
+
+<h2 id="que">1 · Qué hace en una frase</h2>
+<div class="card">
+  <p><strong>Hace <em>crecer</em> el número de gaussianas</strong> (hasta un tope <code>cap_max</code>, y como mucho un <strong>+5% por llamada</strong>) <strong>clonando splats vivos ya existentes</strong>. Los splats que se clonan se sortean con probabilidad ∝ opacidad (y, si <code>error_weight&gt;0</code>, sesgada hacia zonas mal reconstruidas). Al clonar reparte la opacidad entre original y copia para <em>conservar la transmitancia</em>, y opcionalmente (<code>jitter_scale&gt;0</code>) desplaza la copia para sembrar el <em>interior</em> de huecos.</p>
+  <p class="muted">Es la mitad "crecer" del ciclo MCMC. La otra mitad es <code>relocate_gs</code> (reciclar splats muertos), que comparte casi todo el mecanismo. Aquí no se borra nada: solo se añade.</p>
+</div>
+
+<h2 id="firma">2 · La firma y sus tres parámetros</h2>
+<table>
+  <tr><th>Parámetro</th><th>Tipo / default</th><th>Para qué sirve</th></tr>
+  <tr><td><code>cap_max</code></td><td>int (obligatorio)</td><td>Techo duro del nº total de splats (p.ej. flowers 7.5M, bonsai 1.5M). Nunca se crece por encima.</td></tr>
+  <tr><td><code>error_weight</code></td><td>float, <code>0.0</code></td><td>Si &gt;0, sesga el sorteo de <em>quién se clona</em> hacia splats con alto error de reconstrucción (‖∂L/∂μ<sub>2D</sub>‖ acumulado), no solo hacia los opacos. Cubre mejor zonas mal resueltas.</td></tr>
+  <tr><td><code>jitter_scale</code></td><td>float, <code>0.0</code></td><td>Si &gt;0 (y <code>error_weight&gt;0</code>), desplaza cada clon en una dirección 3D aleatoria con magnitud ∝ tamaño·error del src. Un src en el <em>borde</em> de un hueco puede sembrar el <em>interior</em>.</td></tr>
+</table>
+<div class="callout key">
+  <h4>Con los defaults (<code>error_weight=0, jitter_scale=0</code>) el comportamiento es el MCMC clásico</h4>
+  <p class="muted">Sorteo puro por opacidad, clon en la misma posición que el src. Los dos extras son palancas opcionales encima de esa base.</p>
+</div>
+
+<h2 id="lineas">3 · Línea por línea</h2>
+
+<div class="lineblock">
+<pre><code><span class="ln">746</span><span class="tok-v">cur</span> = self._xyz.shape[<span class="tok-s">0</span>]
+<span class="ln">747</span><span class="tok-v">target</span> = <span class="tok-f">min</span>(<span class="tok-f">int</span>(cap_max), <span class="tok-f">int</span>(math.ceil(<span class="tok-s">1.05</span> * cur)))
+<span class="ln">748</span><span class="tok-v">k</span> = target - cur
+<span class="ln">749</span><span class="tok-k">if</span> k &lt;= <span class="tok-s">0</span>:
+<span class="ln">750</span>    <span class="tok-k">return</span></code></pre>
+  <div class="desc"><strong>Cuánto crecer.</strong> <code>cur</code> = nº actual de splats. <code>target</code> = el menor entre el techo <code>cap_max</code> y un <span class="hl">+5% redondeado hacia arriba</span> del actual. <code>k</code> = cuántos splats nuevos. Si ya estamos en el tope (<code>k≤0</code>), no se hace nada. El <code>ceil(1.05·cur)</code> garantiza que si aún hay margen se añade <em>al menos 1</em>.</div>
+</div>
+
+<div class="lineblock">
+<pre><code><span class="ln">752</span><span class="tok-v">use_error</span> = error_weight &gt; <span class="tok-s">0.0</span>
+<span class="ln">753</span><span class="tok-v">err</span> = self._error_signal() <span class="tok-k">if</span> use_error <span class="tok-k">else</span> <span class="tok-k">None</span></code></pre>
+  <div class="desc"><strong>Señal de error (opcional).</strong> Solo se calcula si <code>error_weight&gt;0</code>. <code>_error_signal()</code> devuelve un tensor <code>[N]</code>: el gradiente de viewspace acumulado por splat (proxy de "zona sub-reconstruida"), <span class="hl">normalizado a media≈1</span> y recortado a 10 para que ningún outlier domine. Splats no vistos en el intervalo → 0.</div>
+</div>
+
+<div class="lineblock">
+<pre><code><span class="ln">755</span><span class="tok-v">probs</span> = self.get_opacity.squeeze()
+<span class="ln">756</span><span class="tok-k">if</span> use_error:
+<span class="ln">757</span>    probs = probs * (<span class="tok-s">1.0</span> + error_weight * err)
+<span class="ln">758</span>probs = torch.nan_to_num(probs, ...).clamp(min=<span class="tok-s">1e-6</span>)
+<span class="ln">759</span><span class="tok-v">total</span> = probs.sum()
+<span class="ln">760</span><span class="tok-k">if</span> <span class="tok-k">not</span> torch.isfinite(total) <span class="tok-k">or</span> total &lt;= <span class="tok-s">0</span>:
+<span class="ln">761</span>    <span class="tok-f">print</span>(<span class="tok-s">"[add_new_gs] WARNING: pesos no válidos..."</span>); <span class="tok-k">return</span>
+<span class="ln">763</span>probs = probs / total
+<span class="ln">764</span><span class="tok-v">src_idx</span> = torch.multinomial(probs, k, replacement=<span class="tok-k">True</span>)</code></pre>
+  <div class="desc"><strong>Quién se clona.</strong> El peso base de cada splat es su opacidad. Con error, se multiplica por <code>(1 + error_weight·err)</code> → los splats en zonas mal resueltas ganan probabilidad. Se sanea (NaN/Inf→0, mínimo 1e-6), se normaliza a distribución y se <span class="hl">sortean <code>k</code> índices con reemplazo</span> (un mismo src puede salir varias veces). El guard de <code>total</code> evita dividir por cero y aborta el paso limpiamente si algo degeneró.</div>
+</div>
+
+<div class="lineblock">
+<pre><code><span class="ln">771</span><span class="tok-v">ratio</span> = torch.bincount(src_idx)[src_idx].to(...).unsqueeze(-1)
+<span class="ln">772</span><span class="tok-v">src_alpha</span> = self.get_opacity[src_idx].clamp(min=<span class="tok-s">2e-3</span>, max=<span class="tok-s">1-1e-3</span>)
+<span class="ln">773</span><span class="tok-v">new_alpha</span> = (<span class="tok-s">1</span> - torch.pow(<span class="tok-s">1</span> - src_alpha, <span class="tok-s">1</span>/(ratio+<span class="tok-s">1</span>))).clamp(min=<span class="tok-s">5e-3</span>, max=<span class="tok-s">1-1e-3</span>)
+<span class="ln">774</span><span class="tok-v">new_opacity_raw</span> = self.inverse_opacity_activation(new_alpha)</code></pre>
+  <div class="desc"><strong>Reparto de opacidad (conservación de transmitancia).</strong> Si un src sale <code>ratio</code> veces en el sorteo, habrá <code>ratio+1</code> instancias (los clones + el original). Para que la opacidad combinada sea la misma que la del src original se reparte con
+    <div class="eq">new_alpha = 1 − (1 − α)<sup>1/(ratio+1)</sup></div>
+    Así el producto de transmitancias <code>(1−new_alpha)<sup>ratio+1</sup> = (1−α)</code> se conserva. <span class="hlr">Antes se usaba <code>α/2</code></span>, que solo es correcto si <code>ratio=1</code> y sobre-inflaba las zonas opacas. Se pasa a espacio crudo con <code>inverse_sigmoid</code> porque <code>_opacity</code> se guarda pre-activación.</div>
+</div>
+
+<div class="lineblock">
+<pre><code><span class="ln">776</span><span class="tok-v">new_xyz</span> = self._xyz[src_idx].detach().clone()
+<span class="ln">777</span><span class="tok-k">if</span> jitter_scale &gt; <span class="tok-s">0.0</span> <span class="tok-k">and</span> use_error:
+<span class="ln">782</span>    <span class="tok-v">src_scale</span> = self.get_scaling[src_idx].norm(dim=-1, keepdim=<span class="tok-k">True</span>)
+<span class="ln">783</span>    <span class="tok-v">direction</span> = torch.randn_like(new_xyz)
+<span class="ln">784</span>    direction = direction / direction.norm(dim=-1, keepdim=<span class="tok-k">True</span>).clamp(min=<span class="tok-s">1e-8</span>)
+<span class="ln">785</span>    <span class="tok-v">err_src</span> = err[src_idx].unsqueeze(-1)
+<span class="ln">786</span>    new_xyz = new_xyz + direction * src_scale * (jitter_scale * err_src)</code></pre>
+  <div class="desc"><strong>Jitter posicional (opcional).</strong> Por defecto el clon nace en la <em>misma</em> posición que el src. Si <code>jitter_scale&gt;0</code>, se desplaza en una <span class="hl">dirección 3D aleatoria unitaria</span> con magnitud = <code>src_scale · jitter_scale · err_src</code>. Splats de alto error (borde de hueco) se desplazan bastante → siembran el interior del hueco; splats de bajo error (foreground fino) apenas se mueven → clon casi normal. Requiere <code>error_weight&gt;0</code> porque usa <code>err</code>.</div>
+</div>
+
+<div class="lineblock">
+<pre><code><span class="ln">787</span><span class="tok-v">new_features_dc</span>  = self._features_dc[src_idx].detach().clone()
+<span class="ln">788</span><span class="tok-v">new_features_rest</span>= self._features_rest[src_idx].detach().clone()
+<span class="ln">789</span><span class="tok-v">new_sb_params</span>    = self._sb_params[src_idx].detach().clone()
+<span class="ln">790</span><span class="tok-v">new_scaling</span>      = self._scaling[src_idx].detach().clone()
+<span class="ln">791</span><span class="tok-v">new_rotation</span>     = self._rotation[src_idx].detach().clone()
+<span class="ln">792</span><span class="tok-v">new_beta</span>         = self._beta[src_idx].detach().clone()
+<span class="ln">793</span><span class="tok-v">new_opacity</span>      = new_opacity_raw.detach().clone()</code></pre>
+  <div class="desc"><strong>El clon copia TODO lo demás del src</strong> (color SH, spherical betas, escala, rotación, beta del kernel). Solo <em>posición</em> (con jitter) y <em>opacidad</em> (repartida) cambian. <code>detach()</code> corta el grafo: son parámetros nuevos, no ramas del optimizador viejo.</div>
+</div>
+
+<div class="lineblock">
+<pre><code><span class="ln">796</span>self._opacity[src_idx] = new_opacity_raw
+<span class="ln">798</span>self.densification_postfix(new_xyz, new_features_dc, ...)
+<span class="ln">802</span>self._reset_optimizer_state(src_idx.unique())</code></pre>
+  <div class="desc"><strong>Cierre.</strong> (796) El <em>original</em> también baja su opacidad a <code>new_alpha</code> — esto es lo que conserva la transmitancia entre los dos. (798) <code>densification_postfix</code> concatena los tensores nuevos a los parámetros del optimizador, extiende los acumuladores (<code>xyz_gradient_accum</code>, <code>denom</code>, <code>max_radii2D</code> a cero; <code>low_opacity_counter</code> se preserva y añade ceros a los nuevos). (802) Se resetea momentum/varianza del Adam de los srcs para que el reparto de opacidad no arrastre estadísticas viejas.</div>
+</div>
+
+<figure>
+<svg viewBox="0 0 900 300" role="img" aria-label="Diagrama del flujo">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#6ea8fe"/></marker>
+  </defs>
+  <rect x="20" y="120" width="150" height="60" rx="10" fill="#1e222e" stroke="#2a2f3c"/>
+  <text x="95" y="145" fill="#e6e8ee" font-size="13" text-anchor="middle">cur splats</text>
+  <text x="95" y="165" fill="#9aa3b2" font-size="11" text-anchor="middle">¿margen? k=+5%</text>
+
+  <rect x="210" y="120" width="170" height="60" rx="10" fill="#1e222e" stroke="#2a2f3c"/>
+  <text x="295" y="143" fill="#e6e8ee" font-size="13" text-anchor="middle">probs = opacidad</text>
+  <text x="295" y="163" fill="#ffb454" font-size="11" text-anchor="middle">×(1+ew·err)</text>
+
+  <rect x="420" y="120" width="160" height="60" rx="10" fill="#1e222e" stroke="#2a2f3c"/>
+  <text x="500" y="143" fill="#e6e8ee" font-size="13" text-anchor="middle">multinomial</text>
+  <text x="500" y="163" fill="#9aa3b2" font-size="11" text-anchor="middle">k src_idx</text>
+
+  <rect x="620" y="60" width="160" height="60" rx="10" fill="#1e222e" stroke="#2a2f3c"/>
+  <text x="700" y="83" fill="#e6e8ee" font-size="13" text-anchor="middle">reparto α</text>
+  <text x="700" y="103" fill="#7ee787" font-size="11" text-anchor="middle">1−(1−α)^(1/r+1)</text>
+
+  <rect x="620" y="180" width="160" height="60" rx="10" fill="#1e222e" stroke="#2a2f3c"/>
+  <text x="700" y="203" fill="#e6e8ee" font-size="13" text-anchor="middle">jitter (opc.)</text>
+  <text x="700" y="223" fill="#ffb454" font-size="11" text-anchor="middle">+dir·scale·ew·err</text>
+
+  <rect x="810" y="120" width="70" height="60" rx="10" fill="#132" stroke="#7ee787"/>
+  <text x="845" y="150" fill="#7ee787" font-size="12" text-anchor="middle">postfix</text>
+  <text x="845" y="167" fill="#7ee787" font-size="10" text-anchor="middle">N+=k</text>
+
+  <line x1="170" y1="150" x2="205" y2="150" stroke="#6ea8fe" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="380" y1="150" x2="415" y2="150" stroke="#6ea8fe" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="580" y1="140" x2="615" y2="100" stroke="#6ea8fe" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="580" y1="160" x2="615" y2="205" stroke="#6ea8fe" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="780" y1="95" x2="812" y2="135" stroke="#6ea8fe" stroke-width="2" marker-end="url(#ar)"/>
+  <line x1="780" y1="205" x2="812" y2="165" stroke="#6ea8fe" stroke-width="2" marker-end="url(#ar)"/>
+</svg>
+<figcaption>Flujo: decidir k → pesos → sortear srcs → repartir opacidad + jitter → concatenar.</figcaption>
+</figure>
+
+<h2 id="juguete">4 · Ejemplo de juguete con números reales</h2>
+<p>Modelo minúsculo de <strong>N = 5 splats</strong>. Llamada:</p>
+<div class="eq">add_new_gs(cap_max=<span style="color:#7ee787">100</span>, error_weight=<span style="color:#ffb454">1.0</span>, jitter_scale=<span style="color:#ffb454">0.5</span>)</div>
+
+<h3>Estado de entrada</h3>
+<table>
+  <tr><th>splat</th><th class="num">opacidad<br>(get_opacity)</th><th class="num">grad medio<br>(accum/denom)</th><th class="num">get_scaling<br>(2 comp)</th><th>xyz</th><th>rol</th></tr>
+  <tr><td>0</td><td class="num">0.90</td><td class="num">0.001</td><td class="num">—</td><td class="num">—</td><td class="muted">foreground bien resuelto</td></tr>
+  <tr><td>1</td><td class="num">0.10</td><td class="num">0.004</td><td class="num">—</td><td class="num">—</td><td class="muted">velo de fondo</td></tr>
+  <tr><td>2</td><td class="num">0.50</td><td class="num">0.002</td><td class="num">—</td><td class="num">—</td><td class="muted">medio</td></tr>
+  <tr><td>3</td><td class="num">0.80</td><td class="num">0.001</td><td class="num">—</td><td class="num">—</td><td class="muted">foreground</td></tr>
+  <tr><td><strong>4</strong></td><td class="num">0.20</td><td class="num">0.012</td><td class="num">[0.03, 0.05]</td><td class="num">[1.0, 2.0, 0.5]</td><td class="hlb">borde de un hueco (alto error)</td></tr>
+</table>
+
+<h3>Paso 1 — cuánto crecer (líneas 746–750)</h3>
+<div class="eq">cur = 5 · target = min(100, ⌈1.05·5⌉) = min(100, ⌈5.25⌉) = <b>6</b> · k = 6 − 5 = <b>1</b></div>
+<p class="muted">Con N pequeño el <code>+5%</code> siempre redondea a <strong>+1 splat</strong>. El <code>cap_max=100</code> no limita aquí (manda la regla del 5%).</p>
+
+<h3>Paso 2 — señal de error (línea 753)</h3>
+<p>Media de los grads (todos positivos): <code>(0.001+0.004+0.002+0.001+0.012)/5 = 0.004</code>. Se normaliza dividiendo por la media (ninguno pasa de 10):</p>
+<table>
+  <tr><th>splat</th><td class="num">0</td><td class="num">1</td><td class="num">2</td><td class="num">3</td><td class="num"><strong>4</strong></td></tr>
+  <tr><th>err = grad/media</th><td class="num">0.25</td><td class="num">1.00</td><td class="num">0.50</td><td class="num">0.25</td><td class="num"><strong>3.00</strong></td></tr>
+</table>
+
+<h3>Paso 3 — pesos y sorteo (líneas 755–764)</h3>
+<p><code>probs = opacidad · (1 + 1.0·err)</code>:</p>
+<table>
+  <tr><th>splat</th><th class="num">opacidad</th><th class="num">1+err</th><th class="num">peso</th><th class="num">prob (÷total)</th><th class="num">prob SIN error<br>(solo opacidad)</th></tr>
+  <tr><td>0</td><td class="num">0.90</td><td class="num">1.25</td><td class="num">1.125</td><td class="num">0.290</td><td class="num">0.360</td></tr>
+  <tr><td>1</td><td class="num">0.10</td><td class="num">2.00</td><td class="num">0.200</td><td class="num">0.052</td><td class="num">0.040</td></tr>
+  <tr><td>2</td><td class="num">0.50</td><td class="num">1.50</td><td class="num">0.750</td><td class="num">0.194</td><td class="num">0.200</td></tr>
+  <tr><td>3</td><td class="num">0.80</td><td class="num">1.25</td><td class="num">1.000</td><td class="num">0.258</td><td class="num">0.320</td></tr>
+  <tr><td><strong>4</strong></td><td class="num">0.20</td><td class="num">4.00</td><td class="num"><strong>0.800</strong></td><td class="num"><strong>0.206</strong></td><td class="num">0.080</td></tr>
+  <tr><td class="muted">total</td><td class="num muted"></td><td class="num muted"></td><td class="num muted">3.875</td><td class="num muted">1.000</td><td class="num muted">1.000</td></tr>
+</table>
+<div class="callout ok">
+  <h4>Aquí se ve el efecto de <code>error_weight</code></h4>
+  <p>El splat 4 (borde de hueco) pasa de <span class="hlr">0.080</span> de probabilidad (solo opacidad) a <span class="hlb">0.206</span> (×2.5) por su alto error. <strong>Supongamos que el único sorteo cae en el splat 4</strong> → <code>src_idx = [4]</code>. Sin el sesgo por error casi nunca lo habría elegido.</p>
+</div>
+
+<h3>Paso 4 — reparto de opacidad (líneas 771–774)</h3>
+<div class="eq">ratio = bincount([4])[4] = 1  →  ratio+1 = 2
+new_alpha = 1 − (1 − 0.20)<sup>1/2</sup> = 1 − √0.8 = 1 − 0.8944 = <b>0.1056</b>
+new_opacity_raw = inverse_sigmoid(0.1056) = ln(0.1056 / 0.8944) ≈ <b>−2.137</b></div>
+<p><strong>Chequeo de conservación:</strong> dos splats con α=0.1056 → transmitancia combinada <code>(1−0.1056)² = 0.8944² = 0.7999 ≈ 0.80 = (1−0.20)</code> ✓. La opacidad total del "sitio" no cambia; solo se reparte entre original y clon.</p>
+
+<h3>Paso 5 — jitter (líneas 776–786)</h3>
+<div class="eq">src_scale = ‖[0.03, 0.05]‖ = √(0.0009+0.0025) = 0.0583
+direction = [0.6, −0.8, 0.0]  (vector unitario aleatorio de ejemplo)
+err_src = 3.0
+Δ = direction · src_scale · (jitter_scale · err_src) = [0.6,−0.8,0]·0.0583·(0.5·3.0)
+  = [0.6,−0.8,0]·0.0874 = [0.0525, −0.0699, 0.0]
+new_xyz = [1.0, 2.0, 0.5] + Δ = <b>[1.0525, 1.9301, 0.5000]</b></div>
+<p class="muted">El clon se desplaza <code>0.0874</code> unidades ≈ <strong>1.5× el propio tamaño</strong> del surfel, hacia dentro del hueco. Si <code>jitter_scale=0</code> nacería exactamente en <code>[1.0, 2.0, 0.5]</code> (encima del src).</p>
+
+<h3>Paso 6 — cierre (líneas 796–802)</h3>
+<ul>
+  <li><code>self._opacity[4]</code> se baja también a raw <code>−2.137</code> (α 0.20 → 0.1056).</li>
+  <li><code>densification_postfix</code> concatena el clon → el modelo pasa de <strong>5 a 6 splats</strong>.</li>
+  <li><code>_reset_optimizer_state([4])</code> pone a cero momentum/varianza Adam del splat 4.</li>
+</ul>
+
+<h2 id="return">5 · Qué devuelve y qué deja tocado</h2>
+<div class="callout key">
+  <h4><code>add_new_gs</code> devuelve <code>None</code></h4>
+  <p>Todo su efecto es <strong>por mutación</strong> del <code>GaussianModel</code>. Tras la llamada del ejemplo:</p>
+</div>
+<table>
+  <tr><th>Estado</th><th>Antes</th><th>Después</th></tr>
+  <tr><td>nº splats</td><td class="num">5</td><td class="num"><strong>6</strong></td></tr>
+  <tr><td>opacidad splat 4 (src)</td><td class="num">0.200</td><td class="num">0.1056</td></tr>
+  <tr><td>opacidad splat 5 (clon nuevo)</td><td class="num">—</td><td class="num">0.1056</td></tr>
+  <tr><td>xyz splat 5 (clon)</td><td class="num">—</td><td class="num">[1.0525, 1.9301, 0.5]</td></tr>
+  <tr><td>color/escala/rot/beta splat 5</td><td class="num">—</td><td class="num">copiados del splat 4</td></tr>
+  <tr><td>Adam del splat 4</td><td class="num">—</td><td class="num">reseteado a 0</td></tr>
+  <tr><td>xyz_gradient_accum / denom</td><td class="num">[5]</td><td class="num">extendidos a [6], srcs a 0</td></tr>
+</table>
+
+<h2 id="mejoras">6 · Ideas para mejorarla</h2>
+<div class="card">
+  <p class="muted">La función es correcta y está alineada con el Beta Splatting oficial. Posibles mejoras <em>de calidad</em> (a validar siempre honesto con <code>metrics.py</code>, no fiarse del in-train):</p>
+  <ol>
+    <li><span class="badge b-key">geometría</span> <strong>Jitter según la covarianza, no isotrópico.</strong> Hoy <code>direction = randn</code> uniforme en la esfera. Un surfel es un disco 2D: desplazar <em>en el plano del disco</em> (usando <code>rotation</code>+<code>scaling</code>) sembraría el hueco sin salirse de la superficie. Encaja con la idea de <code>idea_covarianza_snap_superficie.html</code>.</li>
+    <li><span class="badge b-add">opacidad</span> <strong>Perturbar levemente el color/beta del clon</strong> en vez de copiarlo bit a bit, para romper la degeneración de dos splats idénticos (aceleran a la misma solución y no cubren área nueva).</li>
+    <li><span class="badge b-jit">muestreo</span> <strong>Priorizar srcs de bajo error para el crecimiento y de alto error para el jitter</strong> por separado, en vez de un único <code>probs</code>. Actualmente <code>error_weight</code> mezcla ambos objetivos.</li>
+    <li><span class="badge b-key">robustez</span> <strong>Cap por-src del <code>ratio</code></strong>: si un mismo splat sale muchas veces (zona muy opaca) genera muchos clones colapsados; limitar clones por src repartiría mejor.</li>
+    <li><span class="badge b-add">eficiencia</span> El <code>+5%</code> por llamada es lento para llegar al cap; se podría hacer el paso adaptativo (mayor lejos del cap, menor cerca) sin cambiar el resultado final.</li>
+  </ol>
+  <p class="callout danger" style="margin-top:14px"><strong>Ojo:</strong> el aprendizaje consolidado del proyecto es que <em>más primitivas / sweeps baratos NO tocan el velo del fondo</em> (cap saturado, 5 sweeps fallidos). Las mejoras 1 y 2 (geometría del clon) son las únicas que atacan la <em>estructura</em> del error, no su cantidad — probablemente las más prometedoras. Toda mejora aquí exige re-medir honesto en flowers Y bonsai (el óptimo NO transfiere entre escenas).</p>
+</div>
+
+<hr>
+<p class="muted" style="font-size:.85rem">Documento autocontenido · fuente: <code>scene/gaussian_model.py:737-802</code>, <code>_error_signal</code> (656), <code>densification_postfix</code> (425), <code>inverse_sigmoid</code> (utils/general_utils.py:18). Hermano de <code>add_new_gs_jitter.html</code> y <code>mcmc_densificacion.html</code>.</p>
+
+</div>
+</body>
+</html>

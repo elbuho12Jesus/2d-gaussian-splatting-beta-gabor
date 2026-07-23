@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>view.py + SIBR_remoteGaussian: qué es, cómo funciona y qué puedes hacer</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#6ea8fe; --accent2:#7ee787; --warn:#ffb454; --danger:#ff7b72; --code:#c9d1d9;
+    --line:#2a2f3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:2rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.5rem;margin:2.2em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.15rem;margin:1.6em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.84rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .card2{background:var(--panel2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)}
+  .ok-box{border-left:3px solid var(--accent2)}
+  .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;
+    font-family:"JetBrains Mono",monospace;font-size:.9rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  .hl{color:var(--danger);font-weight:700} .hl2{color:var(--accent2);font-weight:700}
+  .center{text-align:center}
+  kbd{font-family:"JetBrains Mono",monospace;font-size:.8em;background:#0b0d13;border:1px solid var(--line);
+    border-bottom-width:2px;border-radius:5px;padding:1px 6px;color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1><code>view.py</code> + SIBR_remoteGaussian: ¿qué es y qué puedes hacer?</h1>
+<p class="sub">Tu comando <code>python view.py -s ../360_extra_scenes/flowers -m output/m360/flowers_beta_run2</code> levanta un <b>servidor de render remoto</b>. La app SIBR es solo el <b>cliente</b> que te enseña los píxeles. Aquí qué hace cada pieza, el protocolo por debajo, los modos de visualización ocultos, y los dos errores fáciles de cometer.</p>
+
+<div class="note warn-box"><b>Lo primero, deshacemos la confusión.</b> <span class="hl">No estabas viendo un mesh.</span> <code>SIBR_remoteGaussian_app</code> <b>no carga geometría</b> (ni <code>.ply</code> de malla ni puntos): se conecta por un <b>socket TCP</b> a tu proceso de Python y, en cada frame, le manda <b>una cámara</b> y recibe de vuelta <b>una imagen ya renderizada</b> (un <i>bitmap</i> de píxeles). Toda la rasterización de las gaussianas pasa en la <b>GPU del lado de <code>view.py</code></b>. La app solo dibuja el JPEG/raw que le llega. Por eso se llama <i>remote</i>: el render es remoto.</p></div>
+
+<h2>1. La arquitectura: cliente tonto, servidor pesado</h2>
+
+<p>Hay dos programas distintos hablando por un cable:</p>
+
+<div class="center">
+<svg viewBox="0 0 920 300" font-family="JetBrains Mono, monospace" font-size="13">
+  <!-- Cliente -->
+  <rect x="20" y="60" width="300" height="180" rx="12" fill="#171a23" stroke="#2a2f3c"/>
+  <text x="170" y="48" fill="#6ea8fe" text-anchor="middle" font-size="15" font-weight="bold">CLIENTE — tu pantalla</text>
+  <text x="170" y="92" fill="#e6e8ee" text-anchor="middle">SIBR_remoteGaussian_app</text>
+  <text x="170" y="118" fill="#9aa3b2" text-anchor="middle" font-size="11">• mueves ratón/teclado</text>
+  <text x="170" y="138" fill="#9aa3b2" text-anchor="middle" font-size="11">• calcula la matriz de cámara</text>
+  <text x="170" y="158" fill="#9aa3b2" text-anchor="middle" font-size="11">• recibe imagen y la pinta</text>
+  <text x="170" y="178" fill="#9aa3b2" text-anchor="middle" font-size="11">• NO tiene las gaussianas</text>
+  <text x="170" y="210" fill="#7ee787" text-anchor="middle" font-size="11">GPU usada: casi nada</text>
+
+  <!-- Servidor -->
+  <rect x="600" y="60" width="300" height="180" rx="12" fill="#171a23" stroke="#2a2f3c"/>
+  <text x="750" y="48" fill="#ffb454" text-anchor="middle" font-size="15" font-weight="bold">SERVIDOR — view.py</text>
+  <text x="750" y="92" fill="#e6e8ee" text-anchor="middle">python view.py -m ...</text>
+  <text x="750" y="118" fill="#9aa3b2" text-anchor="middle" font-size="11">• carga las 6.5M/7.5M gaussianas</text>
+  <text x="750" y="138" fill="#9aa3b2" text-anchor="middle" font-size="11">• recibe la cámara</text>
+  <text x="750" y="158" fill="#9aa3b2" text-anchor="middle" font-size="11">• rasteriza (diff-surfel)</text>
+  <text x="750" y="178" fill="#9aa3b2" text-anchor="middle" font-size="11">• devuelve los píxeles</text>
+  <text x="750" y="210" fill="#ff7b72" text-anchor="middle" font-size="11">GPU usada: TODA</text>
+
+  <!-- flechas -->
+  <line x1="320" y1="120" x2="600" y2="120" stroke="#6ea8fe" stroke-width="2" marker-end="url(#a)"/>
+  <text x="460" y="112" fill="#6ea8fe" text-anchor="middle" font-size="11">cámara (JSON) →</text>
+  <line x1="600" y1="180" x2="320" y2="180" stroke="#7ee787" stroke-width="2" marker-end="url(#b)"/>
+  <text x="460" y="200" fill="#7ee787" text-anchor="middle" font-size="11">← imagen (bytes)</text>
+  <text x="460" y="150" fill="#9aa3b2" text-anchor="middle" font-size="11">socket TCP · puerto 6009</text>
+
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#6ea8fe"/></marker>
+    <marker id="b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#7ee787"/></marker>
+  </defs>
+</svg>
+</div>
+
+<p>Implicación directa de esto, y la causa de tu cuelgue: como <b>la GPU que renderiza es la del lado de <code>view.py</code></b>, si lo lanzas en tu PC local, cada movimiento dispara un render de millones de surfels en tu <b>RTX 3080 de 12 GB</b> → <span class="hl">OOM</span>. Quieto no pasa nada (no se pide frame nuevo); al mover, revienta. El detalle del porqué está en el diagnóstico de la sesión y en <code>docs/clamp_radio_y_techo_rasterizer.html</code>.</p>
+
+<h2>2. Qué hace <code>view.py</code>, línea a línea</h2>
+
+<p>El cuerpo es minúsculo (<code>view.py:9-34</code>). Carga el modelo una vez y entra en un bucle infinito:</p>
+
+<pre><code>gaussians = GaussianModel(dataset.sh_degree)
+scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)   # carga el .ply del checkpoint
+background = torch.tensor([0,0,0] o [1,1,1])
+
+while True:
+  if network_gui.conn == None:
+      network_gui.try_connect(dataset.render_items)     # espera a que la app SIBR se conecte
+  while network_gui.conn != None:
+      custom_cam, _, _, scaling_modifer, render_mode = network_gui.receive()   # ← llega la cámara
+      if custom_cam != None:
+          render_pkg = render(custom_cam, gaussians, pipe, background, scaling_modifer)   # ← rasteriza
+          net_image  = render_net_image(render_pkg, render_items, render_mode, custom_cam)
+          net_image_bytes = (clamp(net_image)*255).byte()...cpu().numpy()
+      metrics = {"#": nº de gaussianas}
+      network_gui.send(net_image_bytes, source_path, metrics)   # → manda los píxeles + métricas</code></pre>
+
+<div class="grid2">
+  <div class="card card2"><b>Carga (1 vez):</b> <code>Scene(...)</code> lee <code>point_cloud/iteration_XXXXX/point_cloud.ply</code> del <code>-m</code> y las <b>cámaras</b> del dataset (<code>-s</code>). Por eso necesitas <i>los dos</i> argumentos.</div>
+  <div class="card card2"><b>Bucle (cada frame):</b> recibir cámara → <code>render()</code> → empaquetar bytes → enviar. Una vuelta por cada imagen que ves. Sin cámara nueva, no hay render.</div>
+</div>
+
+<h2>3. El protocolo por debajo (<code>network_gui.py</code>)</h2>
+
+<table>
+<tr><th>Función</th><th>Qué hace</th></tr>
+<tr><td><code>init(ip,port)</code></td><td>Abre un socket que <b>escucha</b> en <code>ip:port</code> (por defecto <code>127.0.0.1:6009</code>). <code>view.py:48</code> lo fija a <code>--ip/--port</code>.</td></tr>
+<tr><td><code>try_connect()</code></td><td>Acepta la conexión de la app SIBR y le manda la <b>lista de modos de render</b> (<code>render_items</code>) para que la app pinte el menú desplegable.</td></tr>
+<tr><td><code>receive()</code></td><td>Lee un JSON con <code>resolution_x/y</code>, <code>fov_x/y</code>, <code>z_near/far</code>, la <b>matriz de vista</b> y de <b>proyección</b>, <code>scaling_modifier</code> y <code>render_mode</code>. Construye un <code>MiniCam</code> (una cámara "ligera", sin imagen GT). <span class="meta">Ojo: invierte signos de columnas 1 y 2 de las matrices — es el cambio de convención de ejes OpenGL↔COLMAP (<code>network_gui.py:86-89</code>).</span></td></tr>
+<tr><td><code>send()</code></td><td>Manda los <b>bytes crudos de la imagen</b>, luego la cadena <code>source_path</code> (la app la usa para verificar que coincide con la escena que abriste) y un JSON de <b>métricas</b> — aquí solo <code>"#"</code> = número de gaussianas vivas.</td></tr>
+</table>
+
+<p>Si <code>resolution_x/y</code> llegan a 0 (ventana minimizada), <code>receive()</code> devuelve <code>None</code> y ese frame se salta sin renderizar.</p>
+
+<h2>4. Los modos de visualización (esto es lo que más te interesa)</h2>
+
+<p>Cuando conectas, <code>view.py</code> manda <code>dataset.render_items</code> (<code>arguments/__init__.py:57</code>) y la app SIBR los ofrece en un <b>desplegable</b>. Cambiar de modo solo cambia qué canal del <code>render_pkg</code> se convierte en imagen (<code>render_net_image</code>, <code>utils/image_utils.py</code>). <b>No re-renderiza nada extra</b>, así que es gratis:</p>
+
+<table>
+<tr><th>Modo</th><th>Qué ves</th><th>Para qué te sirve aquí</th></tr>
+<tr><td><b>RGB</b></td><td>El render de color normal.</td><td>Lo que ya veías. Mirar césped/cielo a ojo.</td></tr>
+<tr><td><b>Alpha</b></td><td>Opacidad acumulada por píxel (<code>rend_alpha</code>), coloreada con <i>turbo</i>.</td><td><span class="hl2">El mejor para cazar huecos.</span> Donde no llega ningún surfel, alpha→0 (un color frío/oscuro fijo). Un agujero de fondo salta a la vista como mancha de alpha baja aunque el RGB lo disimule con el color de fondo.</td></tr>
+<tr><td><b>Normal</b></td><td>Normales de los surfels remapeadas a <code>(n+1)/2</code> como color RGB.</td><td>Ver si el suelo es un plano coherente o está "roto" en mil orientaciones.</td></tr>
+<tr><td><b>Depth</b></td><td>Profundidad de superficie (<code>surf_depth</code>) en <i>turbo</i>.</td><td>Confirmar que el cielo está "lejos" y no hay splats de fondo metidos en primer plano.</td></tr>
+<tr><td><b>Edge</b></td><td>Magnitud del gradiente (Sobel) del RGB.</td><td>Bordes/nitidez del detalle.</td></tr>
+<tr><td><b>Curvature</b></td><td>Gradiente del mapa de normales.</td><td>Rugosidad de superficie; superficies lisas → oscuras.</td></tr>
+</table>
+
+<p>Además de cambiar de modo, la app te deja tocar el <b><code>scaling_modifier</code></b> (un <i>slider</i>): multiplica el tamaño de <b>todos</b> los splats antes de rasterizar (<code>render(..., scaling_modifer)</code>, llega a <code>get_covariance(scaling_modifier)</code>). Ponlo <b>&lt;1</b> y los surfels encogen hasta verse como puntitos → es la forma de "ver la nube" y detectar si los huecos son <i>falta de splats</i> (puntos ausentes) o <i>splats transparentes</i>.</p>
+
+<div class="note ok-box"><b>Receta anti-huecos con el visor:</b> pon el modo en <b>Alpha</b> y orbita el césped/cielo. Si aparecen parches de alpha baja → hueco real (faltan surfels o son casi transparentes). Cruza con <b>Depth</b> para ver si lo que hay detrás está a la distancia correcta. Esto es justo el síntoma que persigues en flowers.</p></div>
+
+<h2>5. Tus dos gotchas (importantes)</h2>
+
+<div class="card">
+<h3 style="margin-top:0">① Cargaste el checkpoint de 30000, no el final</h3>
+<p>A diferencia de <code>render.py</code> (que por defecto usa <code>--iteration -1</code> = el último), <code>view.py</code> tiene <span class="hl">hardcodeado <code>--iteration 30000</code></span> (<code>view.py:44</code>). Tu run llega a <b>50000</b>, así que con</p>
+<pre><code>python view.py -s ../360_extra_scenes/flowers -m output/m360/flowers_beta_run2</code></pre>
+<p>estabas viendo el modelo a <b>iteración 30000</b> (un estado intermedio, con menos splats y huecos peores de lo que es el resultado final). Para ver el final, añade explícitamente:</p>
+<pre><code>python view.py -s ../360_extra_scenes/flowers -m output/m360/flowers_beta_run2 --iteration 50000</code></pre>
+</div>
+
+<div class="card">
+<h3 style="margin-top:0">② La GPU que sufre es la de <code>view.py</code></h3>
+<p>Si lo lanzas en el portátil (12 GB), navegar 6.5M/7.5M surfels = OOM al primer movimiento. La solución no es bajar <code>mesh_res</code> (eso es solo para mallas y no aplica al visor); es <b>poner <code>view.py</code> donde está la VRAM</b>: el servidor de 95 GB. Ver §6.</p>
+</div>
+
+<h2>6. Cómo navegar de verdad: <code>view.py</code> en el servidor + túnel SSH</h2>
+
+<p>La app SIBR corre en <b>tu máquina</b> (tiene ventana), pero el render lo hace el <b>servidor</b>. Como el socket por defecto es <code>127.0.0.1:6009</code>, se reenvía con un túnel SSH:</p>
+
+<pre><code># 1) En el servidor (dentro del contenedor docker, donde está la GPU de 95 GB):
+#    usa una GPU libre para no pelear con el entreno
+GPU_ID=1 docker compose run --rm -p 6009:6009 surfel_env \
+  python view.py -s Datasets/flowers -m output/m360/flowers_beta_run3 --iteration 50000 --ip 0.0.0.0
+
+# 2) En tu PC: abre el túnel (si el servidor no es accesible directo)
+ssh -L 6009:localhost:6009  usuario@servidor
+
+# 3) En tu PC: lanza el cliente apuntando al puerto local reenviado
+./SIBR_remoteGaussian_app --ip 127.0.0.1 --port 6009</code></pre>
+
+<p>Así el servidor de 95 GB rasteriza sin OOM (las vistas nuevas con muchas intersecciones irán <i>lentas</i>, pero <b>no se cuelgan</b>), y tu PC solo recibe píxeles. <span class="meta">Notas: <code>--ip 0.0.0.0</code> hace que <code>view.py</code> escuche en todas las interfaces; con el túnel SSH puedes dejar <code>127.0.0.1</code> y reenviar igual. Si lanzas con <code>docker compose run</code> recuerda publicar el puerto con <code>-p 6009:6009</code>.</span></p>
+
+<h2>7. <code>view.py</code> vs <code>render.py</code> vs malla — cuándo cada uno</h2>
+
+<table>
+<tr><th></th><th><code>view.py</code> (SIBR)</th><th><code>render.py</code></th><th>Malla (<code>fuse_post.ply</code>)</th></tr>
+<tr><td>Interactivo</td><td>Sí (orbitas en vivo)</td><td>No (escribe archivos)</td><td>Sí, en MeshLab/open3d</td></tr>
+<tr><td>Qué renderiza</td><td>Gaussianas, en vivo, vista libre</td><td>Gaussianas, vistas de train/test + vídeo</td><td>Triángulos (geometría), <b>sin la apariencia gaussiana</b></td></tr>
+<tr><td>¿Se cuelga?</td><td>Sí en 12 GB; va en el servidor</td><td>No (frame a frame); <code>-r</code> si falta VRAM</td><td>Depende del nº de triángulos</td></tr>
+<tr><td>Mejor para…</td><td>Explorar huecos en vivo, cambiar a modo Alpha/Depth</td><td>Comparar render vs GT, sacar el vídeo de trayectoria</td><td>Juzgar geometría, <b>no</b> el color/huecos de fondo</td></tr>
+</table>
+
+<div class="note"><b>Para cielo/césped, ningún camino pasa por la malla.</b> La malla pierde la apariencia y los huecos se ven distintos. Usa <b>RGB/Alpha/Depth</b> en el visor (en el servidor), o las imágenes de <code>render.py --skip_mesh</code>. <code>mesh_res</code> solo dimensiona el marching cubes y es irrelevante para navegar.</p></div>
+
+<p class="meta">Refs de código: <code>view.py</code>, <code>gaussian_renderer/network_gui.py</code>, <code>utils/image_utils.py:render_net_image</code>, <code>arguments/__init__.py:57</code> (render_items). Relacionado: <code>docs/clamp_radio_y_techo_rasterizer.html</code> (por qué un frame es tan caro), <code>docs/diagnostico_ruido_flowers1.html</code>.</p>
+
+</div>
+</body>
+</html>
