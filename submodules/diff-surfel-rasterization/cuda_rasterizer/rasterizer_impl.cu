@@ -163,6 +163,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.transMat, P * 9, 128);
 	obtain(chunk, geom.normal_opacity, P, 128);
 	obtain(chunk, geom.beta, P, 128);
+	obtain(chunk, geom.a, P * 3, 128);
 	obtain(chunk, geom.rgb, P * 3, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
@@ -209,6 +210,7 @@ int64_t CudaRasterizer::Rasterizer::forward(
 	const float* colors_precomp,
 	const float* opacities,
 	const float* beta,
+	const float* a,
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
@@ -260,6 +262,8 @@ int64_t CudaRasterizer::Rasterizer::forward(
 		geomState.clamped,		
 		beta,              // viene de PyTorch
     	geomState.beta,    // ✅ buffer CUDA
+		a,                 // coeficientes Gabor (PyTorch)
+    	geomState.a,       // ✅ buffer CUDA
 		transMat_precomp,
 		colors_precomp,
 		viewmatrix, projmatrix,
@@ -338,6 +342,7 @@ int64_t CudaRasterizer::Rasterizer::forward(
 		geomState.depths,
 		geomState.normal_opacity,
 		geomState.beta,
+		geomState.a,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		background,
@@ -374,6 +379,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dnormal,
 	float* dL_dopacity,
 	float* dL_dbeta,
+	float* dL_da,
 	float* dL_dcolor,
 	float* dL_dmean3D,
 	float* dL_dtransMat,
@@ -415,6 +421,7 @@ void CudaRasterizer::Rasterizer::backward(
 		geomState.means2D,
 		geomState.normal_opacity,
 		geomState.beta,
+		geomState.a,
 		color_ptr,
 		transMat_ptr,
 		depth_ptr,
@@ -427,6 +434,7 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,
 		dL_dopacity,
 		dL_dbeta,
+		dL_da,
 		dL_dcolor,
 		freeze_low_beta), debug)
 

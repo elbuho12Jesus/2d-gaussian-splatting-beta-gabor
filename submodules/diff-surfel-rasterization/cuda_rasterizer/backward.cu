@@ -151,6 +151,7 @@ renderCUDA(
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ normal_opacity,
 	const float* __restrict__ beta,
+	const float* __restrict__ a,
 	const float* __restrict__ transMats,
 	const float* __restrict__ colors,
 	const float* __restrict__ depths,
@@ -163,6 +164,7 @@ renderCUDA(
 	float* __restrict__ dL_dnormal3D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dbeta,
+	float* __restrict__ dL_da,
 	float* __restrict__ dL_dcolors,
 	const bool freeze_low_beta)
 {
@@ -187,6 +189,7 @@ renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float collected_beta[BLOCK_SIZE];
+	__shared__ float collected_a[3 * BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
@@ -272,6 +275,9 @@ renderCUDA(
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
 			collected_beta[block.thread_rank()] = beta[coll_id];
+			collected_a[3 * block.thread_rank() + 0] = a[3 * coll_id + 0];
+			collected_a[3 * block.thread_rank() + 1] = a[3 * coll_id + 1];
+			collected_a[3 * block.thread_rank() + 2] = a[3 * coll_id + 2];
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
@@ -321,9 +327,20 @@ renderCUDA(
 			if (r2 >= 1.0f) continue;
 
 			float beta_j = collected_beta[j];
-			float one_minus = max(1.0f - r2, 1e-6f);
+			// ---- Kernel Gabor (recomputa lo mismo que el forward, forward.cu) ----
+			const float PI_ = 3.14159265358979323846f;
+			float r  = sqrtf(r2);
+			float a1 = collected_a[3 * j + 0];
+			float a2 = collected_a[3 * j + 1];
+			float a3 = collected_a[3 * j + 2];
+			float c1 = cosf(PI_ * r), c2 = cosf(3.0f * PI_ * r), c3 = cosf(5.0f * PI_ * r);
+			float f  = 0.5f + a1 * c1 + a2 * c2 + a3 * c3;
+			float f0 = 0.5f + a1 + a2 + a3;
+			float f_safe  = fmaxf(f,  1e-6f);
+			float f0_safe = fmaxf(f0, 1e-6f);
+			float g = fmaxf(f_safe / f0_safe, 1e-6f);
 
-			float kernel = powf(one_minus, beta_j);
+			float kernel = powf(g, beta_j);
 			// FIX consistencia forward↔backward: el forward clampa alpha a 0.99
 			// (forward.cu:453, "avoid numerical instabilities"). El backward debe usar
 			// el MISMO alpha, o la reconstrucción T = T/(1-alpha) diverge para splats
@@ -423,21 +440,45 @@ renderCUDA(
 			// saltaba TODO el resto del cuerpo del bucle -> congelaba posición/
 			// escala/rotación/opacidad de esos splats (ver doc backward_*).
 			if (beta_j >= 0.1f) {
-				// ∂α/∂beta = α * log(1 - rho)
-				float d_alpha_d_beta = alpha * logf(one_minus);
+				// K = (f/f0)^beta = g^beta  ->  ∂α/∂beta = α * ln(g)
+				float d_alpha_d_beta = alpha * logf(g);
 				float grad_beta = dL_dalpha * d_alpha_d_beta;
 
 				// clamp beta gradient to avoid NaN explosion
 				grad_beta = fminf(fmaxf(grad_beta, -1e-3f), 1e-3f);
 
 				atomicAdd(&dL_dbeta[global_id], grad_beta);
+
+				// Gradiente de los 3 coeficientes a_n del kernel Gabor.
+				// ∂α/∂a_n = α * beta * ( cos((2n-1)pi r)/f - 1/f0 )
+				//   (deriva de ln K = beta*(ln f - ln f0), con ∂f/∂a_n=c_n, ∂f0/∂a_n=1)
+				// A diferencia de beta (grad natural ~1e-4, el clamp ±1e-3 no muerde),
+				// el grad de a es O(1) => NO se puede clampar a 1e-3 (aplastaria la señal,
+				// verificado con finite-diff). El unico riesgo de explosion es c_n/f con
+				// f->0 y beta<1 (para beta>=1, alpha*f^(beta-1)->0 lo acota solo): se
+				// controla en el ORIGEN con un piso mas alto SOLO en el denominador del
+				// gradiente (f_div), dejando el forward con f_safe=1e-6 intacto. El clamp
+				// ±50 es solo un backstop NaN/Inf que no limita la señal normal.
+				float f_div = fmaxf(f, 1e-3f);
+				float inv_f0 = 1.0f / f0_safe;
+				float ab = dL_dalpha * alpha * beta_j;
+				float grad_a1 = fminf(fmaxf(ab * (c1 / f_div - inv_f0), -50.0f), 50.0f);
+				float grad_a2 = fminf(fmaxf(ab * (c2 / f_div - inv_f0), -50.0f), 50.0f);
+				float grad_a3 = fminf(fmaxf(ab * (c3 / f_div - inv_f0), -50.0f), 50.0f);
+				atomicAdd(&dL_da[global_id * 3 + 0], grad_a1);
+				atomicAdd(&dL_da[global_id * 3 + 1], grad_a2);
+				atomicAdd(&dL_da[global_id * 3 + 2], grad_a3);
 			}
 
-			// ∂α/∂rho = -opa * beta * (1 - rho)^{beta - 1}
-			
-			// Stable beta-splatting backward (gsplat-style)
-			// dα/dρ = -β * α / (1 - ρ)
-			float d_alpha_d_rho = (-beta_j) * alpha / one_minus;
+			// ∂α/∂rho = α * beta * (df/drho)/f   (generaliza -β·α/(1-ρ) del kernel viejo).
+			//   Con x=r=sqrt(rho): df/drho = f'(r)/(2r), f'(r)=-Σ a_n (2n-1)pi sin((2n-1)pi r).
+			//   En r->0, f'(r)->0 (sin->0) => df/drho finito; el guard r_safe evita 0/0.
+			float fprime = -(a1 * PI_        * sinf(PI_ * r)
+			               + a2 * 3.0f * PI_ * sinf(3.0f * PI_ * r)
+			               + a3 * 5.0f * PI_ * sinf(5.0f * PI_ * r));
+			float r_safe = fmaxf(r, 1e-6f);
+			float df_drho = fprime / (2.0f * r_safe);
+			float d_alpha_d_rho = alpha * beta_j * df_drho / f_safe;
 
 			// Account for fact that alpha also influences how much of
 			// the background color is added if nothing left to blend
@@ -770,6 +811,7 @@ void BACKWARD::render(
 	const float2* means2D,
 	const float4* normal_opacity,
 	const float* beta,
+	const float* a,
 	const float* colors,
 	const float* transMats,
 	const float* depths,
@@ -782,6 +824,7 @@ void BACKWARD::render(
 	float* dL_dnormal3D,
 	float* dL_dopacity,
 	float* dL_dbeta,
+	float* dL_da,
 	float* dL_dcolors,
 	const bool freeze_low_beta)
 {
@@ -794,6 +837,7 @@ void BACKWARD::render(
 		means2D,
 		normal_opacity,
 		beta,
+		a,
 		transMats,
 		colors,
 		depths,
@@ -806,6 +850,7 @@ void BACKWARD::render(
 		dL_dnormal3D,
 		dL_dopacity,
 		dL_dbeta,
+		dL_da,
 		dL_dcolors,
 		freeze_low_beta
 		);

@@ -57,6 +57,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     means2D = screenspace_points
     opacity = pc.get_opacity
     beta = pc.get_beta.contiguous().to(pc.get_xyz.device)
+    a = pc.get_a.contiguous().to(pc.get_xyz.device)  # (N,3) coefs kernel Gabor
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
@@ -127,6 +128,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         colors_precomp = colors_precomp,
         opacities = opacity,
         beta = beta,
+        a = a,
         scales = scales,
         rotations = rotations,
         cov3D_precomp = cov3D_precomp

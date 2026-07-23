@@ -93,6 +93,8 @@ class OptimizationParams(ParamGroup):
         self.sb_params_lr = 0.0025
         self.opacity_lr = 0.05
         self.beta_lr = 0.001
+        # lr de los 3 coeficientes a_1,a_2,a_3 del kernel Gabor (por-Gaussiana)
+        self.a_lr = 0.001
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
         self.percent_dense = 0.01

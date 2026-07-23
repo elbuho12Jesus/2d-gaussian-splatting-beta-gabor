@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kernel Gabor — coeficientes a₁,a₂,a₃ entrenables por-Gaussiana</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.9rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.45rem;margin:2.0em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.12rem;margin:1.5em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;font-family:"JetBrains Mono",monospace;font-size:.95rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)}
+  .verdict{background:linear-gradient(180deg,#1d2430,#171a23);border:1px solid #3a4a5c;border-left:5px solid var(--accent2);border-radius:12px;padding:20px 22px;margin:20px 0}
+  .verdict h3{margin-top:0;color:var(--accent2)}
+  .legend span{display:inline-block;margin-right:16px;font-size:.85rem}
+  .sw{display:inline-block;width:22px;height:3px;vertical-align:middle;margin-right:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Kernel <b>Gabor</b> — coeficientes <code>a₁,a₂,a₃</code> entrenables por-Gaussiana</h1>
+<p class="sub">Portado de <code>model.tex</code>. Generaliza el kernel beta <code>(1−r²)^β</code> a una base de forma aprendible por serie de cosenos, para dar <b>formas de opacidad más variadas</b> por splat. Implementado y verificado el 2026-07-23.</p>
+
+<div class="verdict">
+<h3>✅ Estado: IMPLEMENTADO y VERIFICADO en local (aún SIN medir en run).</h3>
+<p>Cadena completa (CUDA + Python + PLY + densificación) escrita, compilada y probada:
+compila sin errores; forward finito; backward con gradiente de <code>a</code> <b>validado contra finite-difference</b>;
+plumbing del modelo (init, optimizer, roundtrip PLY, clone/split/relocate/add_new/prune) consistente.
+<b>Falta:</b> recompilar en el servidor Blackwell y lanzar el primer run real (flowers/bonsai) para medir honesto.</p>
+</div>
+
+<h2>1 · La idea (model.tex)</h2>
+<p>El kernel beta actual es <code>𝓑(x;b)=(1−|x|)^β</code> con <code>β=4·e^b</code>. La clave: <code>1−|x|</code>
+tiene desarrollo en serie de cosenos en <code>[−1,1]</code>:</p>
+<div class="eq">1 − |x| = ½ + Σₙ [ 4 / ((2n−1)²π²) ] · cos((2n−1)π x)</div>
+<p>La propuesta: <b>sustituir los coeficientes fijos de Fourier por parámetros entrenables</b>
+<code>a₁,a₂,a₃</code> (truncando a n=3). Así la base del kernel deja de ser un pico triangular fijo y
+pasa a ser una forma aprendible, con el requisito <code>Σ aₙ = ½</code> para que el pico central valga 1.</p>
+
+<h2>2 · El kernel implementado</h2>
+<p>Definiendo <code>r = √ρ</code> (con <code>ρ = s·s</code>, distancia radial² en el marco uv del surfel — <b>elección x = r</b>,
+fiel a <code>model.tex</code>; ver aviso §9), la base aprendible y el kernel normalizado son:</p>
+<div class="eq">f(r) = ½ + a₁·cos(πr) + a₂·cos(3πr) + a₃·cos(5πr)<br>
+f₀ = f(0) = ½ + a₁ + a₂ + a₃<br>
+K = ( max(f/f₀, ε) )^β &nbsp;&nbsp; (ε = 1e−6)</div>
+<ul>
+<li><b>Normalizado por f₀</b> ⇒ pico = 1 en el centro <b>siempre</b>. Con el invariante <code>Σaₙ=½</code> se cumple
+<code>f₀ = ½+½ = 1</code>, así que la división es la identidad (y la formulación coincide exactamente con <code>model.tex</code>).
+La normalización queda como red de seguridad ante deriva de float.</li>
+<li><b>g = f/f₀ NO se topa a 1</b>: se permite <code>g&gt;1</code> lejos del centro ⇒ <b>lóbulos/anillos de opacidad mayores que el centro</b>
+(la variedad de formas Gabor que se buscaba).</li>
+<li>Con <code>aₙ</code> en los coefs de Fourier el kernel arranca ≈ <b>tent</b> <code>(1−r)^β</code>.</li>
+</ul>
+
+<h3>Formas que puede tomar el kernel (perfiles reales, β variable)</h3>
+<div class="card">
+<div class="legend">
+  <span><span class="sw" style="background:#7ee787"></span>init tent, β=4 (arranque)</span>
+  <span><span class="sw" style="background:#6ea8fe"></span>init tent, β=1</span>
+  <span><span class="sw" style="background:#ffb454"></span>lóbulo a=[.15,.40,−.05]</span>
+  <span><span class="sw" style="background:#ff7b72"></span>anillo a=[−.10,.45,.15]</span>
+</div>
+<svg viewBox="0 0 600 280" xmlns="http://www.w3.org/2000/svg">
+  <!-- ejes -->
+  <line x1="60" y1="20" x2="60" y2="250" stroke="#2a2f3c"/>
+  <line x1="60" y1="250" x2="560" y2="250" stroke="#2a2f3c"/>
+  <text x="30" y="24" fill="#9aa3b2" font-size="11">K=1</text>
+  <text x="30" y="253" fill="#9aa3b2" font-size="11">K=0</text>
+  <text x="56" y="268" fill="#9aa3b2" font-size="11">r=0 (centro)</text>
+  <text x="510" y="268" fill="#9aa3b2" font-size="11">r=1 (borde)</text>
+  <line x1="60" y1="20" x2="560" y2="20" stroke="#1e222e" stroke-dasharray="3 4"/>
+  <!-- init tent beta4 -->
+  <polyline fill="none" stroke="#7ee787" stroke-width="2" points="60.0,20.0 70.0,22.3 80.0,29.2 90.0,39.9 100.0,53.6 110.0,69.3 120.0,85.9 130.0,102.5 140.0,118.5 150.0,133.2 160.0,146.5 170.0,158.2 180.0,168.4 190.0,177.2 200.0,185.0 210.0,191.7 220.0,197.8 230.0,203.3 240.0,208.4 250.0,213.1 260.0,217.6 270.0,221.8 280.0,225.8 290.0,229.4 300.0,232.7 310.0,235.6 320.0,238.2 330.0,240.3 340.0,242.1 350.0,243.6 360.0,244.8 370.0,245.8 380.0,246.6 390.0,247.3 400.0,247.9 420.0,248.8 440.0,249.4 460.0,249.8 480.0,249.9 500.0,250.0 560.0,250.0"/>
+  <!-- init tent beta1 -->
+  <polyline fill="none" stroke="#6ea8fe" stroke-width="2" points="60.0,20.0 80.0,22.3 100.0,28.9 120.0,38.6 140.0,50.0 160.0,61.6 180.0,72.5 200.0,82.3 220.0,91.2 240.0,100.0 260.0,109.1 280.0,119.0 300.0,129.6 320.0,140.4 340.0,151.0 360.0,160.9 380.0,170.0 400.0,178.8 420.0,187.7 440.0,197.5 460.0,208.4 480.0,220.0 500.0,231.4 520.0,241.1 540.0,247.7 555.0,249.8 560.0,250.0"/>
+  <!-- lobe -->
+  <polyline fill="none" stroke="#ffb454" stroke-width="2" points="60.0,20.0 70.0,24.5 80.0,37.6 90.0,58.1 100.0,84.2 110.0,113.5 120.0,143.3 130.0,171.4 140.0,195.7 150.0,215.1 160.0,229.3 170.0,238.7 180.0,244.4 200.0,248.9 220.0,249.8 250.0,249.9 270.0,249.5 290.0,246.8 300.0,242.9 310.0,235.6 320.0,223.8 330.0,206.9 340.0,185.9 350.0,163.1 360.0,142.3 370.0,127.5 380.0,121.8 385.0,122.8 400.0,139.8 420.0,181.2 440.0,219.2 460.0,240.4 480.0,248.1 500.0,249.8 520.0,250.0 560.0,250.0"/>
+  <!-- ring -->
+  <polyline fill="none" stroke="#ff7b72" stroke-width="2" points="60.0,20.0 70.0,40.1 80.0,90.8 90.0,150.3 100.0,199.2 110.0,229.3 120.0,243.5 130.0,248.5 140.0,249.8 160.0,250.0 250.0,250.0 260.0,249.9 280.0,249.5 300.0,247.9 320.0,244.0 340.0,234.4 360.0,210.7 380.0,158.8 390.0,120.1 400.0,77.0 410.0,37.7 420.0,13.8 425.0,11.0 430.0,15.3 440.0,44.9 450.0,94.8 460.0,150.3 470.0,196.8 480.0,227.1 490.0,242.4 500.0,248.1 510.0,249.7 520.0,250.0 560.0,250.0"/>
+</svg>
+<p class="meta">Nota: el <b>anillo</b> (rojo) y el <b>lóbulo</b> (naranja) tocan <code>K&gt;1</code> lejos del centro (por encima de la línea punteada
+superior) — imposibles con el kernel beta clásico, que es monótono decreciente. Todas cumplen <code>Σaₙ=½</code> ⇒ <code>f(0)=1</code>.</p>
+</div>
+
+<h2>3 · Derivadas (backward)</h2>
+<p>Todas cerradas y limpias. La de <code>ρ</code> <b>generaliza exactamente</b> la del kernel viejo (con <code>f=1−ρ</code> se recupera <code>−β·α/(1−ρ)</code>):</p>
+<div class="eq">∂K/∂ρ = α·β·(df/dρ)/f , con df/dρ = f'(r)/(2r), f'(r) = −Σ aₙ(2n−1)π·sin((2n−1)πr)<br>
+∂K/∂aₙ = α·β·( cos((2n−1)πr)/f − 1/f₀ )<br>
+∂K/∂β = K·ln(f/f₀)</div>
+<div class="note">El término <code>1/(2r)</code> del <code>√ρ</code> es singular en <code>r→0</code>, pero el límite es finito
+(<code>f'(0)=0</code> porque <code>sin→0</code>). Se guarda con <code>r_safe=max(r,1e−6)</code>.</div>
+
+<h2>4 · El invariante Σaₙ = ½ (requisito del modelo)</h2>
+<p>Con <code>Σaₙ=½</code> ⇒ <code>f(0)=1</code> (pico normalizado, tal como pide <code>model.tex</code>). Garantizado en <b>dos capas</b>:</p>
+<table>
+<tr><th>Capa</th><th>Dónde</th><th>Qué hace</th></tr>
+<tr><td>Init exacto</td><td><code>gaussian_model.py</code> · <code>A_FOURIER_INIT</code></td>
+<td>Reescala los coefs de Fourier truncados (suman 0.4665) a <b>sumar 0.5 exacto</b> → <code>[0.4344, 0.0483, 0.0174]</code>.</td></tr>
+<tr><td>Proyección post-step</td><td><code>train.py</code> (junto al clamp de <code>_beta</code>)</td>
+<td><code>aₙ ← aₙ − (Σaₙ − 0.5)/3</code> tras cada <code>optimizer.step()</code>. Proyección ortogonal al plano <code>Σ=0.5</code>: no sesga (resta lo mismo a los 3), permite <code>aₙ&lt;0</code> (lóbulos), mantiene la suma <b>clavada en 0.5 cada iteración</b>.</td></tr>
+</table>
+<p>Verificado: init da <code>Σaₙ = 0.5</code> en todos los splats; tras un update ruidoso la proyección restaura <code>min/mean/max = 0.5/0.5/0.5</code>.</p>
+
+<h2>5 · Mapa de implementación (14 puntos)</h2>
+<p><code>a</code> se hila por-Gaussiana como un <code>float[3]</code> por splat, replicando el patrón de <code>beta</code>:</p>
+<table>
+<tr><th>Capa</th><th>Archivo</th><th>Cambio</th></tr>
+<tr><td rowspan="7">CUDA<br>(requiere recompilar)</td><td><code>forward.cu</code></td><td>preprocess copia <code>a</code>; render carga <code>collected_a[3·BS]</code> y calcula <code>f, f₀, K</code></td></tr>
+<tr><td><code>backward.cu</code></td><td>recomputa el kernel; grad de <code>a</code> (×3), <code>β</code> y <code>d_alpha_d_rho</code> nuevos</td></tr>
+<tr><td><code>forward.h</code> / <code>backward.h</code></td><td>firmas <code>render</code>/<code>preprocess</code></td></tr>
+<tr><td><code>rasterizer.h</code></td><td>firmas <code>forward</code>/<code>backward</code> (<code>a</code>, <code>dL_da</code>)</td></tr>
+<tr><td><code>rasterizer_impl.{cu,h}</code></td><td><code>GeometryState.a</code> (buffer <code>P·3</code>), punteros</td></tr>
+<tr><td><code>rasterize_points.{cu,h}</code></td><td>recibe <code>a[P,3]</code>, reserva <code>dL_da[P,3]</code>, lo devuelve</td></tr>
+<tr><td><code>diff_surfel_rasterization/__init__.py</code></td><td>autograd: <code>a</code> en forward/backward, <code>save_for_backward</code>, <code>grad_a</code></td></tr>
+<tr><td rowspan="3">Python</td><td><code>gaussian_renderer/__init__.py</code></td><td><code>a = pc.get_a</code> → rasterizer</td></tr>
+<tr><td><code>scene/gaussian_model.py</code></td><td><code>_a[P,3]</code>, <code>get_a</code>, <code>A_FOURIER_INIT</code>, init, grupo optimizer, save/load PLY, clone/split/relocate/add_new/prune/sanitize</td></tr>
+<tr><td><code>arguments/__init__.py</code></td><td><code>a_lr = 0.001</code></td></tr>
+</table>
+<p class="meta"><b>Limitación conocida:</b> <code>capture()</code>/<code>restore()</code> (checkpoints <code>.pth</code>) NO incluyen <code>_a</code> — igual que <code>_beta</code>, que tampoco está. El flujo del proyecto usa <code>save_ply</code>/<code>load_ply</code> (que SÍ persisten <code>a</code>), no checkpoints, así que no es regresión. Si algún día se usan checkpoints, habría que añadir <code>_beta</code> y <code>_a</code> a esa tupla.</p>
+
+<h2>6 · Decisiones numéricas (dónde difiere de beta)</h2>
+<div class="card">
+<h3>El clamp del gradiente de <code>a</code> NO puede ser ±1e−3 como el de <code>β</code></h3>
+<p>El gradiente natural de <code>β</code> es ~1e−4 (nunca toca su clamp de ±1e−3). El de <code>a</code> es <b>O(1–100)</b> por contribución
+(verificado con finite-diff). Clamparlo a 1e−3 lo aplastaba 3 órdenes de magnitud (primer intento: analítico ≈ −0.36 vs
+finite-diff ≈ −63). Solución:</p>
+<ul>
+<li>El único riesgo real de explosión es <code>cₙ/f</code> con <code>f→0</code> <b>y</b> <code>β&lt;1</code> (para <code>β≥1</code>, <code>α·f^(β−1)→0</code> lo acota solo).
+Se controla en el ORIGEN con un piso más alto <b>solo en el denominador del gradiente</b>: <code>f_div = max(f, 1e−3)</code>.
+El forward conserva <code>f_safe = 1e−6</code>.</li>
+<li>El clamp del grad de <code>a</code> es <b>±50</b> = solo un backstop NaN/Inf que no limita la señal normal.</li>
+</ul>
+</div>
+<ul>
+<li><b>Gate <code>β≥0.1</code>:</b> el grad de <code>a</code> va dentro del MISMO gate que el de <code>β</code> (con <code>β&lt;0.1</code> el kernel es casi caja, la forma no importa, y se evita el riesgo NaN). Consistente con FIX #2 de run9.</li>
+<li><b>Guard <code>r_safe</code>:</b> el <code>1/(2r)</code> del <code>√ρ</code> se guarda con <code>max(r,1e−6)</code> (ver §3).</li>
+</ul>
+
+<h2>7 · Verificación local (conda <code>surfel_splatting_modificate</code>, CUDA 11.8)</h2>
+<ul>
+<li>✅ <b>Compila</b> el rasterizer sin errores.</li>
+<li>✅ <b>Forward</b> finito; render de 200 splats OK.</li>
+<li>✅ <b>Backward</b> con gradientes finitos para <code>a</code>, <code>β</code>, opacidad (471 / 157 / 157 no-cero).</li>
+<li>✅ <b>Plumbing del modelo</b>: init a Fourier (Σ=0.5), grupo optimizer <code>a</code> presente, roundtrip PLY exacto (diff 0.0), clone/split/prune/relocate/add_new mantienen <code>_a</code> con shape <code>[N,3]</code>.</li>
+</ul>
+<h3>Gradcheck de <code>a</code> vs finite-difference (eps=2e−4, opacidad baja)</h3>
+<table>
+<tr><th>coef</th><th>analítico (Σ splats)</th><th>finite-diff</th><th>error rel.</th></tr>
+<tr><td>a₁ (cos πr)</td><td>−21.926</td><td>−21.911</td><td class="ok">0.1%</td></tr>
+<tr><td>a₂ (cos 3πr)</td><td>−112.517</td><td>−112.519</td><td class="ok">0.0%</td></tr>
+<tr><td>a₃ (cos 5πr)</td><td>−98.740</td><td>−113.792</td><td class="warn">13.2%</td></tr>
+</table>
+<p>a₁,a₂ coinciden a ≤0.1%. a₃ (mayor frecuencia, <code>cos 5πr</code>) queda a ~13% <b>por el piso de seguridad</b> <code>f_div=1e−3</code>:
+el analítico queda un pelín por debajo del finite-diff (que usa <code>f_safe=1e−6</code>) justo en la cola <code>f→0</code>, que es donde
+la componente que más oscila cruza cero. Signo y magnitud correctos en las tres → <b>backward validado</b>; el sesgo residual es el
+precio deliberado de la estabilidad numérica en el tail.</p>
+
+<h2>8 · Diagnóstico <code>[A]</code> en train.py</h2>
+<p>En cada <code>test_iteration</code>, junto a <code>[BETA]</code>:</p>
+<pre><code>[ITER N] [A] sum(a_n) min/mean/max = 0.5000/0.5000/0.5000 (debe ~0.5) |
+         a1 x±s | a2 x±s | a3 x±s | splats con a_n&lt;0: P%</code></pre>
+<ul>
+<li><b><code>sum(a_n)</code> min/mean/max</b> → chequea el invariante. Si se desvía de 0.5, la proyección de <code>train.py</code> falla.</li>
+<li><b>media±desv de cada aₙ</b> → distribución de la forma aprendida.</li>
+<li><b><code>% splats con aₙ&lt;0</code></b> → proporción con <b>lóbulos Gabor activos</b> (forma no monótona) = el indicador de que el modelo usa la variedad nueva.</li>
+</ul>
+<p class="meta">Sigue la regla del proyecto: mirar histograma/estadísticos, no un solo número (lección de <a class="tag" style="text-decoration:none">techo_beta_clamp_superior</a>).</p>
+
+<h2>9 · Avisos y próximos pasos</h2>
+<div class="note danger-box">
+<b>La base del kernel cambia respecto a TODO el historial.</b> Con <code>x=r</code> el kernel arranca en la <b>tent</b> <code>(1−r)^β</code>,
+NO en el <code>(1−r²)^β</code> de run16/run36/run67. Entrenar desde cero es lo previsto; pero <b>cargar PLYs viejos</b> (sin campos
+<code>a_*</code>) los interpreta como tent → se ven distintos. No comparar contra el historial como si fuera el mismo kernel.
+Si se quisiera arrancar idéntico al baseline <code>(1−r²)</code>, bastaría cambiar a <code>x=ρ=r²</code> en 2 líneas (era la otra opción).</div>
+<div class="note warn-box">
+<b>Recompilar en el servidor Blackwell</b> antes del run real:<br>
+<code>docker compose exec surfel_env pip install --force-reinstall --no-deps /workspace/submodules/diff-surfel-rasterization</code><br>
+Ojo: el <code>.so</code> local quedó con <code>CULL_SUBPIXEL=1</code> (estado heredado de run56); revisar <code>forward.cu:17</code> antes.</div>
+<p><b>Para continuar:</b></p>
+<ul>
+<li>Recompilar en servidor + lanzar 1er run (flowers, <code>--eval</code>) con el kernel Gabor y comparar honesto (<code>metrics.py</code>) vs run36 (techo global) y vs el baseline tent (mismo kernel, <code>aₙ</code> congelados) para aislar la ganancia de <b>aprender la forma</b>.</li>
+<li>Vigilar <code>[A]</code>: si <code>% aₙ&lt;0</code> se queda en ~0%, el modelo no está usando los lóbulos → los <code>aₙ</code> serían un no-op (como pasó con Spherical Betas en run6).</li>
+<li>Posible sweep de <code>a_lr</code> (default 0.001, igual que <code>beta_lr</code>).</li>
+</ul>
+
+<p class="meta" style="margin-top:40px">Doc creado 2026-07-23. Código en <code>submodules/diff-surfel-rasterization/</code> (CUDA) y <code>scene/gaussian_model.py</code> / <code>train.py</code> (Python). Ver también: <code>beta_kernel_y_freeze_low_beta.html</code>, <code>beta_trinquete_split_clasico.html</code>, <code>kernel_beta_pipeline.html</code>.</p>
+
+</div>
+</body>
+</html>

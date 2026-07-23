@@ -65,6 +65,9 @@ class GaussianModel:
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
         self._beta = torch.empty(0)
+        # Coeficientes del kernel Gabor (model.tex): base f(r)=1/2+Σ a_n cos((2n-1)πr),
+        # normalizada por su pico -> kernel=(f/f0)^beta. 3 coefs entrenables por-Gaussiana.
+        self._a = torch.empty(0)
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -188,6 +191,24 @@ class GaussianModel:
         b = self._beta.clamp(min=-4.0, max=2.0)
         return (4.0 * torch.exp(b)).contiguous()
 
+    # Coefs de Fourier de 1-|x| (a_n = 4/((2n-1)²π²)) para n=1,2,3, RENORMALIZADOS para
+    # que sumen 0.5 (requisito del modelo, model.tex -> f(0)=1). La serie infinita suma
+    # 0.5 exacto; truncada a 3 términos suma ~0.4665, así que se reescala. El kernel
+    # arranca ≈ 'tent' (1-r)^beta. La suma=0.5 se MANTIENE cada step por la proyección
+    # de train.py (junto al clamp de _beta).
+    _A_FOURIER_RAW = [4.0 / (math.pi ** 2), 4.0 / (9.0 * math.pi ** 2), 4.0 / (25.0 * math.pi ** 2)]
+    # (evaluado en scope de clase, sin comprehension: el cuerpo de una comprehension
+    # no ve variables de clase). Reescala para que sum(A_FOURIER_INIT)=0.5 exacto.
+    A_FOURIER_INIT = (np.array(_A_FOURIER_RAW) * (0.5 / float(np.sum(_A_FOURIER_RAW)))).tolist()
+
+    @property
+    def get_a(self):
+        # (N,3) crudos: se usan directamente como a_1,a_2,a_3 en el rasterizer.
+        # Invariante sum(a_n)=0.5 garantizado por el init (suma 0.5) + la proyección
+        # post-step de train.py. La estabilidad (f>0, pico=1) la refuerza el kernel CUDA
+        # (clamp f_safe, normalización por f0=1). Sin activación -> gradiente limpio.
+        return self._a.contiguous()
+
     @property
     def get_sb_params(self):
         # (N, sb_number, 6) activado: rgb ≥ 0 (softplus), θ/φ/b crudos
@@ -238,6 +259,10 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))       
         betas = torch.zeros((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
         self._beta = nn.Parameter(betas.requires_grad_(True))
+        # Coefs Gabor init a los de Fourier de 1-|x| -> kernel arranca en (1-r)^beta
+        a_init = torch.tensor(self.A_FOURIER_INIT, dtype=torch.float, device="cuda")
+        a_init = a_init.unsqueeze(0).repeat(fused_point_cloud.shape[0], 1)  # (N,3)
+        self._a = nn.Parameter(a_init.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self.low_opacity_counter = torch.zeros((self.get_xyz.shape[0],), device="cuda")
 
@@ -255,6 +280,7 @@ class GaussianModel:
             {'params': [self._sb_params], 'lr': getattr(training_args, "sb_params_lr", 0.0025), "name": "sb_params"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._beta], 'lr': training_args.beta_lr, "name": "beta"},
+            {'params': [self._a], 'lr': getattr(training_args, "a_lr", 0.001), "name": "a"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
         ]
@@ -285,6 +311,8 @@ class GaussianModel:
             l.append('sb_params_{}'.format(i))
         l.append('opacity')
         l.append('beta')
+        for i in range(self._a.shape[1]):
+            l.append('a_{}'.format(i))
         for i in range(self._scaling.shape[1]):
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
@@ -301,13 +329,14 @@ class GaussianModel:
         sb_params = self._sb_params.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         opacities = self._opacity.detach().cpu().numpy()
         beta = self._beta.detach().cpu().numpy()
+        a = self._a.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, sb_params, opacities, beta, scale, rotation), axis=1)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, sb_params, opacities, beta, a, scale, rotation), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
@@ -393,6 +422,18 @@ class GaussianModel:
             beta = np.ones((xyz.shape[0], 1), dtype=np.float32)
         self._beta = nn.Parameter(torch.tensor(beta, dtype=torch.float, device="cuda").requires_grad_(True))
 
+        # Coefs Gabor a_0,a_1,a_2. Fallback a los coefs de Fourier (kernel = tent) si el
+        # ply es antiguo (mismo patrón que beta/sb_params). Robusto al orden de campos.
+        a_names = [p for p in prop_names if p.startswith("a_")]
+        a_names = sorted(a_names, key=lambda x: int(x.split('_')[-1]))
+        if len(a_names) > 0:
+            a_arr = np.zeros((xyz.shape[0], len(a_names)), dtype=np.float32)
+            for idx, attr_name in enumerate(a_names):
+                a_arr[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        else:
+            a_arr = np.asarray(self.A_FOURIER_INIT, dtype=np.float32)[None, :].repeat(xyz.shape[0], axis=0)
+        self._a = nn.Parameter(torch.tensor(a_arr, dtype=torch.float, device="cuda").requires_grad_(True))
+
         self.active_sh_degree = self.max_sh_degree
 
     def replace_tensor_to_optimizer(self, tensor, name):
@@ -440,6 +481,7 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         self._beta = optimizable_tensors["beta"]
+        self._a = optimizable_tensors["a"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
 
@@ -469,15 +511,21 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_beta, new_scaling, new_rotation, new_sb_params=None):
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_beta, new_scaling, new_rotation, new_sb_params=None, new_a=None):
         if new_sb_params is None:
             new_sb_params = torch.zeros((new_xyz.shape[0], self.sb_number, 6), device=new_xyz.device)
+        if new_a is None:
+            # fallback defensivo: coefs de Fourier (tent). Todas las rutas de creación
+            # de abajo pasan new_a explícito heredando el del src.
+            new_a = torch.tensor(self.A_FOURIER_INIT, dtype=torch.float, device=new_xyz.device)
+            new_a = new_a.unsqueeze(0).repeat(new_xyz.shape[0], 1)
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
         "sb_params": new_sb_params,
         "opacity": new_opacities,
         "beta": new_beta,
+        "a": new_a,
         "scaling" : new_scaling,
         "rotation" : new_rotation}
 
@@ -488,6 +536,7 @@ class GaussianModel:
         self._sb_params = optimizable_tensors["sb_params"]
         self._opacity = optimizable_tensors["opacity"]
         self._beta = optimizable_tensors["beta"]
+        self._a = optimizable_tensors["a"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
@@ -585,9 +634,12 @@ class GaussianModel:
         # relocate_gs (771) y add_new_gs (849), las otras 3 rutas de creacion.
         # Detalle: docs/beta_trinquete_split_clasico.html
         new_beta = self._beta[selected_pts_mask].repeat(N, 1)
+        # a (coefs Gabor) = parámetro de FORMA como beta -> se hereda tal cual (NO se
+        # reparte entre hijos, mismo criterio que el fix del trinquete de beta).
+        new_a = self._a[selected_pts_mask].repeat(N, 1)
         new_sb_params = self._sb_params[selected_pts_mask].repeat(N, 1, 1)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_beta, new_scaling, new_rotation, new_sb_params)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_beta, new_scaling, new_rotation, new_sb_params, new_a=new_a)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -610,11 +662,12 @@ class GaussianModel:
         new_opacities = self.inverse_opacity_activation(alpha_new)
 
         new_beta = self._beta[selected_pts_mask]
+        new_a = self._a[selected_pts_mask]
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
         new_sb_params = self._sb_params[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_beta, new_scaling, new_rotation, new_sb_params)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_beta, new_scaling, new_rotation, new_sb_params, new_a=new_a)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, iteration=None, prune_sustain=0):
         grads = self.xyz_gradient_accum / self.denom
@@ -782,6 +835,7 @@ class GaussianModel:
             self._scaling[dead_idx] = self._scaling[src_idx]
             self._rotation[dead_idx] = self._rotation[src_idx]
             self._beta[dead_idx] = self._beta[src_idx]
+            self._a[dead_idx] = self._a[src_idx]
             self._opacity[dead_idx] = new_opacity_raw
             self._opacity[src_idx] = new_opacity_raw
 
@@ -860,6 +914,7 @@ class GaussianModel:
             new_scaling = self._scaling[src_idx].detach().clone()
             new_rotation = self._rotation[src_idx].detach().clone()
             new_beta = self._beta[src_idx].detach().clone()
+            new_a = self._a[src_idx].detach().clone()
             new_opacity = new_opacity_raw.detach().clone()
 
             # Reducir opacidad de los srcs ANTES del postfix (que reasigna _opacity).
@@ -868,6 +923,7 @@ class GaussianModel:
         self.densification_postfix(
             new_xyz, new_features_dc, new_features_rest,
             new_opacity, new_beta, new_scaling, new_rotation, new_sb_params,
+            new_a=new_a,
         )
         self._reset_optimizer_state(src_idx.unique())
 
@@ -891,6 +947,7 @@ class GaussianModel:
             mask = mask | bad_rows(self._features_rest)
             mask = mask | bad_rows(self._sb_params)
             mask = mask | bad_rows(self._beta)
+            mask = mask | bad_rows(self._a)
             n_bad = int(mask.sum().item())
             if n_bad == 0:
                 return 0
@@ -912,6 +969,8 @@ class GaussianModel:
             self._features_rest.data[mask] = 0.0
             self._sb_params.data[mask] = 0.0
             self._beta.data[mask] = 0.0
+            # coefs Gabor -> reinit a los de Fourier (kernel válido = tent)
+            self._a.data[mask] = torch.tensor(self.A_FOURIER_INIT, dtype=self._a.dtype, device=dev)
             # buffers densificación
             if self.xyz_gradient_accum.shape[0] == mask.shape[0]:
                 self.xyz_gradient_accum[mask] = 0.0
@@ -942,6 +1001,7 @@ class GaussianModel:
             mask = mask | bad_rows(self._features_rest)
             mask = mask | bad_rows(self._sb_params)
             mask = mask | bad_rows(self._beta)
+            mask = mask | bad_rows(self._a)
             n_bad = int(mask.sum().item())
             if n_bad == 0:
                 return 0

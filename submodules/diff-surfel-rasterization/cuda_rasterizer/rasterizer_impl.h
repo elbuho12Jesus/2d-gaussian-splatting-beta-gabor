@@ -37,6 +37,7 @@ namespace CudaRasterizer
 		float* transMat;
 		float4* normal_opacity;
 		float* beta;
+		float* a;
 		float* rgb;
 		uint64_t* point_offsets;   // int64: suma acumulada de tiles; puede pasar de 2^31
 		uint64_t* tiles_touched;

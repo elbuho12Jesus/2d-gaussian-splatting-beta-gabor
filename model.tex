@@ -1,0 +1,22 @@
+\documentclass[17pt]{extarticle}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath}
+
+\title{convert_beta_to_(Like_gabor)}
+\author{elbuho12 }
+\date{July 2026}
+
+\begin{document}
+
+%\maketitle
+
+\section{Datos}
+Todos esto es asumiento $x\in[-1,1]$
+\[ 1- \lvert x \rvert =\frac{1}{2} + \sum_{n=1}^{\infty} \frac{4}{(2n-1)^2\pi^2}\cos\bigl((2n-1)\pi x\bigr). \]
+asumiendo que $ \sum_{n=1}^{\infty} a_{n}=\frac{1}{2}$
+\[  1- \lvert x \rvert=\frac{1}{2} + \sum_{n=1}^{\infty} a_{n}\cos\bigl((2n-1)\pi x\bigr). \]
+sabiendo que la funcion beta es de la forma $\mathcal{B}(x;b)=(1- \lvert x\rvert)^{\beta(b)}$ donde $\beta(b)=4e^{b}$, entonces unsado nuestra aproximacion de fourires tenemos
+\[  \mathcal{B}(x;b)=(1- \lvert x \rvert)^{\beta(b)}=(\frac{1}{2} + \sum_{n=1}^{\infty} a_{n}\cos\bigl((2n-1)\pi x\bigr))^{\beta(b)}. \]
+
+entonces lo que quiero definir en mi codigo es esto modelo para $n=3$, para lo cual tendria que definir las bariables de entrenamiento $a_1$, $a_2$ y a $a_3$.
+\end{document}

@@ -1,13 +1,21 @@
 services:
+  # Servicio 'surfel_env' (NO renombrar: CLAUDE.md y el workflow usan
+  # `docker compose exec surfel_env ...`). El servicio está scopeado por proyecto
+  # (directorio), así que NO colisiona con el otro repo aunque compartan el nombre.
   surfel_env:
     build: .
-    image: surfel_splatting_image
-    container_name: surfel_splatting_container
+    # Imagen y container renombrados (variante GABOR) para COEXISTIR con el container
+    # que ya corre (surfel_splatting_container). La imagen DEBE ser distinta: esta lleva
+    # el rasterizer con el kernel Gabor -> compartir tag sobrescribiría al otro repo.
+    image: surfel_gabor_image
+    container_name: surfel_gabor_container
     runtime: nvidia
     volumes:
       - .:/workspace
     environment:
-      - NVIDIA_VISIBLE_DEVICES=${GPU_ID:-1}  # Por defecto GPU 1
+      # Servidor Blackwell = 1 sola GPU (RTX PRO 6000) -> GPU 0 por defecto.
+      # Sobrescribible: `GPU_ID=0 docker compose up -d` (CLAUDE.md fija GPU_ID=0).
+      - NVIDIA_VISIBLE_DEVICES=${GPU_ID:-0}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     stdin_open: true
     tty: true

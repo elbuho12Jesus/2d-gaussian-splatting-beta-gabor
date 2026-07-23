@@ -402,6 +402,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # a 29.556 y el experimento es un NO-OP (fallo tipo run65). Min = -4.0 en AMBOS.
             with torch.no_grad():
                 gaussians._beta.data.clamp_(min=-4.0, max=2.0)
+                # ✅ Proyección del kernel Gabor: sum(a_n) = 0.5 (requisito del modelo,
+                # model.tex). Con sum=0.5 -> f(0)=1/2+0.5=1 (pico normalizado) y la
+                # normalización por f0 del rasterizer queda como identidad. Proyección
+                # ortogonal al plano sum=0.5: a_n -= (sum(a_n)-0.5)/3. No sesga (resta lo
+                # mismo a los 3), permite a_n<0 (lóbulos), mantiene la suma clavada cada
+                # step (como el clamp de _beta de arriba). Init ya suma 0.5.
+                if gaussians._a.numel() > 0:
+                    _excess = (gaussians._a.data.sum(dim=1, keepdim=True) - 0.5) / 3.0
+                    gaussians._a.data.sub_(_excess)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -486,6 +495,21 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             _over_old = int((_beta > 29.556).sum().item())
             print("[ITER {}] [BETA-TECHO] techo _beta={:.4f} (beta~60) | topados: {} ({:.4f}%) | beta>29.556 (techo viejo 4e2): {} ({:.4f}%)".format(
                 iteration, _ceil_raw, _top, 100.0 * _top / max(_n, 1), _over_old, 100.0 * _over_old / max(_n, 1)))
+            # [A] diagnóstico del kernel Gabor (model.tex). Verifica el INVARIANTE
+            # sum(a_n)=0.5 (si sum.max/min se desvían de 0.5 la proyección de train.py
+            # falla) y la distribución de cada coeficiente. %neg = splats con algún a_n<0
+            # = lóbulos Gabor activos (forma no monótona). Regla del proyecto: mirar
+            # histograma/estadísticos, no un solo número.
+            _a = scene.gaussians.get_a.detach()                 # (N,3), sum debe ser 0.5
+            if _a.numel() > 0:
+                _asum = _a.sum(dim=1)
+                _pct_neg = 100.0 * (_a < 0).any(dim=1).float().mean().item()
+                print(("[ITER {}] [A] sum(a_n) min/mean/max = {:.4f}/{:.4f}/{:.4f} (debe ~0.5) | "
+                       "a1 {:.4f}±{:.4f} | a2 {:.4f}±{:.4f} | a3 {:.4f}±{:.4f} | splats con a_n<0: {:.2f}%").format(
+                    iteration, _asum.min().item(), _asum.mean().item(), _asum.max().item(),
+                    _a[:, 0].mean().item(), _a[:, 0].std().item(),
+                    _a[:, 1].mean().item(), _a[:, 1].std().item(),
+                    _a[:, 2].mean().item(), _a[:, 2].std().item(), _pct_neg))
 
         # [CLAMP] verifica que el techo de escala se aplique de verdad (%topados > 0)
         # y con qué factor. Detecta el fallo de run65: script "small clamp" sin la env

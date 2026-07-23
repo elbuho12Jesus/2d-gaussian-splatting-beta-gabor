@@ -160,9 +160,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const glm::vec4* rotations,
 	const float* opacities,
 	const float* shs,
-	bool* clamped,	
+	bool* clamped,
 	const float* beta_in,
     float* beta_out,
+	const float* a_in,
+    float* a_out,
 	const float* transMat_precomp,
 	const float* colors_precomp,
 	const float* viewmatrix,
@@ -187,6 +189,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	
 	// Copy beta for later rasterization
 	beta_out[idx] = beta_in[idx];
+	// Copy los 3 coeficientes a_1,a_2,a_3 del kernel Gabor (por-Gaussiana)
+	a_out[3 * idx + 0] = a_in[3 * idx + 0];
+	a_out[3 * idx + 1] = a_in[3 * idx + 1];
+	a_out[3 * idx + 2] = a_in[3 * idx + 2];
 
 	// Initialize radius and touched tiles to 0. If this isn't changed,
 	// this Gaussian will not be processed further.
@@ -317,6 +323,7 @@ renderCUDA(
 	const float* __restrict__ depths,
 	const float4* __restrict__ normal_opacity,
 	const float* __restrict__ beta,
+	const float* __restrict__ a,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
@@ -347,6 +354,7 @@ renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float collected_beta[BLOCK_SIZE];
+	__shared__ float collected_a[3 * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
 	__shared__ float3 collected_Tw[BLOCK_SIZE];
@@ -389,6 +397,9 @@ renderCUDA(
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
 			collected_beta[block.thread_rank()] = beta[coll_id];
+			collected_a[3 * block.thread_rank() + 0] = a[3 * coll_id + 0];
+			collected_a[3 * block.thread_rank() + 1] = a[3 * coll_id + 1];
+			collected_a[3 * block.thread_rank() + 2] = a[3 * coll_id + 2];
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
@@ -437,9 +448,23 @@ renderCUDA(
 			*/
 			float r2 = rho;
 			float beta_j = collected_beta[j];
-			if(r2>=1.0f) continue;		
-			float one_minus_r2 = max(1.0f - r2, 1e-6f);
-			float kernel = powf(one_minus_r2, beta_j);
+			if(r2>=1.0f) continue;
+			// ---- Kernel Gabor (model.tex): base aprendible por serie de cosenos ----
+			// f(r) = 1/2 + a1*cos(pi r) + a2*cos(3pi r) + a3*cos(5pi r), con r=sqrt(rho).
+			// Normalizado por su pico f0=f(0) -> siempre vale 1 en el centro sin imponer
+			// la restriccion sum(a_n)=1/2 (los 3 a_n quedan libres). Kernel = (f/f0)^beta.
+			// Con a_n = coefs de Fourier de 1-|x| se recupera la 'tent' (1-r)^beta.
+			const float PI_ = 3.14159265358979323846f;
+			float r  = sqrtf(r2);
+			float a1 = collected_a[3 * j + 0];
+			float a2 = collected_a[3 * j + 1];
+			float a3 = collected_a[3 * j + 2];
+			float f  = 0.5f + a1 * cosf(PI_ * r) + a2 * cosf(3.0f * PI_ * r) + a3 * cosf(5.0f * PI_ * r);
+			float f0 = 0.5f + a1 + a2 + a3;              // f(0): cos(0)=1
+			float f_safe  = fmaxf(f,  1e-6f);
+			float f0_safe = fmaxf(f0, 1e-6f);
+			float g = fmaxf(f_safe / f0_safe, 1e-6f);    // NO se topa a 1: lobulos > centro OK (Gabor)
+			float kernel = powf(g, beta_j);
 
 			// Eq. (2) from 3D Gaussian splatting paper.
 			// Obtain alpha by multiplying with Gaussian opacity
@@ -561,6 +586,7 @@ void FORWARD::render(
 	const float* depths,
 	const float4* normal_opacity,
 	const float* beta,
+	const float* a,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
@@ -578,6 +604,7 @@ void FORWARD::render(
 		depths,
 		normal_opacity,
 		beta,
+		a,
 		final_T,
 		n_contrib,
 		bg_color,
@@ -592,9 +619,11 @@ void FORWARD::preprocess(int P, int D, int M,
 	const glm::vec4* rotations,
 	const float* opacities,
 	const float* shs,
-	bool* clamped,	
+	bool* clamped,
 	const float* beta,
     float* beta_out,
+	const float* a,
+    float* a_out,
 	const float* transMat_precomp,
 	const float* colors_precomp,
 	const float* viewmatrix,
@@ -635,12 +664,14 @@ void FORWARD::preprocess(int P, int D, int M,
 		rotations,
 		opacities,
 		shs,
-		clamped,		
+		clamped,
 		beta,
     	beta_out,
+		a,
+    	a_out,
 		transMat_precomp,
 		colors_precomp,
-		viewmatrix, 
+		viewmatrix,
 		projmatrix,
 		cam_pos,
 		W, H,

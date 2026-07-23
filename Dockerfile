@@ -2,6 +2,11 @@
 # CUDA 12.8: primera versión con soporte para Blackwell (sm_120, RTX PRO 6000)
 FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
 
+# Identifica la variante GABOR (rasterizer con kernel Gabor: coefs a1,a2,a3 entrenables)
+# para distinguirla del container/imagen base en `docker images` / `docker ps` en el servidor.
+LABEL variant="2d-gaussian-splatting-beta-gabor" \
+      description="2DGS + Beta Splatting con kernel Gabor (coefs a1,a2,a3 entrenables por-Gaussiana)"
+
 # Evitar prompts interactivos durante la instalación de paquetes de sistema
 ENV DEBIAN_FRONTEND=noninteractive
 

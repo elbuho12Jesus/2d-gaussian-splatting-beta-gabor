@@ -30,6 +30,7 @@ namespace BACKWARD
 		const float2* means2D,
 		const float4* normal_opacity,
 		const float* beta,
+		const float* a,
 		const float* transMats,
 		const float* colors,
 		const float* depths,
@@ -42,6 +43,7 @@ namespace BACKWARD
 		float* dL_dnormal3D,
 		float* dL_dopacity,
 		float* dL_dbeta,
+		float* dL_da,
 		float* dL_dcolors,
 		const bool freeze_low_beta);
 
