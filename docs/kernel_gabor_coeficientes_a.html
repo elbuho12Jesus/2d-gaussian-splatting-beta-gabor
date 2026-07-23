@@ -196,7 +196,7 @@ NO en el <code>(1−r²)^β</code> de run16/run36/run67. Entrenar desde cero es 
 Si se quisiera arrancar idéntico al baseline <code>(1−r²)</code>, bastaría cambiar a <code>x=ρ=r²</code> en 2 líneas (era la otra opción).</div>
 <div class="note warn-box">
 <b>Recompilar en el servidor Blackwell</b> antes del run real:<br>
-<code>docker compose exec surfel_env pip install --force-reinstall --no-deps /workspace/submodules/diff-surfel-rasterization</code><br>
+<code>docker compose exec surfel_gabor pip install --force-reinstall --no-deps /workspace/submodules/diff-surfel-rasterization</code><br>
 Ojo: el <code>.so</code> local quedó con <code>CULL_SUBPIXEL=1</code> (estado heredado de run56); revisar <code>forward.cu:17</code> antes.</div>
 <p><b>Para continuar:</b></p>
 <ul>

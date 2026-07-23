@@ -1,8 +1,9 @@
 services:
-  # Servicio 'surfel_env' (NO renombrar: CLAUDE.md y el workflow usan
-  # `docker compose exec surfel_env ...`). El servicio está scopeado por proyecto
-  # (directorio), así que NO colisiona con el otro repo aunque compartan el nombre.
-  surfel_env:
+  # Servicio 'surfel_gabor' (variante GABOR). Renombrado desde 'surfel_env'
+  # (2026-07-23) porque el usuario tiene OTRO docker-compose con el servicio
+  # 'surfel_env' y quiere evitar la ambigüedad. Usar SIEMPRE este nombre en los
+  # comandos: `docker compose exec surfel_gabor ...`.
+  surfel_gabor:
     build: .
     # Imagen y container renombrados (variante GABOR) para COEXISTIR con el container
     # que ya corre (surfel_splatting_container). La imagen DEBE ser distinta: esta lleva

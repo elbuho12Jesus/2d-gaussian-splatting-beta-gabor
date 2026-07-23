@@ -314,7 +314,7 @@ dL_dmean2Ds[idx].y = dL_dtransMats[idx*9+5] * depth * 0.5 * H;</code></pre>
 <h3>Recomendación de orden</h3>
 <ul>
 <li><b>Hecho:</b> #1, #2 y #3 corregidos en <code>backward.cu</code>; compila en local (CUDA 11.8) + smoke test verde (gradientes finitos con fondo activo; los splats β&lt;0.1 ya reciben grad de geometría/opacidad; grad de β sigue 0). <b>La build local solo valida sintaxis.</b></li>
-<li><b>Siguiente (usuario):</b> <b>recompilar el rasterizer en el servidor</b> (CUDA 12.8/sm_120, build int64) → <code>docker compose exec surfel_env pip install --force-reinstall --no-deps /workspace/submodules/diff-surfel-rasterization</code>. Lanzar control idéntico a run7 y mirar si el <b>fondo en <code>test/vis/</code></b> mejora y si el pico de test sube. Resuelve la duda "¿era el backward?".</li>
+<li><b>Siguiente (usuario):</b> <b>recompilar el rasterizer en el servidor</b> (CUDA 12.8/sm_120, build int64) → <code>docker compose exec surfel_gabor pip install --force-reinstall --no-deps /workspace/submodules/diff-surfel-rasterization</code>. Lanzar control idéntico a run7 y mirar si el <b>fondo en <code>test/vis/</code></b> mejora y si el pico de test sube. Resuelve la duda "¿era el backward?".</li>
 <li><b>Si el control no mueve el test</b> (lo más probable según run8): confirma que el techo es estructural → la palanca real es <b>migración a gsplat/3D</b> (#5b) o, más barato, <b>early-stop ~30k</b> (el test SIEMPRE pica ahí; la 2ª mitad solo memoriza — vale para todos los runs 4–8).</li>
 </ul>
 

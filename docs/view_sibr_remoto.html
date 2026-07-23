@@ -175,7 +175,7 @@ while True:
 
 <pre><code># 1) En el servidor (dentro del contenedor docker, donde está la GPU de 95 GB):
 #    usa una GPU libre para no pelear con el entreno
-GPU_ID=1 docker compose run --rm -p 6009:6009 surfel_env \
+GPU_ID=1 docker compose run --rm -p 6009:6009 surfel_gabor \
   python view.py -s Datasets/flowers -m output/m360/flowers_beta_run3 --iteration 50000 --ip 0.0.0.0
 
 # 2) En tu PC: abre el túnel (si el servidor no es accesible directo)

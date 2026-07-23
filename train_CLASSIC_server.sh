@@ -23,7 +23,7 @@ export DEBUG_DENSIFY=1   # imprime [DENSIFY]/[RESET] (default ON; =0 silencia)
 # ───────────────────────────────────────────────────────────────────────────
 # ÚNICO bloque a editar entre runs. Todo lo demás (source, model, log) se deriva.
 DATASET=flowers               # carpeta en Datasets/ (flowers, bonsai, garden…)
-RUN=67                        # nº de run → output/m360/${DATASET}_beta_run${RUN}
+RUN=1                        # nº de run → output/m360/${DATASET}_beta_run${RUN}
 # ═══ run67 = ANCLA run26 (clásico sano) + UN SOLO DELTA: el fix del trinquete de β ═══
 # Deltas vs run66 (los 2 primeros REVIERTEN la regresión medida, no son experimento):
 #   · OPACITY_REG 0.02→0 y SCALE_REG 0.06→0  = reguladores de run25/26. A/B local midió
