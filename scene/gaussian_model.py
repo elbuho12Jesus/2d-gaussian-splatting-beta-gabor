@@ -683,7 +683,12 @@ class GaussianModel:
             n_total = self.get_xyz.shape[0]
             n_cand = int((gv >= max_grad).sum()) if gv.numel() else 0
             if gv.numel():
-                qs = torch.quantile(gv, torch.tensor([0.5, 0.9, 0.99], device=gv.device))
+                # torch.quantile revienta con >2^24 (16.77M) elementos ("input tensor
+                # is too large"). En clásico SIN cap el conteo supera ese límite (p.ej.
+                # 17M) → subsampleamos para el print de estadísticas (solo diagnóstico).
+                _QMAX = 16_000_000
+                gq = gv if gv.numel() <= _QMAX else gv[torch.randperm(gv.numel(), device=gv.device)[:_QMAX]]
+                qs = torch.quantile(gq, torch.tensor([0.5, 0.9, 0.99], device=gv.device))
                 gstats = (f"mean={gv.mean().item():.2e} med={qs[0].item():.2e} "
                           f"p90={qs[1].item():.2e} p99={qs[2].item():.2e} max={gv.max().item():.2e}")
             else:
