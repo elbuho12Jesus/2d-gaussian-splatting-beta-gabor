@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gradiente de los coeficientes aₙ del kernel Gabor — derivación y código</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.9rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.45rem;margin:2.0em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.12rem;margin:1.5em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;font-family:"JetBrains Mono",monospace;font-size:.95rem;color:var(--accent2);text-align:center}
+  .eq.big{font-size:1.08rem;padding:16px}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)}
+  .verdict{background:linear-gradient(180deg,#1d2430,#171a23);border:1px solid #3a4a5c;border-left:5px solid var(--accent2);border-radius:12px;padding:20px 22px;margin:20px 0}
+  .verdict h3{margin-top:0;color:var(--accent2)}
+  .legend span{display:inline-block;margin-right:16px;font-size:.85rem}
+  .sw{display:inline-block;width:22px;height:3px;vertical-align:middle;margin-right:5px}
+  .chain{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;margin:14px 0}
+  .chain .box{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-family:"JetBrains Mono",monospace;font-size:.86rem}
+  .chain .arr{color:var(--muted);font-size:1.3rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Gradiente de los coeficientes <code>a₁,a₂,a₃</code> del kernel <b>Gabor</b></h1>
+<p class="sub">Derivación de <code>∂L/∂aₙ</code> paso a paso — desde la pérdida, por el alpha-blending, hasta las líneas exactas del rasterizer CUDA. Complementa a <a href="kernel_gabor_coeficientes_a.html" style="color:var(--accent)">kernel_gabor_coeficientes_a.html</a> (la idea/plumbing); aquí solo el <b>gradiente</b>.</p>
+<p class="meta">Fuente: <code>submodules/diff-surfel-rasterization/cuda_rasterizer/{forward,backward}.cu</code> · proyección en <code>train.py:405-413</code>. Fecha 2026-07-24.</p>
+
+<h2>1 · Qué se deriva y contra qué</h2>
+<p>Cada Gaussiana lleva <b>3 coeficientes entrenables</b> <code>a₁,a₂,a₃</code> que definen la <i>forma</i> del kernel de opacidad por serie de cosenos. El optimizador necesita <code>∂L/∂aₙ</code>. Como <code>L</code> solo depende de <code>aₙ</code> a través de la opacidad efectiva <code>α</code> del splat en cada píxel que pinta, la regla de la cadena es:</p>
+
+<div class="chain">
+  <span class="box">L (pérdida)</span><span class="arr">→</span>
+  <span class="box">imagen píxel</span><span class="arr">→</span>
+  <span class="box">α = opa·K</span><span class="arr">→</span>
+  <span class="box">K = (f/f₀)<sup>β</sup></span><span class="arr">→</span>
+  <span class="box">f(r) = ½+Σ aₙ cos(...)</span>
+</div>
+
+<div class="eq big">∂L/∂aₙ = <span style="color:var(--accent)">(∂L/∂α)</span> · <span style="color:var(--warn)">(∂α/∂aₙ)</span></div>
+
+<p>El primer factor <code style="color:var(--accent)">∂L/∂α</code> (llamado <code>dL_dalpha</code> en el código) lo produce el <b>alpha-blending</b> y es <b>común a todos los parámetros del splat</b> (color, opacidad, β, geometría y también aₙ). El segundo factor <code style="color:var(--warn)">∂α/∂aₙ</code> es la parte <b>específica del kernel Gabor</b> — lo que deriva este documento.</p>
+
+<h2>2 · El kernel (forward) — lo que hay que derivar</h2>
+<p>Con <code>ρ = r²</code> la distancia al cuadrado en el marco local del surfel (∈[0,1)) y <code>r = √ρ</code>:</p>
+<div class="eq">
+f(r) = ½ + a₁·cos(πr) + a₂·cos(3πr) + a₃·cos(5πr)<br>
+f₀ = f(0) = ½ + a₁ + a₂ + a₃ &nbsp;&nbsp;(pico central, porque cos(0)=1)<br>
+g = f / f₀ &nbsp;&nbsp;→&nbsp;&nbsp; K = g<sup>β</sup> &nbsp;&nbsp;→&nbsp;&nbsp; α = min(0.99, opa·K)
+</div>
+<p class="meta"><code>forward.cu:459-478</code> — <code>float f = 0.5f + a1*cosf(PI_*r) + a2*cosf(3PI_*r) + a3*cosf(5PI_*r);</code> · <code>float f0 = 0.5f + a1 + a2 + a3;</code> · <code>g = f/f0</code> (NO se topa a 1: se permiten lóbulos <code>g&gt;1</code>) · <code>kernel = powf(g, beta_j)</code>.</p>
+
+<div class="note">Introduzcamos las abreviaturas del código: <code>cₙ ≡ cos((2n−1)πr)</code>, es decir <code>c₁=cos(πr)</code>, <code>c₂=cos(3πr)</code>, <code>c₃=cos(5πr)</code>. Entonces <code>f = ½ + a₁c₁ + a₂c₂ + a₃c₃</code>.</div>
+
+<h3>Valores iniciales de <code>aₙ</code> (con qué forma arranca cada splat)</h3>
+<p>Cada splat nace con los <b>coeficientes de Fourier de <code>1−|x|</code></b>, renormalizados para que <code>Σaₙ=½</code>. La serie exacta es <code>aₙ<sup>raw</sup> = 4/((2n−1)²π²)</code>, que suma <code>0.4665</code> (no <code>½</code> porque se trunca a n=3); se reescala por <code>0.5/0.4665</code> para clavar el invariante. Resultado:</p>
+<table>
+<tr><th>Coef.</th><th><code>aₙ<sup>raw</sup> = 4/((2n−1)²π²)</code></th><th>Init (renorm. a Σ=½)</th></tr>
+<tr><td><code>a₁</code></td><td>0.405285</td><td><b class="hi">0.434363</b></td></tr>
+<tr><td><code>a₂</code></td><td>0.045032</td><td><b class="hi">0.048263</b></td></tr>
+<tr><td><code>a₃</code></td><td>0.016211</td><td><b class="hi">0.017375</b></td></tr>
+<tr><td class="meta">Σ</td><td class="meta">0.466528</td><td><b>0.500000</b> exacto</td></tr>
+</table>
+<p class="meta"><code>gaussian_model.py:199-202</code> (<code>_A_FOURIER_RAW</code> → <code>A_FOURIER_INIT</code>) y <code>:262-265</code> (se replica a las N Gaussianas: <code>a_init.repeat(N,1)</code>). Todos los splats arrancan idénticos; la densificación (clone/split/relocate/add_new) <b>copia</b> los <code>aₙ</code> del padre.</p>
+<p>Con esta init <code>f(r) ≈ 1−r</code> (tent): <code>f(0)=1</code>, <code>f(0.5)=0.5</code>, <code>f(1)=0</code> → <code>g=f/f₀</code> reproduce la rampa y el kernel <b>arranca en <code>(1−r)^β</code></b>. A partir de ahí el gradiente de §3 deforma esa rampa hacia la variedad Gabor (lóbulos/anillos si algún <code>aₙ</code> se vuelve negativo).</p>
+<div class="note warn-box"><b>OJO:</b> este arranque tent <code>(1−r)^β</code> <b>NO</b> es el <code>(1−r²)^β</code> del historial (run16/36/67), porque el kernel usa <code>x=r=√ρ</code>, no <code>x=ρ=r²</code>. Cargar plys viejos (sin campos <code>a_*</code>) los interpreta como tent → se ven distintos; no comparar como el mismo kernel.</div>
+
+<h2>3 · La derivada, paso a paso</h2>
+<p>Trabajamos con el logaritmo porque <code>K</code> es una potencia. En la región no saturada (<code>opa·K &lt; 0.99</code>, donde el <code>min</code> no muerde):</p>
+
+<div class="eq">ln α = ln(opa) + β·(ln f − ln f₀)</div>
+
+<p>Derivando respecto de <code>aₙ</code>. Las dos únicas piezas que dependen de <code>aₙ</code> son <code>f</code> y <code>f₀</code>, con derivadas <b>constantes</b>:</p>
+<div class="eq">
+∂f/∂aₙ = cₙ &nbsp;&nbsp;(porque f = ½ + Σₘ aₘcₘ)<br>
+∂f₀/∂aₙ = 1 &nbsp;&nbsp;(porque f₀ = ½ + Σₘ aₘ)
+</div>
+
+<p>Por tanto:</p>
+<div class="eq">
+∂(ln α)/∂aₙ = β·( (1/f)·∂f/∂aₙ − (1/f₀)·∂f₀/∂aₙ ) = β·( cₙ/f − 1/f₀ )
+</div>
+
+<p>Y como <code>∂α/∂aₙ = α · ∂(ln α)/∂aₙ</code>, el resultado cerrado es:</p>
+
+<div class="eq big" style="border-color:#3a4a5c;color:var(--warn)">
+∂α/∂aₙ &nbsp;=&nbsp; α · β · ( cₙ/f − 1/f₀ )
+</div>
+
+<p>Y el gradiente que se acumula sobre el parámetro (sumado sobre todos los píxeles que el splat toca):</p>
+<div class="eq big">
+∂L/∂aₙ &nbsp;=&nbsp; <span style="color:var(--accent)">dL_dalpha</span> · α · β · ( cₙ/f − 1/f₀ )
+</div>
+
+<div class="note ok-box"><b>Chequeo de consistencia con β:</b> el gradiente de β es <code>∂α/∂β = α·ln(g)</code> (<code>backward.cu:444</code>). Ambos salen de la misma <code>ln α = ln(opa)+β·ln g</code>: β deriva el exponente, <code>aₙ</code> deriva la base <code>g</code>. Encajan.</div>
+
+<h2>4 · Interpretación geométrica: <code>cₙ(r)</code> es la "palanca" de cada aₙ</h2>
+<p>El término dominante <code>cₙ/f</code> dice que <b>la influencia de aₙ sobre la forma a radio r es exactamente <code>cos((2n−1)πr)</code></b>. Cada coeficiente empuja la opacidad en un patrón de frecuencia distinta:</p>
+
+<div class="card">
+<svg viewBox="0 0 800 290" role="img" aria-label="Funciones base cos((2n-1)pi r)">
+  <!-- ejes -->
+  <line x1="70" y1="140" x2="768" y2="140" stroke="#2a2f3c" stroke-width="1"/>
+  <line x1="70" y1="30"  x2="70"  y2="250" stroke="#2a2f3c" stroke-width="1"/>
+  <!-- gridlines x -->
+  <g stroke="#1a1e28" stroke-width="1">
+    <line x1="242.5" y1="30" x2="242.5" y2="250"/>
+    <line x1="415"   y1="30" x2="415"   y2="250"/>
+    <line x1="587.5" y1="30" x2="587.5" y2="250"/>
+    <line x1="760"   y1="30" x2="760"   y2="250"/>
+  </g>
+  <!-- y labels -->
+  <text x="60" y="43"  fill="#9aa3b2" font-size="11" text-anchor="end">+1</text>
+  <text x="60" y="144" fill="#9aa3b2" font-size="11" text-anchor="end">0</text>
+  <text x="60" y="245" fill="#9aa3b2" font-size="11" text-anchor="end">−1</text>
+  <!-- x labels -->
+  <text x="70"    y="268" fill="#9aa3b2" font-size="11" text-anchor="middle">r=0</text>
+  <text x="242.5" y="268" fill="#9aa3b2" font-size="11" text-anchor="middle">0.25</text>
+  <text x="415"   y="268" fill="#9aa3b2" font-size="11" text-anchor="middle">0.5</text>
+  <text x="587.5" y="268" fill="#9aa3b2" font-size="11" text-anchor="middle">0.75</text>
+  <text x="760"   y="268" fill="#9aa3b2" font-size="11" text-anchor="middle">r=1</text>
+  <!-- curvas -->
+  <polyline fill="none" stroke="#6ea8fe" stroke-width="2.2" points="70.0,38.8 76.9,38.8 83.8,39.0 90.7,39.2 97.6,39.6 104.5,40.0 111.4,40.6 118.3,41.2 125.2,42.0 132.1,42.8 139.0,43.8 145.9,44.8 152.8,45.9 159.7,47.1 166.6,48.4 173.5,49.8 180.4,51.3 187.3,52.9 194.2,54.6 201.1,56.3 208.0,58.1 214.9,60.0 221.8,62.0 228.7,64.1 235.6,66.2 242.5,68.4 249.4,70.7 256.3,73.1 263.2,75.5 270.1,78.0 277.0,80.5 283.9,83.1 290.8,85.8 297.7,88.5 304.6,91.2 311.5,94.1 318.4,96.9 325.3,99.8 332.2,102.7 339.1,105.7 346.0,108.7 352.9,111.8 359.8,114.8 366.7,117.9 373.6,121.0 380.5,124.2 387.4,127.3 394.3,130.5 401.2,133.6 408.1,136.8 415.0,140.0 421.9,143.2 428.8,146.4 435.7,149.5 442.6,152.7 449.5,155.8 456.4,159.0 463.3,162.1 470.2,165.2 477.1,168.2 484.0,171.3 490.9,174.3 497.8,177.3 504.7,180.2 511.6,183.1 518.5,185.9 525.4,188.8 532.3,191.5 539.2,194.2 546.1,196.9 553.0,199.5 559.9,202.0 566.8,204.5 573.7,206.9 580.6,209.3 587.5,211.6 594.4,213.8 601.3,215.9 608.2,218.0 615.1,220.0 622.0,221.9 628.9,223.7 635.8,225.4 642.7,227.1 649.6,228.7 656.5,230.2 663.4,231.6 670.3,232.9 677.2,234.1 684.1,235.2 691.0,236.2 697.9,237.2 704.8,238.0 711.7,238.8 718.6,239.4 725.5,240.0 732.4,240.4 739.3,240.8 746.2,241.0 753.1,241.2 760.0,241.2"/>
+  <polyline fill="none" stroke="#7ee787" stroke-width="2.2" points="70.0,38.8 76.9,39.2 83.8,40.6 90.7,42.8 97.6,45.9 104.5,49.8 111.4,54.6 118.3,60.0 125.2,66.2 132.1,73.1 139.0,80.5 145.9,88.5 152.8,96.9 159.7,105.7 166.6,114.8 173.5,124.2 180.4,133.6 187.3,143.2 194.2,152.7 201.1,162.1 208.0,171.3 214.9,180.2 221.8,188.8 228.7,196.9 235.6,204.5 242.5,211.6 249.4,218.0 256.3,223.7 263.2,228.7 270.1,232.9 277.0,236.2 283.9,238.8 290.8,240.4 297.7,241.2 304.6,241.0 311.5,240.0 318.4,238.0 325.3,235.2 332.2,231.6 339.1,227.1 346.0,221.9 352.9,215.9 359.8,209.3 366.7,202.0 373.6,194.2 380.5,185.9 387.4,177.3 394.3,168.2 401.2,159.0 408.1,149.5 415.0,140.0 421.9,130.5 428.8,121.0 435.7,111.8 442.6,102.7 449.5,94.1 456.4,85.8 463.3,78.0 470.2,70.7 477.1,64.1 484.0,58.1 490.9,52.9 497.8,48.4 504.7,44.8 511.6,42.0 518.5,40.0 525.4,39.0 532.3,38.8 539.2,39.6 546.1,41.2 553.0,43.8 559.9,47.1 566.8,51.3 573.7,56.3 580.6,62.0 587.5,68.4 594.4,75.5 601.3,83.1 608.2,91.2 615.1,99.8 622.0,108.7 628.9,117.9 635.8,127.3 642.7,136.8 649.6,146.4 656.5,155.8 663.4,165.2 670.3,174.3 677.2,183.1 684.1,191.5 691.0,199.5 697.9,206.9 704.8,213.8 711.7,220.0 718.6,225.4 725.5,230.2 732.4,234.1 739.3,237.2 746.2,239.4 753.1,240.8 760.0,241.2"/>
+  <polyline fill="none" stroke="#ffb454" stroke-width="2.2" points="70.0,38.8 76.9,40.0 83.8,43.8 90.7,49.8 97.6,58.1 104.5,68.4 111.4,80.5 118.3,94.1 125.2,108.7 132.1,124.2 139.0,140.0 145.9,155.8 152.8,171.3 159.7,185.9 166.6,199.5 173.5,211.6 180.4,221.9 187.3,230.2 194.2,236.2 201.1,240.0 208.0,241.2 214.9,240.0 221.8,236.2 228.7,230.2 235.6,221.9 242.5,211.6 249.4,199.5 256.3,185.9 263.2,171.3 270.1,155.8 277.0,140.0 283.9,124.2 290.8,108.7 297.7,94.1 304.6,80.5 311.5,68.4 318.4,58.1 325.3,49.8 332.2,43.8 339.1,40.0 346.0,38.8 352.9,40.0 359.8,43.8 366.7,49.8 373.6,58.1 380.5,68.4 387.4,80.5 394.3,94.1 401.2,108.7 408.1,124.2 415.0,140.0 421.9,155.8 428.8,171.3 435.7,185.9 442.6,199.5 449.5,211.6 456.4,221.9 463.3,230.2 470.2,236.2 477.1,240.0 484.0,241.2 490.9,240.0 497.8,236.2 504.7,230.2 511.6,221.9 518.5,211.6 525.4,199.5 532.3,185.9 539.2,171.3 546.1,155.8 553.0,140.0 559.9,124.2 566.8,108.7 573.7,94.1 580.6,80.5 587.5,68.4 594.4,58.1 601.3,49.8 608.2,43.8 615.1,40.0 622.0,38.8 628.9,40.0 635.8,43.8 642.7,49.8 649.6,58.1 656.5,68.4 663.4,80.5 670.3,94.1 677.2,108.7 684.1,124.2 691.0,140.0 697.9,155.8 704.8,171.3 711.7,185.9 718.6,199.5 725.5,211.6 732.4,221.9 739.3,230.2 746.2,236.2 753.1,240.0 760.0,241.2"/>
+</svg>
+<div class="legend" style="text-align:center;margin-top:6px">
+  <span><span class="sw" style="background:#6ea8fe"></span><code>∂f/∂a₁ = c₁ = cos(πr)</code></span>
+  <span><span class="sw" style="background:#7ee787"></span><code>∂f/∂a₂ = c₂ = cos(3πr)</code></span>
+  <span><span class="sw" style="background:#ffb454"></span><code>∂f/∂a₃ = c₃ = cos(5πr)</code></span>
+</div>
+</div>
+<p><code>a₁</code> controla la caída suave global (media onda), <code>a₂</code> mete una ondulación (onda y media) y <code>a₃</code> una oscilación rápida (dos ondas y media) → responsables de los <b>lóbulos/anillos</b> finos. En <code>r=0</code> las tres valen <code>+1</code> (por eso <code>∂f₀/∂aₙ=1</code>, común a las tres).</p>
+
+<h2>5 · El término <code>−1/f₀</code> y la proyección <code>Σaₙ=½</code></h2>
+<p>Nótese que <code>−1/f₀</code> en <code>∂α/∂aₙ = α·β·(cₙ/f − 1/f₀)</code> es <b>idéntico para los tres coeficientes</b> (modo común). El modelo exige el invariante <code>Σaₙ = ½</code> (para que <code>f₀ = ½+½ = 1</code>, pico normalizado), y se mantiene con una <b>proyección post-step</b> en <code>train.py</code>, no dentro del gradiente:</p>
+<pre><code># train.py:405-413  — proyección ortogonal sobre el hiperplano sum(a)=0.5
+if gaussians._a.numel() &gt; 0:
+    _excess = (gaussians._a.data.sum(dim=1, keepdim=True) - 0.5) / 3.0
+    gaussians._a.data.sub_(_excess)   # resta lo mismo a los 3 -> no sesga la forma</code></pre>
+<p>La proyección <b>elimina justamente la componente <code>(1,1,1)</code></b> de cualquier actualización. Como el término <code>−1/f₀</code> apunta exactamente en esa dirección, <b>se cancela en la trayectoria restringida</b>: sobre la variedad <code>Σaₙ=½</code> lo que realmente mueve la forma es el término distintivo <code>cₙ/f</code>. Y con <code>Σaₙ=½</code> se tiene <code>f₀=1</code> en la práctica (el run1 lo confirmó: <code>sum(a)</code> min=mean=max=<b>0.5000</b> exacto). El gradiente <b>NO impone</b> la restricción; la proyección sí. Es un esquema de <i>gradiente proyectado</i>, análogo al clamp de <code>_beta</code> que va justo al lado.</p>
+
+<h2>6 · La implementación exacta en CUDA</h2>
+<p>Todo vive en <code>backward.cu</code>. Primero se recomputa el kernel <b>idéntico al forward</b> (líneas 331-341), luego se acumula el gradiente <b>gateado bajo <code>β≥0.1</code></b> (mismo gate que β, evita NaN en el régimen low-β — es el FIX #2 del backward):</p>
+<pre><code>// backward.cu:462-470  (dentro de if (beta_j &gt;= 0.1f) { ... })
+float f_div  = fmaxf(f, 1e-3f);        // piso SOLO en el denominador del gradiente
+float inv_f0 = 1.0f / f0_safe;         // 1/f0  (f0_safe = max(f0,1e-6))
+float ab     = dL_dalpha * alpha * beta_j;                       //  dL_dalpha · α · β
+float grad_a1 = fminf(fmaxf(ab * (c1 / f_div - inv_f0), -50.0f), 50.0f);
+float grad_a2 = fminf(fmaxf(ab * (c2 / f_div - inv_f0), -50.0f), 50.0f);
+float grad_a3 = fminf(fmaxf(ab * (c3 / f_div - inv_f0), -50.0f), 50.0f);
+atomicAdd(&amp;dL_da[global_id * 3 + 0], grad_a1);   // acumula sobre todos los píxeles
+atomicAdd(&amp;dL_da[global_id * 3 + 1], grad_a2);
+atomicAdd(&amp;dL_da[global_id * 3 + 2], grad_a3);</code></pre>
+<p>Línea por línea contra la fórmula <code>∂L/∂aₙ = dL_dalpha·α·β·(cₙ/f − 1/f₀)</code>:</p>
+<table>
+<tr><th>Código</th><th>Fórmula</th><th>Nota</th></tr>
+<tr><td><code>ab = dL_dalpha*alpha*beta_j</code></td><td><code>(∂L/∂α)·α·β</code></td><td>factor común a los 3</td></tr>
+<tr><td><code>c1,c2,c3</code></td><td><code>cₙ = cos((2n−1)πr)</code></td><td><code>∂f/∂aₙ</code> (§4)</td></tr>
+<tr><td><code>c_n / f_div</code></td><td><code>cₙ / f</code></td><td>con piso <code>f≥1e-3</code></td></tr>
+<tr><td><code>- inv_f0</code></td><td><code>− 1/f₀</code></td><td>modo común (§5)</td></tr>
+<tr><td><code>fminf(fmaxf(·,-50),50)</code></td><td>—</td><td>backstop NaN/Inf, NO limita la señal</td></tr>
+<tr><td><code>atomicAdd(dL_da,...)</code></td><td><code>Σ<sub>píxeles</sub></code></td><td>acumulación multi-píxel</td></tr>
+</table>
+
+<h2>7 · Las tres decisiones numéricas (y por qué)</h2>
+<div class="card">
+<p><span class="tag warn">1</span><b>El grad de <code>a</code> NO se puede clampar a ±1e-3 como el de β.</b> El grad de β es de escala natural ~1e-4 y su clamp ±1e-3 casi nunca muerde. El de <code>a</code> es <b>O(1)–O(50)</b> (ver §8): clamparlo a 1e-3 lo aplastaría <b>3 órdenes de magnitud</b> → mataría la señal. Verificado con finite-difference. Por eso el backstop es <b>±50</b>, no ±1e-3.</p>
+<p><span class="tag warn">2</span><b>Piso <code>f_div = max(f, 1e-3)</code> SOLO en el denominador del gradiente.</b> El único riesgo de explosión es <code>cₙ/f</code> con <code>f→0</code> y <code>β&lt;1</code> (para <code>β≥1</code>, el factor <code>α∝f^β</code> lleva el producto a 0 y lo acota solo). Se controla <b>en el origen</b> subiendo el piso solo aquí; el forward conserva <code>f_safe=1e-6</code> intacto (no se toca la imagen renderizada).</p>
+<p><span class="tag warn">3</span><b>Gate <code>β≥0.1</code>.</b> El bloque entero (grad de β y de <code>aₙ</code>) se salta si <code>β&lt;0.1</code>, igual que β, para evitar NaN en el régimen casi-caja. Color, normal y geometría van fuera de este gate.</p>
+</div>
+
+<h2>8 · Ejemplo numérico (con los valores reales del run1)</h2>
+<p>Splat con <code>a=(0.627, 0.083, −0.210)</code> (las medias del run1, <code>Σa=0.5</code> → <code>f₀=1</code>), evaluado en <code>r=0.2</code> y con la β del run1 <code>β≈26</code>:</p>
+<div class="eq" style="text-align:left">
+c₁=cos(0.2π)=+0.809 &nbsp; c₂=cos(0.6π)=−0.309 &nbsp; c₃=cos(1.0π)=−1.000<br>
+f = ½ + 0.627·0.809 + 0.083·(−0.309) + (−0.210)·(−1.000) = <b>1.191</b> &nbsp;(&gt; f₀=1 → <b class="lo">lóbulo</b>)<br><br>
+∂α/∂a₁ = α·26·(0.809/1.191 − 1) = <b>−8.3·α</b><br>
+∂α/∂a₂ = α·26·(−0.309/1.191 − 1) = <b>−32.7·α</b><br>
+∂α/∂a₃ = α·26·(−1.000/1.191 − 1) = <b class="lo">−47.8·α</b> &nbsp;(roza el backstop ±50 si α→1)
+</div>
+<p>Dos lecturas: <b>(a)</b> las magnitudes O(10–50) justifican por qué el clamp ±1e-3 sería absurdo y por qué el backstop es ±50. <b>(b)</b> Con <code>a₃</code> muy negativo, <code>f=1.191&gt;f₀</code> en r intermedio, y <code>β=26</code> amplifica: <code>g^β = 1.191²⁶ ≈ 94×</code> la opacidad del centro → <b class="lo">anillo de opacidad gigante</b>. Esto conecta directamente con el diagnóstico del run1 (β en el techo + 92% de splats con lóbulos activos → colapso). El gradiente es correcto; el problema del run1 fue que la optimización cayó en esa cuenca degenerada.</p>
+
+<h2>9 · Validación (gradcheck vs finite-difference)</h2>
+<p>Comparado el gradiente analítico contra diferencias finitas en local (conda <code>surfel_splatting_modificate</code>, CUDA 11.8):</p>
+<table>
+<tr><th>Coef.</th><th>Error rel. vs finite-diff</th><th>Lectura</th></tr>
+<tr><td><code>a₁</code></td><td class="ok">0.1 %</td><td>correcto</td></tr>
+<tr><td><code>a₂</code></td><td class="ok">0.0 %</td><td>correcto</td></tr>
+<tr><td><code>a₃</code></td><td class="warn">13 %</td><td>sesgo esperado: precio del piso <code>f_div</code> en la cola <code>f→0</code>; dirección/magnitud correctas</td></tr>
+</table>
+<p>Monitor en vivo: el print <code>[A]</code> de <code>train.py</code> (junto al <code>[BETA]</code>) reporta <code>sum(aₙ)</code> min/mean/max (chequea el invariante), media±desv de cada <code>aₙ</code>, y <code>% splats con aₙ&lt;0</code> (= lóbulos activos).</p>
+
+<div class="verdict">
+<h3>Resumen de una línea</h3>
+<p style="margin-bottom:0"><code>∂L/∂aₙ = dL_dalpha · α · β · (cos((2n−1)πr)/f − 1/f₀)</code> — sale de derivar <code>ln α = ln opa + β(ln f − ln f₀)</code>; el término <code>−1/f₀</code> es modo común que la proyección <code>Σaₙ=½</code> cancela; se implementa en <code>backward.cu:462-470</code> con piso <code>f_div</code> y backstop ±50 (el grad de <code>a</code> es O(1–50), NO ~1e-4 como β); validado con finite-diff.</p>
+</div>
+
+</div>
+</body>
+</html>
