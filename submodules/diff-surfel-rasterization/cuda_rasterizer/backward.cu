@@ -450,21 +450,25 @@ renderCUDA(
 				atomicAdd(&dL_dbeta[global_id], grad_beta);
 
 				// Gradiente de los 3 coeficientes a_n del kernel Gabor.
-				// ∂α/∂a_n = α * beta * ( cos((2n-1)pi r)/f - 1/f0 )
-				//   (deriva de ln K = beta*(ln f - ln f0), con ∂f/∂a_n=c_n, ∂f0/∂a_n=1)
-				// A diferencia de beta (grad natural ~1e-4, el clamp ±1e-3 no muerde),
-				// el grad de a es O(1) => NO se puede clampar a 1e-3 (aplastaria la señal,
-				// verificado con finite-diff). El unico riesgo de explosion es c_n/f con
-				// f->0 y beta<1 (para beta>=1, alpha*f^(beta-1)->0 lo acota solo): se
-				// controla en el ORIGEN con un piso mas alto SOLO en el denominador del
-				// gradiente (f_div), dejando el forward con f_safe=1e-6 intacto. El clamp
-				// ±50 es solo un backstop NaN/Inf que no limita la señal normal.
-				float f_div = fmaxf(f, 1e-3f);
-				float inv_f0 = 1.0f / f0_safe;
-				float ab = dL_dalpha * alpha * beta_j;
-				float grad_a1 = fminf(fmaxf(ab * (c1 / f_div - inv_f0), -50.0f), 50.0f);
-				float grad_a2 = fminf(fmaxf(ab * (c2 / f_div - inv_f0), -50.0f), 50.0f);
-				float grad_a3 = fminf(fmaxf(ab * (c3 / f_div - inv_f0), -50.0f), 50.0f);
+				// FORMA SIN SINGULARIDAD (2026-07-24):
+				//     ∂α/∂a_n = (opa · beta / f0) · g^(beta-1) · (c_n − g)
+				// Se obtiene reagrupando la forma antigua  α·beta·(c_n/f − 1/f0)  metiendo
+				// α = opa·g^beta dentro y usando g/f = 1/f0. En la región NO clampada es
+				// EXACTAMENTE igual a la antigua, pero NO divide por f: para beta>=1,
+				// g^(beta-1)→0 cuando f→0 (antes el piso f_div=max(f,1e-3) sesgaba a3 ~13%
+				// en la cola, verificado con finite-diff). El unico caso singular REAL es
+				// beta<1 (g^(beta-1)→∞ con g→0): ahi, y SOLO ahi, se pone un piso sobre g.
+				// Usa opa·g^beta (alpha SIN clampar) a proposito: es lo que cancela una g y
+				// da la suavidad; el clamp de 0.99 solo actua cerca del pico (f grande),
+				// lejos de f→0. El clamp ±50 queda como backstop NaN/Inf (no limita señal).
+				// (El grad de a es O(1); NO se puede clampar a 1e-3 como beta: aplastaria.)
+				float g_pow = (beta_j >= 1.0f)
+				            ? powf(g, beta_j - 1.0f)                    // acotado, sin piso
+				            : powf(fmaxf(g, 1e-3f), beta_j - 1.0f);     // piso SOLO para beta<1
+				float a_coef = dL_dalpha * opa * beta_j * g_pow / f0_safe;
+				float grad_a1 = fminf(fmaxf(a_coef * (c1 - g), -50.0f), 50.0f);
+				float grad_a2 = fminf(fmaxf(a_coef * (c2 - g), -50.0f), 50.0f);
+				float grad_a3 = fminf(fmaxf(a_coef * (c3 - g), -50.0f), 50.0f);
 				atomicAdd(&dL_da[global_id * 3 + 0], grad_a1);
 				atomicAdd(&dL_da[global_id * 3 + 1], grad_a2);
 				atomicAdd(&dL_da[global_id * 3 + 2], grad_a3);

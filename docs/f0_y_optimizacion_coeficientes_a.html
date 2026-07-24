@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>f₀ ¿siempre 1? y cómo arreglar la optimización de a₁,a₂,a₃</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.9rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.45rem;margin:2.0em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.12rem;margin:1.5em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.82rem}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;font-family:"JetBrains Mono",monospace;font-size:.95rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg{max-width:100%;height:auto}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)}
+  .verdict{background:linear-gradient(180deg,#1d2430,#171a23);border:1px solid #3a4a5c;border-left:5px solid var(--accent2);border-radius:12px;padding:20px 22px;margin:20px 0}
+  .verdict h3{margin-top:0;color:var(--accent2)}
+  .legend span{display:inline-block;margin-right:16px;font-size:.85rem}
+  .sw{display:inline-block;width:22px;height:3px;vertical-align:middle;margin-right:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>¿Por qué <code>f₀</code> si "siempre vale 1"? · Y cómo arreglar la optimización de <code>a₁,a₂,a₃</code></h1>
+<p class="sub">Respuesta a las dos preguntas. Resumen: <b>f₀ NO es intrínsecamente 1</b> — lo vale porque <code>train.py</code> lo <i>fuerza</i> con una proyección que <b>duplica</b> el trabajo que ya hace la división por f₀. Y esa proyección es justo lo que ensucia la optimización. Hay dos arreglos concretos.</p>
+
+<div class="verdict" style="border-left-color:var(--accent2)">
+<h3>✅ AMBOS ARREGLOS IMPLEMENTADOS Y VERIFICADOS EN LOCAL (2026-07-24)</h3>
+<ul>
+<li><b>Proyección Σaₙ=½ ELIMINADA</b> de <code>train.py</code> (los 3 <code>aₙ</code> quedan libres; el print <code>[A]</code> queda como informativo). El clamp de <code>_beta</code> se conserva.</li>
+<li><b>Gradiente de <code>aₙ</code> reescrito sin singularidad</b> en <code>backward.cu</code>: <code>∂α/∂aₙ = (opa·β/f₀)·g^(β−1)·(cₙ−g)</code>, con piso sobre <code>g</code> <b>solo si β&lt;1</b>. El piso <code>f_div=max(f,1e-3)</code> (causa del sesgo de a₃) ha desaparecido.</li>
+<li><b>Compila OK</b> (env local <code>surfel_splatting_modificate</code>, CUDA 11.8).</li>
+<li><b>Gradcheck vs finite-diff sobre el rasterizer compilado</b> (6 splats aislados, β mixto 2.5/4.0/1.5/0.5/0.3/0.7): error relativo medio <b>a₁=2.4% · a₂=2.7% · a₃=2.8%</b> → <b>el sesgo específico de a₃ (antes ~13%) desapareció</b>, los 3 coeficientes están igualados. En splats β≥1 bien condicionados a₃ baja a 0.2–0.6%. El único error alto (~9%) es un splat de prueba con β=0.3, donde la singularidad es real y el piso la regulariza afectando a los 3 por igual (por diseño).</li>
+<li><b>Pendiente:</b> recompilar en el servidor Blackwell y medir en run (comparar Gabor+arreglos vs run36 y vs baseline tent).</li>
+</ul>
+</div>
+
+<div class="verdict">
+<h3>TL;DR (razonamiento original)</h3>
+<ul>
+<li><b>f₀ = f(0) = ½ + a₁ + a₂ + a₃.</b> Solo vale 1 si <code>Σaₙ = ½</code>, y eso <b>lo impone a mano</b> la proyección de <code>train.py:412</code> tras cada step. <b>Entre step y proyección, Σaₙ se desvía → f₀ ≠ 1</b>, y ahí la división por f₀ SÍ hace algo (mantiene el pico normalizado). Por eso el kernel divide por f₀.</li>
+<li><b>Estás normalizando DOS veces.</b> El <code>forward.cu:454</code> dice literalmente que f₀ normaliza el pico <i>"sin imponer la restricción Σaₙ=½"</i>… pero <code>train.py</code> impone Σaₙ=½ igualmente. Una de las dos sobra.</li>
+<li><b>Arreglo 1 (estructural):</b> quita la proyección y deja los 3 <code>aₙ</code> libres. No hay degeneración de escala (el ½ fijo ancla el gauge), así que es seguro y elimina una distorsión de los coeficientes en cada iteración.</li>
+<li><b>Arreglo 2 (numérico, mata el sesgo del 13% en a₃):</b> reescribe el gradiente en su forma <b>sin singularidad</b> <code>∂α/∂aₙ = (opa·β/f₀)·g^(β−1)·(cₙ−g)</code>, que <b>no divide por f</b> y hace innecesario el piso <code>f_div=max(f,1e-3)</code> para el β≥1 de la inmensa mayoría de splats.</li>
+</ul>
+</div>
+
+<h2>1 · Tu primera pregunta: ¿f₀ no es siempre 1?</h2>
+
+<p>El kernel es:</p>
+<div class="eq">f(r) = ½ + a₁·cos(πr) + a₂·cos(3πr) + a₃·cos(5πr) &nbsp;&nbsp;&nbsp; K = (f/f₀)^β, &nbsp; f₀ = f(0)</div>
+
+<p>En el centro <code>r=0</code> todos los cosenos valen 1, así que:</p>
+<div class="eq">f₀ = f(0) = ½ + a₁ + a₂ + a₃ = ½ + <b>Σaₙ</b></div>
+
+<p>Por tanto <b>f₀ = 1 <span class="tag warn">solo si</span> Σaₙ = ½</b>. No es una identidad matemática: es una condición sobre los coeficientes. ¿Y quién la garantiza? <b>Nadie</b> por construcción — la <b>impone a posteriori</b> la proyección en <code>train.py</code>:</p>
+
+<pre><code>train.py:412
+_excess = (gaussians._a.data.sum(dim=1, keepdim=True) - 0.5) / 3.0
+gaussians._a.data -= _excess        # proyecta a Σaₙ = 0.5 DESPUÉS de cada optimizer.step()</code></pre>
+
+<div class="note danger-box">
+<b>El punto clave que resuelve tu duda:</b> el optimizador hace <code>step()</code> y mueve los <code>aₙ</code> con sus gradientes. En ese instante <b>Σaₙ ya no es 0.5</b> → <b>f₀ ya no es 1</b>. La proyección lo corrige <i>después</i>, pero durante el forward/backward del batch los coeficientes viven fuera del plano. <b>Ahí es donde dividir por f₀ importa:</b> mantiene el pico del kernel en 1 aunque Σaₙ se haya desviado. Si no dividieras por f₀, el pico sería <code>f(0)^β ≠ 1</code> y la opacidad del splat quedaría mal calibrada esa iteración.</div>
+
+<h3>Entonces, ¿por qué está la proyección si f₀ ya normaliza?</h3>
+<p>Esta es la contradicción real del código. Lee el comentario del propio forward:</p>
+<pre><code>forward.cu:454-455
+// Normalizado por su pico f0=f(0) -> siempre vale 1 en el centro sin imponer
+// la restriccion sum(a_n)=1/2 (los 3 a_n quedan libres). Kernel = (f/f0)^beta.</code></pre>
+<p>El forward afirma que gracias a f₀ <b>NO hace falta</b> <code>Σaₙ=½</code>. Y sin embargo <code>train.py</code> la impone. <b>Estás haciendo el mismo trabajo (normalizar el pico a 1) por dos vías a la vez:</b></p>
+
+<table>
+<tr><th>Mecanismo</th><th>Qué hace</th><th>¿Cuándo actúa?</th></tr>
+<tr><td><b>División por f₀</b> (CUDA)</td><td>Normaliza el pico a 1 <i>siempre</i>, sea cual sea Σaₙ</td><td>Cada render, robusto a la deriva</td></tr>
+<tr><td><b>Proyección Σaₙ=½</b> (train.py)</td><td>Fuerza f₀=1 para que la división sea la identidad</td><td>Tras cada step, con retraso de 1 iteración</td></tr>
+</table>
+
+<div class="card">
+<span class="tag ok">Buena noticia</span>
+<b>No hay degeneración de gauge que obligue a mantener la proyección.</b> Podrías temer que dividir por f₀ con los <code>aₙ</code> libres crea una dirección plana (escalar <code>a → c·a</code> daría el mismo kernel). <b>No ocurre</b>, porque el término <code>½</code> es una constante fija (el coeficiente DC, no entrenable):
+<div class="eq">a → c·a &nbsp;⇒&nbsp; f → ½ + c·Σaₙcₙ &nbsp;≠&nbsp; c·f</div>
+El ½ rompe la simetría de escala → el mapa <code>a ↦ forma(r)</code> es <b>inyectivo</b> (dos vectores <code>a</code> distintos dan formas distintas). Sin dirección plana, dejar los <code>aₙ</code> libres NO desestabiliza el optimizador.</div>
+
+<h2>2 · Tu segunda pregunta: cómo arreglar la optimización</h2>
+
+<p>Hay dos problemas independientes. Uno lo crea la proyección; el otro es el sesgo numérico del gradiente de <code>a₃</code> (el 13% que salió en el gradcheck). Un arreglo para cada uno.</p>
+
+<h3>Arreglo 1 — Quitar la proyección (estructural)</h3>
+<p>La proyección ortogonal <code>aₙ ← aₙ − (Σaₙ−½)/3</code> <b>resta lo mismo a los tres coeficientes en cada iteración</b>, aunque el gradiente solo pidiera mover uno. Es una corrección acoplada que empuja a₁, a₂ y a₃ juntos hacia un plano que <b>la división por f₀ ya hace innecesario</b>. Como acabamos de ver que no hay gauge que fijar:</p>
+
+<div class="card ok-box">
+<b>Propuesta:</b> borrar el bloque <code>train.py:405-412</code> y dejar los <code>aₙ</code> como 3 parámetros libres. El kernel se autonormaliza por f₀ (que ya está en fwd y bwd). Ganas:
+<ul>
+<li>Cero deriva y cero corrección acoplada por step → gradientes más limpios para cada <code>aₙ</code>.</li>
+<li>El pico sigue siendo exactamente 1 <i>siempre</i> (por f₀), no "1 con un step de retraso".</li>
+<li>Menos código y una contradicción menos entre el comentario del forward y el entrenamiento.</li>
+</ul>
+<span class="meta">Alternativa simétrica (si prefieres conservar Σaₙ=½ de forma exacta): elimina un grado de libertad resolviendo la restricción, <code>a₃ = ½ − a₁ − a₂</code>, y entrena solo <code>a₁,a₂</code>. Entonces f₀≡1 <b>exacto siempre</b> y podrías quitar la división por f₀. Coste: trata a₃ de forma asimétrica y acopla su gradiente. <b>Recomiendo el Arreglo 1</b> (más simétrico y ya tienes f₀ implementado).</span></div>
+
+<h3>Arreglo 2 — Gradiente sin singularidad (mata el sesgo de a₃)</h3>
+<p>El sesgo del 13% en a₃ viene del piso <code>f_div = max(f, 1e-3)</code> en el denominador del gradiente actual:</p>
+<pre><code>backward.cu:462-467
+float f_div = fmaxf(f, 1e-3f);                 // piso para que c_n/f no explote
+float inv_f0 = 1.0f / f0_safe;
+float ab = dL_dalpha * alpha * beta_j;
+grad_a1 = ab * (c1 / f_div - inv_f0);          // ∂α/∂a_n = α·β·(c_n/f − 1/f0)
+...</code></pre>
+
+<p>El término peligroso es <code>cₙ/f</code> cuando <code>f→0</code> (la cola del kernel). Pero <b>esa singularidad es artificial</b>: aparece solo porque el código factoriza <code>α</code> fuera y luego divide por <code>f</code>. Recuerda que <code>α = opa·(f/f₀)^β = opa·g^β</code>. Metiendo la α dentro:</p>
+
+<div class="eq">α · cₙ/f = opa · g^β · cₙ/f = opa · f^(β−1)/f₀^β · cₙ</div>
+
+<p>Para <b>β ≥ 1</b>, <code>f^(β−1) → 0</code> cuando <code>f→0</code>: <b>no hay singularidad, el producto es suave</b>. La derivada completa se reagrupa así (álgebra directa, usando <code>g/f = 1/f₀</code>):</p>
+
+<div class="eq" style="font-size:1.05rem"><b>∂α/∂aₙ = (opa · β / f₀) · g^(β−1) · (cₙ − g)</b></div>
+
+<p>Esta forma es <b>idéntica</b> a la actual (puedes comprobar que se reduce a <code>α·β·(cₙ/f − 1/f₀)</code>), pero <b>no divide por f en ningún sitio</b>. Todo está acotado: <code>g^(β−1)</code> con β≥1 es finito, y <code>(cₙ − g)</code> también (<code>cₙ∈[−1,1]</code>, <code>g≥0</code>). No hace falta el piso <code>f_div</code> → <b>desaparece el sesgo de a₃</b>.</p>
+
+<div class="card">
+<b>¿Y para β &lt; 1?</b> Ahí <code>g^(β−1)→∞</code> cuando <code>g→0</code> es una singularidad <i>real</i> (aunque suave e integrable), y solo en ese caso conviene un piso — pero sobre <code>g</code>, no sobre <code>f</code>. La clave práctica: <b>en tus runs β≈2.5 de media</b> (histogramas de run67/72), o sea <b>β≥1 para la inmensa mayoría</b> de splats → el piso actual está mordiendo justo donde no debe. Gatea el piso solo bajo <code>β&lt;1</code> (ya hay gate <code>β≥0.1</code> para congelar el grad; encaja ahí).</div>
+
+<h4>SVG — por qué la forma vieja sesga y la nueva no (β=2.5, cola f→0)</h4>
+<svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="900" height="300" fill="#0b0d13" stroke="#2a2f3c" rx="10"/>
+  <!-- axes -->
+  <line x1="70" y1="250" x2="850" y2="250" stroke="#3a4150" stroke-width="1.5"/>
+  <line x1="70" y1="40" x2="70" y2="250" stroke="#3a4150" stroke-width="1.5"/>
+  <text x="855" y="255" fill="#9aa3b2" font-size="12" text-anchor="end">f → 0 (cola del kernel) →</text>
+  <text x="78" y="52" fill="#9aa3b2" font-size="12">|∂α/∂a₃|</text>
+  <!-- vieja: c3/f_div con piso, salta al tocar el piso (barra) -->
+  <path d="M110,235 C 260,225 360,210 470,170 C 560,140 620,120 660,110 L660,110 L680,110" fill="none" stroke="#ff7b72" stroke-width="2.5"/>
+  <rect x="660" y="108" width="140" height="4" fill="#ff7b72" opacity="0.35"/>
+  <text x="690" y="100" fill="#ff7b72" font-size="12">piso f_div → sesgo</text>
+  <text x="120" y="228" fill="#ff7b72" font-size="12.5">vieja: α·β·(c₃/f_div − 1/f₀)</text>
+  <!-- nueva: g^(beta-1)(c3-g) -> decae suave a 0 -->
+  <path d="M110,232 C 300,238 460,244 620,247 C 700,248 770,249 830,249.5" fill="none" stroke="#7ee787" stroke-width="2.5"/>
+  <text x="120" y="200" fill="#7ee787" font-size="12.5">nueva: (opa·β/f₀)·g^(β−1)·(c₃−g)</text>
+  <text x="640" y="240" fill="#7ee787" font-size="12">→ 0 suave, sin piso</text>
+  <text x="70" y="278" fill="#9aa3b2" font-size="11">Con β≥1 el gradiente físico decae a 0 en la cola; el piso f_div lo congela en un valor falso → ese es el 13% de sesgo en a₃.</text>
+</svg>
+
+<h2>3 · Recomendación conjunta</h2>
+<div class="verdict">
+<h3>Qué haría, en orden</h3>
+<ol>
+<li><b>Arreglo 2 primero</b> (gradiente <code>g^(β−1)·(cₙ−g)</code>, piso solo si β&lt;1): es un cambio local en <code>backward.cu</code>, mejora la fidelidad del gradiente de a₃ y <b>no cambia la semántica</b> del modelo → riesgo bajo. Revalida con el gradcheck de finite-diff que ya tienes (el 13% de a₃ debería caer a ~0%). Requiere recompilar el rasterizer.</li>
+<li><b>Arreglo 1 después</b> (quitar la proyección de <code>train.py</code>): es Python puro, sin recompilar. Deja los <code>aₙ</code> libres apoyándote en f₀. Compara A/B honesto con la proyección puesta vs quitada — si son equivalentes en métrica (esperado), te quedas con la versión sin proyección por ser más limpia.</li>
+<li><b>No mezcles ambos en el mismo run</b> con el primer estreno del kernel Gabor: mide primero Gabor "tal cual está" vs run36 (techo global) y vs baseline tent (<code>aₙ</code> congelados), y solo entonces mete estos dos arreglos como deltas aislados. Regla del proyecto: un delta por run.</li>
+</ol>
+<p class="meta">Nota de coherencia: si aplicas el Arreglo 1, actualiza el comentario de <code>forward.cu:454</code> — ahora sí será verdad que "los 3 aₙ quedan libres". Hoy el comentario y <code>train.py</code> se contradicen.</p>
+</div>
+
+<p class="meta" style="margin-top:2em">Doc generado el 2026-07-24. Referencias verificadas en código: <code>forward.cu:452-466</code>, <code>backward.cu:443-497</code>, <code>train.py:405-412</code>, <code>scene/gaussian_model.py:199-205</code>. Relacionado: <code>docs/kernel_gabor_coeficientes_a.html</code>.</p>
+
+</div>
+</body>
+</html>

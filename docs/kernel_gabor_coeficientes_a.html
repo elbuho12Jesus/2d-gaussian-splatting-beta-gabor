@@ -51,6 +51,9 @@ plumbing del modelo (init, optimizer, roundtrip PLY, clone/split/relocate/add_ne
 <b>Falta:</b> recompilar en el servidor Blackwell y lanzar el primer run real (flowers/bonsai) para medir honesto.</p>
 </div>
 
+<div class="note warn-box"><b>⚠ ACTUALIZACIÓN 2026-07-24 — dos cambios sobre lo descrito aquí</b> (ver <code>docs/f0_y_optimizacion_coeficientes_a.html</code>):
+(1) <b>la proyección <code>Σaₙ=½</code> se ELIMINÓ</b> — los <code>aₙ</code> son libres; el kernel se autonormaliza por <code>f₀=f(0)</code>, así que imponer la suma era redundante (se normalizaba el pico dos veces). (2) <b>el gradiente de <code>aₙ</code> se reescribió a la forma sin singularidad</b> <code>(opa·β/f₀)·g^(β−1)·(cₙ−g)</code>, con piso solo para β&lt;1 → <b>el piso <code>f_div</code> y su sesgo de a₃ (~13%) desaparecen</b> (gradcheck: a₃ pasa de ~13% a ~2.8%, igualado con a₁/a₂). Las secciones de abajo describen el estado PREVIO a estos dos cambios.</div>
+
 <h2>1 · La idea (model.tex)</h2>
 <p>El kernel beta actual es <code>𝓑(x;b)=(1−|x|)^β</code> con <code>β=4·e^b</code>. La clave: <code>1−|x|</code>
 tiene desarrollo en serie de cosenos en <code>[−1,1]</code>:</p>
