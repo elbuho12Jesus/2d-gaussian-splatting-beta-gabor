@@ -10,6 +10,7 @@
 #
 
 import os
+import math
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
@@ -402,17 +403,34 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # a 29.556 y el experimento es un NO-OP (fallo tipo run65). Min = -4.0 en AMBOS.
             with torch.no_grad():
                 gaussians._beta.data.clamp_(min=-4.0, max=2.0)
-                # ✅ (2026-07-24) PROYECCIÓN sum(a_n)=0.5 ELIMINADA. Los 3 a_n quedan
-                # LIBRES. Motivo: el rasterizer ya normaliza el pico dividiendo por
-                # f0=f(0)=1/2+sum(a_n) (forward.cu:454, backward.cu), así que el kernel
-                # K=(f/f0)^beta vale 1 en el centro SEA CUAL SEA sum(a_n) -> imponer
-                # sum=0.5 era normalizar el pico DOS veces. Además la proyección corregía
-                # con 1 step de retraso (tras optimizer.step() sum(a_n) ya se había
-                # desviado -> f0!=1 durante ese forward). NO hay degeneración de escala
-                # que fijar: el termino 1/2 es una constante fija (DC no entrenable) que
-                # rompe la simetría a->c*a, así que el mapa a->forma es inyectivo y dejar
-                # los a_n libres es estable. El print [A] de sum(a_n) queda como
-                # diagnóstico informativo (ya NO tiene por qué salir ~0.5).
+                # ✅ (2026-07-25) RESTRICCIONES del kernel Gabor:  a_n >= 0  Y  sum(a_n) <= 1/2.
+                # Es gradiente proyectado: project_a_() hace la proyección euclídea EXACTA
+                # sobre el conjunto factible (caja + simplex, ver gaussian_model.py:205).
+                # El a_n >= 0 se repite en get_a porque render.py/metrics.py/visor NO pasan
+                # por este bucle (los dos se mueven juntos o hay inconsistencia
+                # train<->render del tipo run64/65); el tope de la suma no hace falta
+                # repetirlo porque esta proyección escribe sobre el PARÁMETRO.
+                #
+                # POR QUÉ (docs/diagnostico_run1_gabor.html, §4.2): con a_n libres,
+                # f0 = 1/2 + sum(a_n) es un parámetro LIBRE que aparece como DENOMINADOR
+                # en forward.cu (g = f/f0_safe) y en backward.cu:468 (a_coef /= f0_safe).
+                # Nada impedía f0 -> 0 o f0 < 0: f0_safe se pegaba al piso 1e-6 -> g
+                # explotaba x1e6 -> discos saturados y el reventón de la densificación
+                # (52,6 M splats y NaN en la iter 4.100 del run1 relanzado).
+                # Con a_n >= 0:  f0 = 1/2 + sum(a_n) >= 1/2  ->  el denominador nunca
+                # degenera y el piso f0_safe pasa a ser código muerto.
+                # SEGUNDO efecto: cos(.) <= 1 con a_n >= 0  =>  f(r) <= f(0) = f0  =>
+                # g <= 1 SIEMPRE -> desaparecen los lóbulos/anillos de opacidad mayores
+                # que el centro (el 35% de splats con g>1, g_max 2,47 del run1, que se
+                # veían como anillos concéntricos en el césped).
+                # TERCER efecto, el del tope de la suma: f(r) >= 1/2 - sum(a_n), así que
+                # sum(a_n) <= 1/2 garantiza f >= 0 en toda la huella (f=0 solo en r=1, que
+                # el guard r2>=1 excluye) -> cierra también la singularidad 1/f_safe de
+                # d_alpha_d_rho (backward.cu:485, §4.1 del diagnóstico), que es la que
+                # inflaba ‖∂L/∂μ₂D‖ y descontroló el clone/split. Verificado por barrido:
+                # f cruza cero dentro de la huella <=> sum(a_n) > 1/2.
+                # Con esto NO hace falta recompilar el rasterizer: es 100% Python.
+                gaussians.project_a_()
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -497,22 +515,71 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             _over_old = int((_beta > 29.556).sum().item())
             print("[ITER {}] [BETA-TECHO] techo _beta={:.4f} (beta~60) | topados: {} ({:.4f}%) | beta>29.556 (techo viejo 4e2): {} ({:.4f}%)".format(
                 iteration, _ceil_raw, _top, 100.0 * _top / max(_n, 1), _over_old, 100.0 * _over_old / max(_n, 1)))
-            # [A] diagnóstico del kernel Gabor (model.tex). sum(a_n) YA NO tiene por qué
-            # ser 0.5 (proyección eliminada 2026-07-24: el kernel se autonormaliza por
-            # f0=1/2+sum(a_n), así que sum es un parámetro LIBRE). Se imprime como
-            # información (f0=1/2+sum -> pico normalizado igual). %neg = splats con algún
-            # a_n<0 = lóbulos Gabor activos (forma no monótona). Regla del proyecto: mirar
-            # histograma/estadísticos, no un solo número.
-            _a = scene.gaussians.get_a.detach()                 # (N,3), sum LIBRE (=f0-1/2)
+            # [A] diagnóstico del kernel Gabor (model.tex) con las restricciones
+            # a_n >= 0 y sum(a_n) <= 1/2 (2026-07-25, proyección exacta en project_a_).
+            # Aplica la REGLA DEL PROYECTO (mirar %topados / histograma, nunca el máximo,
+            # para saber si una restricción muerde de verdad — fallo tipo run65):
+            #   - topados a_n=0 por coeficiente: qué fracción se apoya en la cara a_n=0.
+            #   - sum en frontera (=1/2): fracción con la restricción de suma ACTIVA. El
+            #     init arranca EXACTAMENTE en 0.5 (coefs de la tent), así que aquí se
+            #     espera ~100% al principio; lo informativo es si BAJA (el modelo se mete
+            #     en el interior, f(1)>0 = soporte que no llega a anularse en el borde).
+            #   - VIOLACIONES: debe salir 0/0 siempre. Si no, la proyección no se está
+            #     aplicando en algún camino (densificación, relocate, load) -> bug.
+            _a = scene.gaussians.get_a.detach()                 # (N,3) factibles
             if _a.numel() > 0:
                 _asum = _a.sum(dim=1)
-                _pct_neg = 100.0 * (_a < 0).any(dim=1).float().mean().item()
-                print(("[ITER {}] [A] sum(a_n) min/mean/max = {:.4f}/{:.4f}/{:.4f} (libre; f0=1/2+sum) | "
-                       "a1 {:.4f}±{:.4f} | a2 {:.4f}±{:.4f} | a3 {:.4f}±{:.4f} | splats con a_n<0: {:.2f}%").format(
+                _top_a = [100.0 * (_a[:, k] <= 0.0).float().mean().item() for k in range(3)]
+                _pct_front = 100.0 * (_asum >= 0.5 - 1e-6).float().mean().item()
+                # a = 0 es un VÉRTICE del conjunto factible, y ahí f es CONSTANTE (=1/2) =>
+                # g == 1 en toda la huella => disco plano de opacidad uniforme, el mismo
+                # modo degenerado de run65 (kernel caja) pero por la vía de los a_n en vez
+                # de beta. Se vigila con el % de suma casi nula (el ply del smoke test daba
+                # 0.04% con sum<0.01, así que existe pero es marginal).
+                _pct_box = 100.0 * (_asum < 0.05).float().mean().item()
+                _bad_neg = int((_a < 0).any(dim=1).sum().item())
+                _bad_sum = int((_asum > 0.5 + 1e-5).sum().item())
+                print(("[ITER {}] [A] sum(a_n) min/mean/max = {:.4f}/{:.4f}/{:.4f} (<=0.5; f0=1/2+sum) | "
+                       "a1 {:.4f}±{:.4f} | a2 {:.4f}±{:.4f} | a3 {:.4f}±{:.4f} | "
+                       "topados a_n=0: {:.2f}%/{:.2f}%/{:.2f}% | sum en frontera 0.5: {:.2f}% | "
+                       "sum<0.05 (kernel casi plano): {:.3f}% | VIOLACIONES neg/sum: {}/{}").format(
                     iteration, _asum.min().item(), _asum.mean().item(), _asum.max().item(),
                     _a[:, 0].mean().item(), _a[:, 0].std().item(),
                     _a[:, 1].mean().item(), _a[:, 1].std().item(),
-                    _a[:, 2].mean().item(), _a[:, 2].std().item(), _pct_neg))
+                    _a[:, 2].mean().item(), _a[:, 2].std().item(),
+                    _top_a[0], _top_a[1], _top_a[2], _pct_front, _pct_box, _bad_neg, _bad_sum))
+                # RIESGO RESIDUAL que sum(a_n)<=1/2 NO elimina: f >= 0 garantizado, pero f
+                # puede TOCAR cero tangencialmente DENTRO de la huella (a=[0,0,1/2] da
+                # f=1/2(1+cos5pi r), cero en r=0.2 y 0.6). Ahí f'=0 también, así que la
+                # divergencia de d_alpha_d_rho ~ f^(beta-1)*f' solo aparece para beta<0.5
+                # y acotada por el piso f_safe=1e-6 -> es la MISMA clase de cosa que el
+                # kernel tent viejo ya tenía en el borde (f=1-rho -> 0), que sobrevivió a
+                # todo el historial; NO el anillo entero de f<0 que reventó el run1. El fix
+                # definitivo sería reagrupar d_alpha_d_rho (backward.cu:485) sin dividir
+                # por f, pero eso exige recompilar el rasterizer. Se MIDE aquí (submuestra,
+                # como los diagnósticos del ply) en vez de asumirlo:
+                _sub = _a if _a.shape[0] <= 200000 else _a[torch.randperm(_a.shape[0], device=_a.device)[:200000]]
+                _rg = torch.linspace(0.0, 1.0, 129, device=_sub.device)[:-1]     # r<1 (guard r2>=1)
+                _fr = (0.5 + _sub[:, 0:1] * torch.cos(math.pi * _rg)
+                           + _sub[:, 1:2] * torch.cos(3.0 * math.pi * _rg)
+                           + _sub[:, 2:3] * torch.cos(5.0 * math.pi * _rg))
+                # Se separa BORDE de INTERIOR a propósito: en r->1 la base tiende a
+                # f(1)=1/2-sum(a_n), que vale 0 justo en la frontera sum=1/2 donde arranca
+                # el init -> el mínimo global lo fija SIEMPRE el último punto de la rejilla
+                # y taparía el número que de verdad interesa. Ese borde es exactamente el
+                # comportamiento del kernel tent de todo el historial (f=1-rho -> 0) y lo
+                # acota el guard r2>=1. Lo NUEVO del Gabor son los ceros INTERIORES, así
+                # que se miden en r<0.9.
+                _fmin_all = _fr.min(dim=1).values
+                _in = _rg < 0.9
+                _fmin_in = _fr[:, _in].min(dim=1).values
+                _q = torch.quantile(_fmin_in, torch.tensor([0.0, 0.01, 0.5], device=_fmin_in.device))
+                print(("[ITER {}] [A-CERO] min f en r<0.9 (INTERIOR) sobre {} splats: p0/p1/p50 = "
+                       "{:.2e}/{:.2e}/{:.2e} | con min f<1e-3 (cero interior): {:.3f}% | "
+                       "min f en r<1 (incl. borde, = caso tent): {:.2e} | negativos: {} (deben ser 0)").format(
+                    iteration, _sub.shape[0], _q[0].item(), _q[1].item(), _q[2].item(),
+                    100.0 * (_fmin_in < 1e-3).float().mean().item(),
+                    _fmin_all.min().item(), int((_fmin_all < 0).sum().item())))
 
         # [CLAMP] verifica que el techo de escala se aplique de verdad (%topados > 0)
         # y con qué factor. Detecta el fallo de run65: script "small clamp" sin la env

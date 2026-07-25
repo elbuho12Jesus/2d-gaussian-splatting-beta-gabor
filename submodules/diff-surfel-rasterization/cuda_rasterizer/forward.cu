@@ -451,9 +451,20 @@ renderCUDA(
 			if(r2>=1.0f) continue;
 			// ---- Kernel Gabor (model.tex): base aprendible por serie de cosenos ----
 			// f(r) = 1/2 + a1*cos(pi r) + a2*cos(3pi r) + a3*cos(5pi r), con r=sqrt(rho).
-			// Normalizado por su pico f0=f(0) -> siempre vale 1 en el centro sin imponer
-			// la restriccion sum(a_n)=1/2 (los 3 a_n quedan libres). Kernel = (f/f0)^beta.
+			// Normalizado por su pico f0=f(0) -> siempre vale 1 en el centro. Kernel = (f/f0)^beta.
 			// Con a_n = coefs de Fourier de 1-|x| se recupera la 'tent' (1-r)^beta.
+			// RESTRICCIONES sobre a_n, impuestas en PYTHON (2026-07-25, GaussianModel.project_a_
+			// + get_a, proyeccion euclidea sobre {a_n>=0, sum(a_n)<=1/2}). Aqui NO se re-imponen:
+			// el parametro llega ya factible. Definen lo que se puede asumir de estas lineas:
+			//   f0 = 1/2+sum(a_n) >= 1/2  -> f0_safe NUNCA muerde (codigo muerto). Antes f0 era
+			//                                libre, podia ->0 y disparaba g x1e6 (run1: 52,6M
+			//                                splats y NaN @4100).
+			//   f(r) <= f(0) = f0         -> g <= 1 SIEMPRE: ningun lobulo por encima del centro
+			//                                (adios anillos concentricos del run1, 35% con g>1).
+			//   f(r) >= 1/2-sum(a_n) >= 0 -> f_safe solo puede morder donde f TOCA cero de forma
+			//                                tangencial (ahi f'=0 tambien) o en r=1, que el guard
+			//                                de arriba excluye; ya no en un anillo entero de f<0.
+			// Ver docs/diagnostico_run1_gabor.html y el bloque de project_a_ en train.py.
 			const float PI_ = 3.14159265358979323846f;
 			float r  = sqrtf(r2);
 			float a1 = collected_a[3 * j + 0];

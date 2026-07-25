@@ -192,22 +192,89 @@ class GaussianModel:
         return (4.0 * torch.exp(b)).contiguous()
 
     # Coefs de Fourier de 1-|x| (a_n = 4/((2n-1)²π²)) para n=1,2,3, RENORMALIZADOS para
-    # que sumen 0.5 (requisito del modelo, model.tex -> f(0)=1). La serie infinita suma
-    # 0.5 exacto; truncada a 3 términos suma ~0.4665, así que se reescala. El kernel
-    # arranca ≈ 'tent' (1-r)^beta. La suma=0.5 se MANTIENE cada step por la proyección
-    # de train.py (junto al clamp de _beta).
+    # que sumen 0.5 (model.tex -> f(0)=1 y f(1)=0). La serie infinita suma 0.5 exacto;
+    # truncada a 3 términos suma ~0.4665, así que se reescala. El kernel arranca ≈ 'tent'
+    # (1-r)^beta. Los tres son POSITIVOS y suman 0.5 exacto -> el init es FACTIBLE para
+    # las dos restricciones de abajo (justo en la frontera sum=1/2, igual que la tent).
     _A_FOURIER_RAW = [4.0 / (math.pi ** 2), 4.0 / (9.0 * math.pi ** 2), 4.0 / (25.0 * math.pi ** 2)]
     # (evaluado en scope de clase, sin comprehension: el cuerpo de una comprehension
     # no ve variables de clase). Reescala para que sum(A_FOURIER_INIT)=0.5 exacto.
     A_FOURIER_INIT = (np.array(_A_FOURIER_RAW) * (0.5 / float(np.sum(_A_FOURIER_RAW)))).tolist()
 
+    # ─── RESTRICCIONES del kernel Gabor sobre los coeficientes a_n (2026-07-25) ────────
+    # Conjunto factible:  A = { a ∈ R³ :  a_n >= 0  ∧  sum(a_n) <= 1/2 }
+    #   (1) a_n >= 0        =>  f0 = f(0) = 1/2 + sum(a_n) >= 1/2  ->  el DENOMINADOR del
+    #       rasterizer (g = f/f0, y a_coef /= f0 en backward.cu:468) nunca degenera; el
+    #       piso f0_safe=1e-6 pasa a ser código muerto. Y como cos(.) <= 1, se cumple
+    #       f(r) <= f(0)  =>  g <= 1: NINGÚN lóbulo por encima del centro (los anillos
+    #       concéntricos del run1 desaparecen; allí el 35% tenía g>1, g_max 2,47).
+    #   (2) sum(a_n) <= 1/2 =>  f(r) >= 1/2 - sum(a_n) >= 0 en toda la huella, con f=0
+    #       SOLO en r=1, que el guard `if (r2 >= 1.0f) continue` del rasterizer excluye.
+    #       Cierra la singularidad 1/f de d_alpha_d_rho (backward.cu:485), que es la que
+    #       inflaba ‖∂L/∂μ₂D‖ y reventó la densificación clásica (52,6M splats + NaN).
+    #       Verificado por barrido: f cruza cero dentro de la huella <=> sum(a_n) > 1/2.
+    # A es CONVEXO (caja ∩ semiespacio) -> se puede imponer con la proyección euclídea
+    # EXACTA (project_a_), no con un clamp heurístico. Ver docs/diagnostico_run1_gabor.html.
+    A_SUM_MAX = 0.5
+    # Tolerancia del test de suma. NO es cosmética: el init arranca EXACTAMENTE en
+    # sum=0.5 y la propia proyección deja sum=0.5, así que en float32 una fracción de
+    # los splats queda un epsilon POR ENCIMA del tope. Sin tolerancia (a) se contarían
+    # como "violaciones" y load_ply avisaría con plys perfectamente válidos, y (b) se
+    # lanzaría el sort del simplex sobre millones de filas cada iteración sin cambiar
+    # nada. Con ella, la garantía real es sum <= 0.5+1e-6 => f >= -1e-6, seis órdenes
+    # por debajo de los valores en juego y ya absorbido por el piso f_safe=1e-6 del
+    # rasterizer (forward.cu:464).
+    _A_SUM_TOL = 1e-6
+
     @property
     def get_a(self):
-        # (N,3) crudos: se usan directamente como a_1,a_2,a_3 en el rasterizer.
-        # Invariante sum(a_n)=0.5 garantizado por el init (suma 0.5) + la proyección
-        # post-step de train.py. La estabilidad (f>0, pico=1) la refuerza el kernel CUDA
-        # (clamp f_safe, normalización por f0=1). Sin activación -> gradiente limpio.
-        return self._a.contiguous()
+        # (N,3) a_1,a_2,a_3 del kernel Gabor con a_n >= 0 impuesto también en el FORWARD
+        # (afecta a render.py/metrics.py/visor, que NO pasan por el bucle de train.py).
+        # Este clamp y la proyección post-step de train.py deben moverse JUNTOS o aparece
+        # inconsistencia train<->render (lección run64/65).
+        # El tope sum(a_n) <= 1/2 NO se re-impone aquí a propósito: project_a_() escribe
+        # sobre _a.data, así que el PARÁMETRO ya vive dentro del conjunto factible y eso
+        # es lo que se guarda en el PLY (y load_ply vuelve a proyectar por si el ply es de
+        # un run viejo sin restricción). Repetir la proyección en cada forward costaría un
+        # sort de (N,3) por iteración a cambio de nada.
+        # Gradiente: clamp(min=0) propaga grad para a_n >= 0 (frontera incluida), así que
+        # un coeficiente que toca 0 puede volver a subir (no queda muerto).
+        return self._a.clamp(min=0.0).contiguous()
+
+    @torch.no_grad()
+    def project_a_(self):
+        """Proyección euclídea EXACTA de `_a` (in-place) sobre el conjunto factible
+        A = {a_n >= 0, sum(a_n) <= A_SUM_MAX}. Devuelve (n_neg, n_over) = nº de splats
+        que violaban cada restricción antes de proyectar (diagnóstico del `[A]`).
+
+        Cómo: A es la intersección de la caja {a>=0} con el semiespacio {sum<=S}.
+          - w = max(a, 0) es la proyección sobre la caja. Si sum(w) <= S, w ya es
+            factible y, por ser óptimo sobre un conjunto MAYOR que A, es también la
+            proyección sobre A (no hace falta más).
+          - Si sum(w) > S la restricción de suma queda ACTIVA y la proyección es la del
+            simplex {a>=0, sum=S}: se ordena descendente, se busca el mayor rho con
+            u_rho - (cumsum_rho - S)/rho > 0 y se resta el umbral theta a todos
+            (Duchi et al. 2008). Exacto, y en 3 dimensiones trivialmente barato.
+        """
+        a = self._a.data
+        if a.numel() == 0:
+            return 0, 0
+        n_neg = int((a < 0).any(dim=1).sum().item())
+        a.clamp_(min=0.0)                                   # (1) proyección a la caja
+        S = self.A_SUM_MAX
+        over = a.sum(dim=1) > S + self._A_SUM_TOL           # tolerancia: ver _A_SUM_TOL
+        n_over = int(over.sum().item())
+        if n_over > 0:                                      # (2) proyección al simplex
+            v = a[over]                                     # (M,3), ya >= 0
+            u, _ = torch.sort(v, dim=1, descending=True)
+            css = u.cumsum(dim=1)
+            j = torch.arange(1, v.shape[1] + 1, device=v.device, dtype=v.dtype)
+            # La condición se cumple en un PREFIJO (en j=1 siempre: u1-(u1-S)/1 = S > 0),
+            # así que contar los True da directamente rho.
+            rho = (u - (css - S) / j > 0).sum(dim=1) - 1    # último índice válido (0-based)
+            theta = (css.gather(1, rho.unsqueeze(1)).squeeze(1) - S) / (rho + 1).to(v.dtype)
+            a[over] = (v - theta.unsqueeze(1)).clamp_(min=0.0)
+        return n_neg, n_over
 
     @property
     def get_sb_params(self):
@@ -433,6 +500,23 @@ class GaussianModel:
         else:
             a_arr = np.asarray(self.A_FOURIER_INIT, dtype=np.float32)[None, :].repeat(xyz.shape[0], axis=0)
         self._a = nn.Parameter(torch.tensor(a_arr, dtype=torch.float, device="cuda").requires_grad_(True))
+        # Sanea plys de runs ANTERIORES a la restricción (2026-07-25): los del Gabor libre
+        # pueden traer a_n<0 o sum(a_n)>1/2 -> f0 casi nulo y f cruzando cero dentro de la
+        # huella. Se proyectan al conjunto factible para que el render coincida con lo que
+        # un entrenamiento actual habría producido, y se AVISA (el modelo cambia: no es un
+        # ply "sin tocar"). Si el ply ya es factible, esto es un no-op silencioso.
+        # El aviso se decide con la MAGNITUD de la violación, no con el nº de filas: un ply
+        # escrito por un run YA restringido trae sum(a_n)=0.5 en float32, y el redondeo del
+        # roundtrip deja una fracción de filas un epsilon por encima del tope (medido: 143
+        # de 263.700 en el smoke test). Eso NO es un ply del Gabor libre y no debe avisar.
+        _a_neg = int((self._a.data < 0).any(dim=1).sum().item())
+        _a_exc = float((self._a.data.sum(dim=1) - self.A_SUM_MAX).max().item())
+        _n_neg, _n_over = self.project_a_()
+        if _a_neg > 0 or _a_exc > 1e-3:
+            print("[A] load_ply: coeficientes Gabor fuera del conjunto factible -> PROYECTADOS "
+                  "(a_n<0: {} splats; exceso max de sum(a_n) sobre {}: {:.4f}; reproyectadas {} filas de {}). "
+                  "Ply de un run previo a la restriccion: el render NO sera identico al de aquel run.".format(
+                      _a_neg, self.A_SUM_MAX, _a_exc, _n_over, self._a.shape[0]))
 
         self.active_sh_degree = self.max_sh_degree
 

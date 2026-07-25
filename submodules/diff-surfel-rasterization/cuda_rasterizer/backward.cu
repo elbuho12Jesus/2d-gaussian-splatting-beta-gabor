@@ -482,6 +482,19 @@ renderCUDA(
 			               + a3 * 5.0f * PI_ * sinf(5.0f * PI_ * r));
 			float r_safe = fmaxf(r, 1e-6f);
 			float df_drho = fprime / (2.0f * r_safe);
+			// NOTA (2026-07-25) sobre este 1/f_safe: era la singularidad §4.1 del diagnostico
+			// del run1 (con a_n libres f cruzaba CERO dentro de la huella en el 67% de los
+			// splats -> anillos enteros de pixeles con f pegado al piso 1e-6 -> ||dL/dmean2D||
+			// x1e5-1e6 -> clone/split descontrolado, 52,6M splats y NaN @4100). Con las
+			// restricciones a_n>=0 y sum(a_n)<=1/2 (Python: GaussianModel.project_a_) se tiene
+			// f>=0 en TODA la huella, y f=0 solo en r=1 (excluido por el guard r2>=1) o en
+			// toques TANGENCIALES aislados, donde f'=0 tambien -> alpha*f'/f ~ f^(beta-1)*f'
+			// solo diverge para beta<0.5 y acotado por el piso. Misma clase de cosa que el
+			// kernel tent viejo (f=1-rho -> 0 en el borde) ya tenia en todo el historial.
+			// El fix DEFINITIVO seria reagrupar sin dividir por f:
+			//   d_alpha_d_rho = opa * beta * g^(beta-1) * f'(r) / (2r * f0)
+			// igual que ya se hizo con grad_a arriba. NO aplicado: exige recompilar y las
+			// restricciones ya cierran el caso masivo. Ver docs/diagnostico_run1_gabor.html.
 			float d_alpha_d_rho = alpha * beta_j * df_drho / f_safe;
 
 			// Account for fact that alpha also influences how much of
