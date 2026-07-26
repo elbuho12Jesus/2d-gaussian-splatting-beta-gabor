@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checklist operativa de cada run</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.9rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.45rem;margin:2.0em 0 .5em;padding-top:.4em;border-top:1px solid var(--line)}
+  h3{font-size:1.12rem;margin:1.5em 0 .4em;color:var(--accent)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.9em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.80rem;line-height:1.5}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.92rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  ol{margin:.5em 0;padding-left:1.3em} ol li{margin:.5em 0}
+  .meta{color:var(--muted);font-size:.85rem}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)}
+  .chk{list-style:none;padding-left:0}
+  .chk>li{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:14px 16px;margin:12px 0;display:flex;gap:12px;align-items:flex-start}
+  .chk>li.crit{border-left-color:var(--danger)}
+  .chk>li.soft{border-left-color:var(--warn)}
+  .chk input[type=checkbox]{margin-top:.45em;width:17px;height:17px;flex:0 0 auto;accent-color:#6ea8fe;cursor:pointer}
+  .chk .body{flex:1 1 auto}
+  .chk .t{font-weight:600;display:block;margin-bottom:.25em}
+  .chk .t code{font-weight:400}
+  .chk .why{color:var(--muted);font-size:.9rem;margin:.35em 0 0}
+  .ref{display:inline-block;background:#0b0d13;border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-family:"JetBrains Mono",monospace;font-size:.82rem;color:var(--accent2);margin-left:4px}
+  .fail{color:var(--danger);font-size:.9rem;margin:.35em 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Checklist operativa de cada run</h1>
+<p class="sub">Qué hacer y qué mirar cuando termina un entrenamiento, en orden. Escrito el
+2026-07-26 a partir del kernel Gabor con las restricciones <code>aₙ ≥ 0</code> y
+<code>Σaₙ ≤ ½</code>, pero los bloques 1, 3 y 4 valen para cualquier run del repo.</p>
+
+<div class="note warn-box"><b>Regla transversal del proyecto:</b> para saber si un clamp o
+una restricción muerde de verdad se mira el <b>histograma o el % de topados</b>, nunca el
+máximo ni el mínimo. Un extremo saturado solo dice que <em>al menos un</em> splat llegó
+ahí. Esa confusión costó un run entero (run73) y estuvo a punto de costar otro (el techo
+de β, refutado con el ply en la mano).</div>
+
+<h2>1 · Workflow obligatorio al terminar</h2>
+<ul class="chk">
+  <li class="crit"><input type="checkbox"><div class="body">
+    <span class="t">Renderizar y luego <code>python metrics.py -m &lt;model&gt;</code></span>
+    <p class="why">Primero <code>render_server.sh</code>, después <code>metrics.py</code>
+    (SSIM/PSNR/LPIPS vía <code>lpipsPyTorch</code>; el paquete pip <code>lpips</code> NO
+    está instalado).</p>
+    <p class="fail">Si te lo saltas, <code>results.json</code> sale <b>vacío</b> y el run no
+    queda medido. Ya pasó con run72.</p>
+  </div></li>
+  <li><input type="checkbox"><div class="body">
+    <span class="t">Comparar <b>honesto contra honesto</b></span>
+    <p class="why">Solo cuenta <code>metrics.py</code> sobre un modelo entrenado con
+    <code>--eval</code>. El eval in-train de <code>train.py</code> va ~<b>1.4 dB</b> por
+    encima en nuestros MCMC (en el clásico y en el 2DGS original el offset es ~0.1 dB), así
+    que mezclar los dos inventa ventajas que no existen.</p>
+  </div></li>
+  <li><input type="checkbox"><div class="body">
+    <span class="t">Añadir fila al historial y actualizar <code>docs/comparativa_runs.html</code></span>
+    <p class="why">Y volcar también a <code>historial_runs.csv</code>. Config exacta, delta
+    respecto al ancla, métrica honesta y veredicto.</p>
+  </div></li>
+</ul>
+
+<h2>2 · Log del run: kernel Gabor con restricciones</h2>
+<p>Los umbrales de referencia salen del smoke test local (bonsai, MCMC, 1200 iters) del
+2026-07-25.</p>
+
+<ul class="chk">
+  <li class="crit"><input type="checkbox"><div class="body">
+    <span class="t"><code>[A]</code> → <code>VIOLACIONES neg/sum</code> debe ser <b class="hi">0/0</b> en TODAS las iters</span>
+    <p class="why">Es la comprobación de que la proyección
+    (<code>GaussianModel.project_a_</code>) alcanza todos los caminos.</p>
+    <p class="fail">Si no es 0/0 → alguna ruta se salta la proyección (densificación,
+    relocate, load_ply). Es un <b>bug</b>, no un resultado: el run no mide lo que crees.</p>
+  </div></li>
+
+  <li class="crit"><input type="checkbox"><div class="body">
+    <span class="t"><code>[A]</code> → <code>topados a_n=0</code>: ¿muerde la restricción?</span>
+    <p class="why">Referencia local: <b>0.00% / 11–17% / 8–20%</b> para a₁/a₂/a₃. Que a₂ y a₃
+    se apoyen en la cara <code>aₙ=0</code> significa que el optimizador <em>quiere</em>
+    coeficientes negativos y se los estás cortando.</p>
+    <p class="fail">Si sale ~0.00% en los tres, la restricción es un <b>NO-OP</b> y el A/B
+    contra el Gabor libre no concluye nada (el fallo que invalidó run65).</p>
+  </div></li>
+
+  <li class="soft"><input type="checkbox"><div class="body">
+    <span class="t"><code>[A]</code> → <code>sum&lt;0.05 (kernel casi plano)</code></span>
+    <p class="why">Referencia local: <b>0.002%–0.04%</b>. <code>a = 0</code> es un vértice
+    factible y ahí f es constante ⇒ g ≡ 1 ⇒ <b>disco plano de opacidad uniforme</b>: el modo
+    degenerado de run65 (kernel caja), pero por la vía de los aₙ en lugar de β.</p>
+    <p class="fail">Si crece a porcentajes de dos dígitos, estás repitiendo run65 con otro
+    parámetro: el render saldrá con "pétalos" blancuzcos sin textura.</p>
+  </div></li>
+
+  <li><input type="checkbox"><div class="body">
+    <span class="t"><code>[A-CERO]</code> → <code>negativos: 0</code> y % de ceros interiores</span>
+    <p class="why">Con <code>aₙ ≥ 0</code> y <code>Σaₙ ≤ ½</code>, <b>f(r) ≥ 0 está
+    garantizado por construcción</b> (f ≥ ½ − Σaₙ ≥ 0); esto es la red de seguridad.
+    Referencia local: <b>0.000%</b> de ceros interiores, p0 de min f interior 2.5e-2. El
+    <code>min f en r&lt;1</code> sí sale pequeño (~1e-4): ese es el <b>borde</b>, el mismo
+    comportamiento del kernel tent de todo el historial, y lo excluye el guard
+    <code>r2&gt;=1</code>.</p>
+    <p class="fail">Un solo negativo significa que la proyección no corrió: era el 67% de
+    splats de run1 y el origen de los anillos de opacidad.</p>
+  </div></li>
+
+  <li class="crit"><input type="checkbox"><div class="body">
+    <span class="t"><code>[DENSIFY]</code> → histograma de <code>grad_pos</code>: mean y med del mismo orden</span>
+    <p class="why">Criterio de aprobado: <code>mean</code> y <code>med</code> del mismo orden
+    de magnitud y <code>%≥thr</code> de un dígito.</p>
+    <p class="fail">La firma del reventón de run1 era <code>mean</code> <b>4 órdenes</b> por
+    encima de la mediana y 44.6% de splats por encima del umbral de clonado en la iter 1000
+    → N se duplicaba cada 100 iters (52.6M splats y NaN @4100).</p>
+  </div></li>
+
+  <li><input type="checkbox"><div class="body">
+    <span class="t"><code>[BETA]</code> → trinquete muerto</span>
+    <p class="why">Sano: <code>beta&lt;0.1</code> en torno al <b>0.0x%</b> y
+    <code>beta min</code> ~0.096. Si <code>beta min</code> sale clavado en <b>0.0733</b>
+    (= 4·e⁻⁴) con decenas de % por debajo de 0.1, ha vuelto el trinquete de
+    <code>densify_and_split</code> y el kernel degenera a caja.</p>
+  </div></li>
+
+  <li class="soft"><input type="checkbox"><div class="body">
+    <span class="t"><code>[CLAMP]</code> → ¿el techo de escala está activo y muerde?</span>
+    <p class="why">Comprueba las dos cosas: que el origen sea el que crees
+    (<code>&lt;- env SCALE_CLAMP_FACTOR</code> vs <code>&lt;- DEFAULT</code>) y que
+    <code>topados</code> no sea ~0.00%. run65 se tituló "small clamp" y nunca exportó la
+    env var: el run no probó nada.</p>
+  </div></li>
+</ul>
+
+<h2>3 · Antes de dar un resultado por bueno</h2>
+<ul class="chk">
+  <li><input type="checkbox"><div class="body">
+    <span class="t">¿El A/B es limpio o es un <em>bundle</em>?</span>
+    <p class="why">Si cambiaste más de una cosa respecto al ancla, dilo explícitamente: run67
+    fue un bundle (fix + CULL) y hay que leerlo como tal.</p>
+  </div></li>
+  <li><input type="checkbox"><div class="body">
+    <span class="t">¿El cap está topado exacto?</span>
+    <p class="why">Si el ply topa justo en <code>cap_max</code>, el dial movió calidad, no
+    número de primitivas. En flowers el cap está <b>saturado</b> (7.5M); en bonsai sí es
+    palanca (oficial 1.5M).</p>
+  </div></li>
+  <li><input type="checkbox"><div class="body">
+    <span class="t">¿La diferencia supera el ruido?</span>
+    <p class="why">Diferencias de ~0.1 dB con SSIM/LPIPS planos son <b>ruido</b>. Varios
+    sweeps del historial (prune_sustain, scale_reg) son planos dentro de ±0.2 dB: el
+    veredicto correcto ahí es "no es palanca", no "mejora leve".</p>
+  </div></li>
+  <li><input type="checkbox"><div class="body">
+    <span class="t">¿Sube el train también?</span>
+    <p class="why">Si el test cae <b>y</b> el train no ajusta (run65: train 17.48), no es
+    sobreajuste: es que el modelo está roto. Distinguirlo cambia por completo el diagnóstico.</p>
+  </div></li>
+</ul>
+
+<h2>4 · Referencias de comparación</h2>
+<table>
+  <tr><th>Qué</th><th>PSNR / SSIM / LPIPS (honesto)</th><th>Para qué sirve</th></tr>
+  <tr><td>2DGS original, flowers</td><td>20.89 / 0.556 / 0.402</td><td>El baseline a batir.</td></tr>
+  <tr><td><b>run36</b> (MCMC, <code>opacity_reg</code> 0.06)</td><td><b>21.16 / 0.5926 / 0.3555</b></td><td>Techo global del proyecto. Domina al original en las 3.</td></tr>
+  <tr><td>run16 (MCMC, <code>opacity_reg</code> 0.01)</td><td>20.21 / 0.597 / 0.339</td><td>Mejor perceptual (LPIPS).</td></tr>
+  <tr><td>run67 (clásico + fix del trinquete)</td><td>20.67 / 0.5811 / 0.3675</td><td>Techo del camino clásico.</td></tr>
+  <tr><td>run1 Gabor (sin restricciones)</td><td>14.76 / 0.3225 / 0.6285</td><td>Lo que hay que no repetir.</td></tr>
+  <tr><td>2DGS original, bonsai</td><td>31.36 / 0.9359 / 0.2042</td><td>Baseline de la escena acotada.</td></tr>
+  <tr><td>run44 (MCMC, cap 1.5M)</td><td>30.67 / 0.9404 / 0.1862</td><td>Techo de bonsai (gana SSIM+LPIPS).</td></tr>
+</table>
+
+<div class="note danger-box"><b>Banco de pruebas del Gabor:</b> el primer run real debe ser
+<b>MCMC con cap 7.5M en flowers</b>, no clásico. El clásico densifica dirigido por
+‖∂L/∂μ₂D‖, que es exactamente la magnitud que este kernel infla, y encima sin
+<code>cap_max</code> que acote la VRAM.</div>
+
+<h2>5 · Pendiente conocido</h2>
+<p>El fix definitivo de <code>d_alpha_d_rho</code> (<code>backward.cu:485</code>) <b>no está
+aplicado</b>: reagrupar como <code>opa·β·g^(β−1)·f′(r)/(2r·f₀)</code>, sin dividir por f, tal
+como ya se hizo con <code>grad_a</code>. La fórmula está anotada en un comentario en ese
+punto del código. Exige <b>recompilar el rasterizer</b>; las restricciones sobre los aₙ ya
+cierran el caso masivo, así que solo hace falta si reaparecen picos de
+<code>grad_pos</code>.</p>
+
+<p class="meta">Documento generado el 2026-07-26. Relacionado:
+<code>docs/diagnostico_run1_gabor.html</code>, <code>docs/kernel_gabor_coeficientes_a.html</code>,
+<code>docs/comparativa_runs.html</code>, <code>docs/comparativa_vs_original.html</code>,
+<code>docs/CLAUDE_md_archivo_2026-07-26.md</code>.</p>
+
+</div>
+</body>
+</html>
