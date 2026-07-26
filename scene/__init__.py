@@ -79,6 +79,18 @@ class Scene:
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"))
+            # ✅ FIX (2026-07-26) inconsistencia train<->render del clamp de escala.
+            # load_ply NO tocaba spatial_lr_scale, así que se quedaba en 0 (el valor de
+            # GaussianModel.__init__) y el guard `if self.spatial_lr_scale > 0` de
+            # get_scaling (gaussian_model.py:139) DESACTIVABA el techo al renderizar:
+            # render.py / metrics.py / el visor pintaban la escala CRUDA del ply mientras
+            # que el entrenamiento la había recortado a scale_clamp_factor*extent. Medido
+            # en flowers_beta_run1: 0,46% de los splats por encima del techo (máx 6,68x)
+            # = +2,21% de área pintada de más y ~0,10 dB de sesgo en el número honesto.
+            # El extent ya está calculado arriba (línea 69), es el MISMO que recibe
+            # create_from_pcd en la rama de train -> las dos rutas quedan idénticas.
+            # Ver docs/clamp_render_vs_train.html.
+            self.gaussians.spatial_lr_scale = self.cameras_extent
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 

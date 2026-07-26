@@ -407,6 +407,65 @@ ahí es <code>SCALE_CLAMP_FACTOR</code> (run64 lo bajó a 0,05 y empeoró las tr
 gratis) o la cobertura del fondo rasante, no la carga del ply.</li>
 </ol>
 
+<h2>7 · Resultado medido (2026-07-26, tras aplicar A y B)</h2>
+
+<h3>Fix A · A/B del render sobre el MISMO ply</h3>
+<p>Verificación previa: el build local del rasterizer reproduce el del servidor (mismas
+imágenes salvo 1–2 niveles de 255 en un puñado de píxeles, por orden de suma en float;
+el cambio de <code>forward.cu</code> posterior al run fue <b>solo comentarios</b>). Los dos
+brazos se renderizan y se miden en local, así que el GT es idéntico dentro de la comparación.</p>
+
+<div class="scroll">
+<table>
+<tr><th>render de <code>flowers_beta_run1</code></th><th>PSNR</th><th>SSIM</th><th>LPIPS</th></tr>
+<tr><td>servidor, sin fix (lo que había)</td><td>19,9887</td><td>0,5531</td><td>0,3920</td></tr>
+<tr><td>local, sin fix (control)</td><td>19,9781</td><td>0,5527</td><td>0,3924</td></tr>
+<tr><td><b>local, CON fix A</b></td><td><b class="hi">20,0205</b></td><td>0,5530</td><td><b class="hi">0,3918</b></td></tr>
+</table>
+</div>
+
+<p><b>+0,042 dB</b>, no los +0,10 que predije en la §6. Lo que falta no era el clamp:
+el <code>psnr()</code> de <code>utils/image_utils.py</code> hace
+<code>mse = ((a-b)**2).view(a.shape[0],-1).mean(1)</code>, así que en <code>train.py</code>
+—que le pasa un tensor <code>(3,H,W)</code>— calcula el <b>MSE por CANAL</b> y promedia los tres
+PSNR, mientras que <code>metrics.py</code> le pasa <code>(1,3,H,W)</code> y sale el MSE global.
+Con la definición de <code>train.py</code> sobre los mismos PNG:</p>
+<pre><code>local sin fix   20.0379 dB
+local CON fix   20.0785 dB   <b class="hi">&lt;- a 0,015 dB del eval in-train</b>
+eval in-train   20.0931 dB</code></pre>
+<p>Así que los 0,104 dB de hueco train↔render se reparten en <b>0,041 del clamp</b> (esto),
+<b>0,055 de la definición de PSNR</b> (train.py por canal vs metrics.py global) y 0,015 de
+decodificación del JPEG y no-determinismo del rasterizer. Queda cerrado.</p>
+
+<div class="note ok-box"><b>La predicción de los discos se confirma:</b> la vista 00000, la de los
+discos gigantes del primer plano, es la única que <b>no</b> se mueve (−0,002 dB) pese a tener el
+4,9 % de huecos. Mejoran 10 de 22 vistas, y la que más es 00002 (+0,55 dB). El clamp no era el
+problema de los discos, como decía la §3.</div>
+
+<h3>Fix B · A/B de entrenamiento, smoke test local de 2.500 iters</h3>
+<p>Misma config que el run (clásico, ancla run67), único delta el <code>clamp_</code> del parámetro:</p>
+<div class="scroll">
+<table>
+<tr><th></th><th>sin B (control)</th><th>con B</th></tr>
+<tr><td><code>recorte_max</code> @1000 y @2500</td><td><b class="lo">4,217584</b></td><td><b class="hi">0,000000</b></td></tr>
+<tr><td><code>s_raw max</code></td><td><b class="lo">4,699188</b> (9,75× el techo)</td><td><b class="hi">0,481604</b> (= el techo)</td></tr>
+<tr><td>componentes topadas @1000</td><td>2.316 (0,759 %)</td><td>748 (0,244 %)</td></tr>
+<tr><td>componentes topadas @2500</td><td>4.670 (0,278 %)</td><td>1.232 (0,073 %)</td></tr>
+<tr><td>PSNR test @2500</td><td>18,2877</td><td>18,2404</td></tr>
+<tr><td>PSNR train @2500</td><td>17,6838</td><td>17,8458</td></tr>
+</table>
+</div>
+<p>B hace exactamente lo que decía: el crudo se queda pegado al techo y la población topada baja
+a un tercio — al recuperar gradiente, muchos <b>vuelven a bajar</b> por debajo del techo en vez de
+quedarse arriba congelados. En calidad a 2.500 iters no se mide nada: −0,047 dB en test y
++0,162 dB en train, signos opuestos = ruido de una sola semilla, no una tendencia. El veredicto
+real necesita las 30k.</p>
+
+<div class="note warn-box"><b>Ojo con el historial.</b> run67 (20,6684) y el baseline (20,8900) están
+medidos <b>sin</b> el fix A. Para el A/B honesto del kernel Gabor hay que re-renderizarlos con el fix
+(render + <code>metrics.py</code>, sin re-entrenar). El sesgo no es constante entre runs: aquí vale
+0,042 dB y en el baseline oficial era ~0,03 dB.</div>
+
 <p class="meta" style="margin-top:32px;border-top:1px solid var(--line);padding-top:14px">
 Generado el 2026-07-26. Código: <code>scene/gaussian_model.py</code> (78, 131-141, 292, 421, 700, 750, 818, 1003),
 <code>scene/__init__.py</code> (69, 78, 83), <code>train.py</code> (228, 589-631).
@@ -414,7 +473,7 @@ Datos: <code>logs/flowers1.log</code> (serie <code>[CLAMP]</code>, 144 pasos <co
 <code>output/m360/flowers_beta_run1/point_cloud/iteration_30000/point_cloud.ply</code> (muestra de 300.000
 splats) y <code>test/ours_30000/{renders,gt,vis}</code> (22 vistas). El juguete es un rasterizador 2D
 propio en numpy: 5.200 splats, kernel (1−r)³, ajuste de color por mínimos cuadrados
-amortiguados contra la huella clampeada. Relacionado: <code>docs/diagnostico_run1_gabor.html</code>.
+amortiguados contra la huella clampeada. Resultados de la §7: dos renders locales del mismo ply (control y con fix A) + <code>metrics.py</code> sobre los dos, y dos entrenamientos locales de 2.500 iters (con y sin fix B) en la RTX 3080. Relacionado: <code>docs/diagnostico_run1_gabor.html</code>, <code>run2_clamp_fix.sh</code>.
 </p>
 
 </div>

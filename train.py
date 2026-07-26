@@ -403,6 +403,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # a 29.556 y el experimento es un NO-OP (fallo tipo run65). Min = -4.0 en AMBOS.
             with torch.no_grad():
                 gaussians._beta.data.clamp_(min=-4.0, max=2.0)
+                # ✅ (2026-07-26) MISMO patrón para la ESCALA: matar el trinquete del clamp.
+                # get_scaling recorta a techo = scale_clamp_factor*extent, pero torch.clamp
+                # NO propaga gradiente por encima del máximo -> un splat cuyo parámetro CRUDO
+                # está arriba no recibe señal nunca más y se queda ahí para siempre. Dos vías
+                # de entrada, las dos medidas en flowers_beta_run1:
+                #   1) NACER grande: la escala inicial es la distancia a los vecinos SfM
+                #      (create_from_pcd), y el 5,89% de los 38.347 puntos de flowers nace por
+                #      encima del techo (el mayor a 42x). Congelados desde la iteración 0.
+                #   2) CRUZAR entrenando: el momentum de Adam pasa de largo la barrera y ahí
+                #      se queda (simulado con scaling_lr=0.005 -> 1,073x; p90 real 1,068x).
+                # Efecto: el ply guardaba escalas hasta 6,68x el techo que el entrenamiento
+                # nunca usó, y el render las liberaba (ver el fix de scene/__init__.py).
+                # OJO: scale_reg NO arregla esto — train.py:158 lo aplica sobre get_scaling,
+                # que YA viene clampeada, así que su gradiente también es cero para los
+                # topados: solo aprieta a los que están por debajo del techo.
+                # Clampeando el PARÁMETRO: el forward de train no cambia (get_scaling daba
+                # ya ese valor) pero el crudo deja de poder vivir arriba, el ply guarda lo
+                # que se entrenó y los topados RECUPERAN gradiente (clamp sí propaga EN el
+                # máximo) -> pueden encogerse cuando la pérdida lo pida.
+                # Verificación en el log: [CLAMP] debe pasar a dar recorte_max=0.000000 y
+                # s_raw max == techo exacto. Ver docs/clamp_render_vs_train.html.
+                if gaussians.spatial_lr_scale > 0:
+                    _s_ceil = gaussians.scale_clamp_factor * gaussians.spatial_lr_scale
+                    gaussians._scaling.data.clamp_(max=math.log(_s_ceil))  # activación = exp
                 # ✅ (2026-07-25) RESTRICCIONES del kernel Gabor:  a_n >= 0  Y  sum(a_n) <= 1/2.
                 # Es gradiente proyectado: project_a_() hace la proyección euclídea EXACTA
                 # sobre el conjunto factible (caja + simplex, ver gaussian_model.py:205).
