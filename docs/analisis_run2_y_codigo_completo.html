@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>run2 Gabor — análisis del render y recorrido completo del código (Python + CUDA)</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:1040px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.9rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.45rem;margin:2.2em 0 .5em;padding-top:.5em;border-top:1px solid var(--line)}
+  h3{font-size:1.12rem;margin:1.6em 0 .4em;color:var(--accent)}
+  h4{font-size:1.0rem;margin:1.2em 0 .3em;color:var(--warn)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.88em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.79rem;line-height:1.55}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.9rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  ol{margin:.5em 0;padding-left:1.3em} ol li{margin:.5em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;font-family:"JetBrains Mono",monospace;font-size:.92rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg,img{max-width:100%;height:auto;display:block}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)} b.md{color:var(--warn)}
+  .verdict{background:linear-gradient(180deg,#2a1b1e,#211a1d);border:1px solid #5c3a3a;border-left:5px solid var(--danger);border-radius:12px;padding:20px 22px;margin:20px 0}
+  .verdict h3{margin-top:0;color:var(--danger)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  @media(max-width:820px){.grid2,.grid3{grid-template-columns:1fr}}
+  .big{font-size:1.35rem;font-weight:700}
+  figure{margin:0}
+  figcaption{color:var(--muted);font-size:.82rem;margin-top:6px}
+  .legend span{display:inline-block;margin-right:14px;font-size:.82rem;color:var(--muted)}
+  .sw{display:inline-block;width:20px;height:3px;vertical-align:middle;margin-right:5px;border-radius:2px}
+  .toc{columns:2;column-gap:28px;font-size:.92rem}
+  @media(max-width:760px){.toc{columns:1}}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  .pill{display:inline-block;font-size:.7rem;padding:1px 7px;border-radius:999px;font-weight:700;letter-spacing:.03em}
+  .p1{background:#5c2020;color:#ffb3ae} .p2{background:#5c4520;color:#ffd9a0} .p3{background:#204a5c;color:#a8dcff} .p4{background:#2a3040;color:#9aa3b2}
+  .fileref{color:var(--warn);font-family:"JetBrains Mono",monospace;font-size:.85em}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>run2 Gabor — análisis del render y recorrido completo del código</h1>
+<p class="sub">
+flowers · <code>--eval</code> · camino <b>CLÁSICO</b> (clone/split) · kernel Gabor con <code>a₁,a₂,a₃</code>
+entrenables bajo <code>aₙ ≥ 0</code> y <code>Σaₙ ≤ ½</code> · 30 000 iters · 6 829 700 splats.<br>
+Revisión del <b>2026-07-27</b> sobre <code>logs/flowers2.log</code>, <code>output/m360/flowers_beta_run2</code>
+y el árbol de código completo, incluido el rasterizer CUDA.
+</p>
+
+<div class="card">
+<h3 style="margin-top:0">Índice</h3>
+<div class="toc">
+<a href="#s1">1 · Resultado honesto del run2</a><br>
+<a href="#s2">2 · Los tres artefactos, con evidencia</a><br>
+<a href="#s21">&nbsp;&nbsp;2.1 Dianas / anillos concéntricos</a><br>
+<a href="#s22">&nbsp;&nbsp;2.2 Splats gigantes translúcidos</a><br>
+<a href="#s23">&nbsp;&nbsp;2.3 Zonas negras</a><br>
+<a href="#s3">3 · Qué hace el código, paso a paso (Python)</a><br>
+<a href="#s31">&nbsp;&nbsp;3.1 train.py — el bucle</a><br>
+<a href="#s32">&nbsp;&nbsp;3.2 gaussian_model.py — parámetros</a><br>
+<a href="#s33">&nbsp;&nbsp;3.3 gaussian_renderer — el puente</a><br>
+<a href="#s34">&nbsp;&nbsp;3.4 scene / load_ply</a><br>
+<a href="#s4">4 · El rasterizer CUDA, línea a línea</a><br>
+<a href="#s41">&nbsp;&nbsp;4.1 Arquitectura y buffers</a><br>
+<a href="#s42">&nbsp;&nbsp;4.2 preprocessCUDA (forward)</a><br>
+<a href="#s43">&nbsp;&nbsp;4.3 renderCUDA (forward) — el kernel</a><br>
+<a href="#s44">&nbsp;&nbsp;4.4 renderCUDA (backward) — gradientes</a><br>
+<a href="#s45">&nbsp;&nbsp;4.5 Constantes de auxiliary.h</a><br>
+<a href="#s5">5 · Tabla de hallazgos</a><br>
+<a href="#s6">6 · Qué haría a continuación</a>
+</div>
+</div>
+
+<div class="verdict">
+<h3>Veredicto en una línea</h3>
+<p>El run2 <b>funciona</b> (mejor que run1: <b class="hi">+0,14 dB</b>) y ninguno de los dos fixes del clamp está roto,
+pero los tres artefactos que ves tienen <b>tres causas distintas y todas están confirmadas</b>:</p>
+<ol style="margin-bottom:0">
+<li><b class="lo">Las dianas son el kernel Gabor</b>, no un bug del rasterizer. <code>aₙ≥0</code> impide lóbulos
+<em>por encima</em> del centro, pero <b>no impide lóbulos secundarios</b>. El 84,6 % de los splats tienen
+el kernel no monótono; el splat típico cae casi a cero y <b>vuelve a subir</b>. A/B de render: forzando
+monotonía las dianas <b>desaparecen por completo</b>.</li>
+<li><b class="lo">Los splats gigantes son dos prunes muertos</b>. <code>big_points_vs</code> y <code>big_points_ws</code>
+dan <code>0</code> en <b>las 144</b> densificaciones del run. Uno lo mata el reset de <code>max_radii2D</code>,
+el otro lo mata la interacción con el clamp de escala. Nada poda un splat gordo en este código.</li>
+<li><b class="md">Las zonas negras son falta de geometría</b> (0,77 % del render vs 0,17 % del GT, casi todo en
+la franja inferior), agravadas por un guard del CUDA que <b>corta el gradiente</b> justo en los píxeles vacíos.</li>
+</ol>
+</div>
+
+<h2 id="s1">1 · Resultado honesto del run2</h2>
+
+<p>Medido ahora con <code>metrics.py -m output/m360/flowers_beta_run2</code> (el <code>results.json</code> no existía todavía):</p>
+
+<table>
+<tr><th>Modelo</th><th>PSNR</th><th>SSIM</th><th>LPIPS</th><th>Notas</th></tr>
+<tr><td><b>run2</b> — Gabor + fix A + fix B</td><td><b class="hi">20,1602</b></td><td><b>0,5537</b></td><td><b>0,3900</b></td><td>6 829 700 splats</td></tr>
+<tr><td>run1 — Gabor, mismos hiperparámetros, sin fixes</td><td>20,0205</td><td>0,5530</td><td>0,3918</td><td>6 883 777 splats</td></tr>
+<tr><td>run67 — clásico, kernel <em>tent</em> (misma config, sin Gabor)</td><td>20,6684</td><td>0,5811</td><td>0,3675</td><td>medido <b>sin</b> el fix A</td></tr>
+<tr><td>baseline 2DGS oficial</td><td>20,8900</td><td>0,5560</td><td>0,4020</td><td>ídem</td></tr>
+<tr><td>run36 — techo propio de la escena</td><td>21,16</td><td>0,5926</td><td>0,3555</td><td>MCMC</td></tr>
+</table>
+
+<div class="note ok-box">
+<b>Los dos fixes hacen exactamente lo que prometían.</b> En el log:
+<code>recorte_max=0.000000</code> y <code>s_raw max = 0.481604</code> = techo exacto en <b>todas</b> las iters
+reportadas → el fix B (clamp del parámetro) está actuando y el trinquete está muerto.
+El PLY confirma <code>s_max = 0,4816038</code> contra un techo de <code>0,4816042</code>: ni un solo splat por encima.
+El delta neto de los dos fixes es <b>+0,14 dB</b> sobre run1.
+</div>
+
+<div class="note danger-box">
+<b>Pero el kernel Gabor sigue perdiendo contra su propio baseline.</b> run2 está <b>−0,51 dB</b> por debajo de
+run67, que es <em>la misma configuración clásica con el kernel tent fijo</em>. Es decir: hasta hoy,
+<b>aprender la forma del kernel resta</b> en lugar de sumar. Y contra run36 (techo global) está a −1,0 dB.
+Esto es coherente con el §2.1: lo que el optimizador «aprende» es en buena parte a fabricar lóbulos
+secundarios que compran PSNR local a costa de artefactos visibles.
+</div>
+
+<p class="meta">Evolución del eval in-train (que va ~1,4 dB alto y no es comparable con lo de arriba):
+2500 → 18,29 · 7000 → 19,68 · 15000 → <b>20,12</b> · 20000 → <b>20,28</b> · 25000 → 20,26 · 30000 → 20,21.
+<b>Satura en la 20 000 y luego baja.</b> Las últimas 10 000 iteraciones no aportan nada.</p>
+
+<h2 id="s2">2 · Los tres artefactos, con evidencia</h2>
+
+<div class="grid2">
+<figure>
+  <img src="assets/run2/vista00_render.jpg" alt="render test 00000">
+  <figcaption>run2 · test 00000 · <b>render</b>. Nótense las dianas en el césped, los blobs elípticos y la franja negra inferior.</figcaption>
+</figure>
+<figure>
+  <img src="assets/run2/vista00_gt.jpg" alt="ground truth 00000">
+  <figcaption>El mismo encuadre · <b>ground truth</b>.</figcaption>
+</figure>
+</div>
+
+<h3 id="s21">2.1 · Dianas / anillos concéntricos — <span class="pill p1">causa: el kernel Gabor</span></h3>
+
+<p>El rasterizer evalúa, para cada píxel dentro de la huella de un splat:</p>
+
+<div class="eq">
+f(r) = ½ + a₁·cos(πr) + a₂·cos(3πr) + a₃·cos(5πr) &nbsp;&nbsp;·&nbsp;&nbsp; f₀ = f(0) = ½ + a₁ + a₂ + a₃ <br>
+kernel = ( f(r) / f₀ )<sup>β</sup> &nbsp;&nbsp;·&nbsp;&nbsp; α = min(0,99 , opacidad · kernel)
+</div>
+
+<p>Las restricciones que se impusieron el 2026-07-25 garantizan dos cosas y <b>solo</b> dos:</p>
+<ul>
+<li><code>aₙ ≥ 0</code> ⟹ <code>f(r) ≤ f(0)</code> ⟹ <code>g ≤ 1</code>: ningún lóbulo <b>por encima</b> del centro. ✅ (era el problema del run1, con <code>g_max = 2,47</code>).</li>
+<li><code>Σaₙ ≤ ½</code> ⟹ <code>f(r) ≥ ½ − Σaₙ ≥ 0</code>: f no cruza cero. ✅ (medido en el PLY: <code>g_min = −1,07·10⁻⁶</code> ≈ 0).</li>
+</ul>
+
+<p class="big" style="color:var(--danger)">Lo que <b>ninguna</b> de las dos garantiza es que f(r) sea <b>monótona decreciente</b>.</p>
+
+<p>Y no lo es. <code>cos(5πr)</code> tiene dos máximos y dos mínimos en <code>r ∈ [0,1]</code>. Un splat con
+<code>a₃</code> dominante produce un kernel con <b>tres crestas concéntricas</b> — literalmente una diana.
+Estos son cinco splats reales del PLY de run2:</p>
+
+<div class="card">
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Forma del kernel para cinco splats reales del run2">
+<rect x="0" y="0" width="760" height="300" fill="#0b0d13"/>
+<line x1="52.0" y1="16" x2="52.0" y2="264" stroke="#2a2f3c"/>
+<text x="52.0" y="280" fill="#9aa3b2" font-size="11" text-anchor="middle">0.00</text>
+<line x1="225.5" y1="16" x2="225.5" y2="264" stroke="#2a2f3c"/>
+<text x="225.5" y="280" fill="#9aa3b2" font-size="11" text-anchor="middle">0.25</text>
+<line x1="399.0" y1="16" x2="399.0" y2="264" stroke="#2a2f3c"/>
+<text x="399.0" y="280" fill="#9aa3b2" font-size="11" text-anchor="middle">0.50</text>
+<line x1="572.5" y1="16" x2="572.5" y2="264" stroke="#2a2f3c"/>
+<text x="572.5" y="280" fill="#9aa3b2" font-size="11" text-anchor="middle">0.75</text>
+<line x1="746.0" y1="16" x2="746.0" y2="264" stroke="#2a2f3c"/>
+<text x="746.0" y="280" fill="#9aa3b2" font-size="11" text-anchor="middle">1.00</text>
+<line x1="52" y1="264.0" x2="746" y2="264.0" stroke="#2a2f3c"/>
+<text x="46" y="268.0" fill="#9aa3b2" font-size="11" text-anchor="end">0.00</text>
+<line x1="52" y1="202.0" x2="746" y2="202.0" stroke="#2a2f3c"/>
+<text x="46" y="206.0" fill="#9aa3b2" font-size="11" text-anchor="end">0.25</text>
+<line x1="52" y1="140.0" x2="746" y2="140.0" stroke="#2a2f3c"/>
+<text x="46" y="144.0" fill="#9aa3b2" font-size="11" text-anchor="end">0.50</text>
+<line x1="52" y1="78.0" x2="746" y2="78.0" stroke="#2a2f3c"/>
+<text x="46" y="82.0" fill="#9aa3b2" font-size="11" text-anchor="end">0.75</text>
+<line x1="52" y1="16.0" x2="746" y2="16.0" stroke="#2a2f3c"/>
+<text x="46" y="20.0" fill="#9aa3b2" font-size="11" text-anchor="end">1.00</text>
+<polyline points="52.0,16.0 54.3,16.3 56.6,17.1 59.0,18.5 61.3,20.5 63.6,22.9 65.9,25.9 68.2,29.4 70.5,33.4 72.9,37.9 75.2,42.8 77.5,48.1 79.8,53.8 82.1,59.9 84.5,66.3 86.8,73.0 89.1,79.9 91.4,87.1 93.7,94.5 96.1,102.0 98.4,109.7 100.7,117.4 103.0,125.2 105.3,133.0 107.6,140.7 110.0,148.4 112.3,156.0 114.6,163.5 116.9,170.9 119.2,178.0 121.6,185.0 123.9,191.7 126.2,198.1 128.5,204.3 130.8,210.2 133.2,215.8 135.5,221.1 137.8,226.0 140.1,230.6 142.4,234.9 144.7,238.9 147.1,242.5 149.4,245.7 151.7,248.7 154.0,251.3 156.3,253.6 158.7,255.7 161.0,257.4 163.3,258.9 165.6,260.1 167.9,261.2 170.3,262.0 172.6,262.6 174.9,263.1 177.2,263.5 179.5,263.7 181.8,263.9 184.2,263.9 186.5,264.0 188.8,264.0 191.1,264.0 193.4,264.0 195.8,264.0 198.1,263.9 200.4,263.8 202.7,263.7 205.0,263.4 207.4,263.0 209.7,262.5 212.0,261.8 214.3,260.9 216.6,259.8 218.9,258.5 221.3,256.9 223.6,255.1 225.9,253.0 228.2,250.6 230.5,247.9 232.9,244.8 235.2,241.5 237.5,237.8 239.8,233.7 242.1,229.4 244.5,224.7 246.8,219.6 249.1,214.3 251.4,208.6 253.7,202.6 256.0,196.3 258.4,189.8 260.7,183.0 263.0,176.0 265.3,168.8 267.6,161.4 270.0,153.9 272.3,146.3 274.6,138.6 276.9,130.8 279.2,123.0 281.6,115.2 283.9,107.5 286.2,99.9 288.5,92.4 290.8,85.1 293.1,78.0 295.5,71.1 297.8,64.5 300.1,58.2 302.4,52.2 304.7,46.6 307.1,41.4 309.4,36.6 311.7,32.3 314.0,28.4 316.3,25.0 318.7,22.2 321.0,19.9 323.3,18.1 325.6,16.8 327.9,16.1 330.2,16.0 332.6,16.5 334.9,17.5 337.2,19.0 339.5,21.1 341.8,23.7 344.2,26.9 346.5,30.5 348.8,34.6 351.1,39.2 353.4,44.2 355.8,49.7 358.1,55.5 360.4,61.7 362.7,68.1 365.0,74.9 367.3,81.9 369.7,89.2 372.0,96.6 374.3,104.2 376.6,111.8 378.9,119.6 381.3,127.4 383.6,135.1 385.9,142.9 388.2,150.6 390.5,158.2 392.9,165.6 395.2,172.9 397.5,180.0 399.8,186.9 402.1,193.5 404.4,199.9 406.8,206.0 409.1,211.8 411.4,217.3 413.7,222.5 416.0,227.3 418.4,231.9 420.7,236.1 423.0,239.9 425.3,243.4 427.6,246.6 430.0,249.4 432.3,252.0 434.6,254.2 436.9,256.2 439.2,257.9 441.5,259.3 443.9,260.5 446.2,261.4 448.5,262.2 450.8,262.8 453.1,263.2 455.5,263.6 457.8,263.8 460.1,263.9 462.4,264.0 464.7,264.0 467.1,264.0 469.4,264.0 471.7,264.0 474.0,264.0 476.3,263.9 478.6,263.8 481.0,263.6 483.3,263.3 485.6,262.9 487.9,262.3 490.2,261.6 492.6,260.6 494.9,259.5 497.2,258.1 499.5,256.5 501.8,254.6 504.2,252.4 506.5,249.9 508.8,247.1 511.1,243.9 513.4,240.5 515.7,236.7 518.1,232.6 520.4,228.1 522.7,223.3 525.0,218.2 527.3,212.7 529.7,206.9 532.0,200.9 534.3,194.5 536.6,187.9 538.9,181.1 541.3,174.0 543.6,166.8 545.9,159.3 548.2,151.8 550.5,144.1 552.8,136.4 555.2,128.6 557.5,120.8 559.8,113.1 562.1,105.4 564.4,97.8 566.8,90.3 569.1,83.1 571.4,76.0 573.7,69.2 576.0,62.7 578.4,56.4 580.7,50.6 583.0,45.1 585.3,40.0 587.6,35.3 589.9,31.1 592.3,27.4 594.6,24.2 596.9,21.5 599.2,19.3 601.5,17.7 603.9,16.6 606.2,16.1 608.5,16.1 610.8,16.7 613.1,17.8 615.5,19.5 617.8,21.8 620.1,24.5 622.4,27.8 624.7,31.6 627.0,35.9 629.4,40.6 631.7,45.7 634.0,51.3 636.3,57.2 638.6,63.4 641.0,70.0 643.3,76.9 645.6,83.9 647.9,91.2 650.2,98.7 652.6,106.3 654.9,114.0 657.2,121.8 659.5,129.5 661.8,137.3 664.1,145.1 666.5,152.7 668.8,160.3 671.1,167.7 673.4,174.9 675.7,181.9 678.1,188.7 680.4,195.3 682.7,201.6 685.0,207.7 687.3,213.4 689.7,218.8 692.0,223.9 694.3,228.6 696.6,233.1 698.9,237.2 701.2,240.9 703.6,244.3 705.9,247.4 708.2,250.2 710.5,252.6 712.8,254.8 715.2,256.7 717.5,258.3 719.8,259.6 722.1,260.7 724.4,261.7 726.8,262.4 729.1,262.9 731.4,263.3 733.7,263.6 736.0,263.8 738.3,263.9 740.7,264.0 743.0,264.0 745.3,264.0" fill="none" stroke="#ff7b72" stroke-width="2"/>
+<polyline points="52.0,16.0 54.3,16.8 56.6,19.0 59.0,22.7 61.3,27.8 63.6,34.3 65.9,41.9 68.2,50.6 70.5,60.3 72.9,70.7 75.2,81.8 77.5,93.4 79.8,105.2 82.1,117.2 84.5,129.2 86.8,141.1 89.1,152.7 91.4,163.9 93.7,174.7 96.1,184.8 98.4,194.4 100.7,203.2 103.0,211.3 105.3,218.8 107.6,225.5 110.0,231.4 112.3,236.7 114.6,241.4 116.9,245.4 119.2,248.8 121.6,251.8 123.9,254.2 126.2,256.3 128.5,258.0 130.8,259.3 133.2,260.4 135.5,261.3 137.8,262.0 140.1,262.5 142.4,262.9 144.7,263.2 147.1,263.5 149.4,263.6 151.7,263.7 154.0,263.8 156.3,263.9 158.7,263.9 161.0,264.0 163.3,264.0 165.6,264.0 167.9,264.0 170.3,264.0 172.6,264.0 174.9,264.0 177.2,264.0 179.5,264.0 181.8,264.0 184.2,264.0 186.5,264.0 188.8,264.0 191.1,264.0 193.4,264.0 195.8,264.0 198.1,264.0 200.4,264.0 202.7,264.0 205.0,264.0 207.4,264.0 209.7,264.0 212.0,264.0 214.3,264.0 216.6,264.0 218.9,264.0 221.3,264.0 223.6,263.9 225.9,263.9 228.2,263.8 230.5,263.7 232.9,263.6 235.2,263.5 237.5,263.3 239.8,263.0 242.1,262.6 244.5,262.1 246.8,261.4 249.1,260.6 251.4,259.5 253.7,258.2 256.0,256.6 258.4,254.6 260.7,252.2 263.0,249.4 265.3,246.2 267.6,242.3 270.0,237.9 272.3,232.9 274.6,227.3 276.9,221.0 279.2,214.0 281.6,206.4 283.9,198.1 286.2,189.3 288.5,179.8 290.8,169.9 293.1,159.5 295.5,148.9 297.8,138.0 300.1,127.1 302.4,116.2 304.7,105.5 307.1,95.1 309.4,85.3 311.7,76.1 314.0,67.7 316.3,60.2 318.7,53.7 321.0,48.4 323.3,44.4 325.6,41.7 327.9,40.3 330.2,40.3 332.6,41.8 334.9,44.6 337.2,48.7 339.5,54.0 341.8,60.5 344.2,68.1 346.5,76.6 348.8,85.8 351.1,95.8 353.4,106.2 355.8,117.0 358.1,127.9 360.4,138.9 362.7,149.9 365.0,160.6 367.3,171.0 369.7,180.9 372.0,190.4 374.3,199.3 376.6,207.6 378.9,215.2 381.3,222.1 383.6,228.4 385.9,234.0 388.2,238.9 390.5,243.3 392.9,247.0 395.2,250.3 397.5,253.0 399.8,255.3 402.1,257.2 404.4,258.7 406.8,260.0 409.1,261.0 411.4,261.7 413.7,262.3 416.0,262.8 418.4,263.2 420.7,263.4 423.0,263.6 425.3,263.7 427.6,263.8 430.0,263.9 432.3,263.9 434.6,264.0 436.9,264.0 439.2,264.0 441.5,264.0 443.9,264.0 446.2,264.0 448.5,264.0 450.8,264.0 453.1,264.0 455.5,264.0 457.8,264.0 460.1,264.0 462.4,264.0 464.7,264.0 467.1,264.0 469.4,264.0 471.7,264.0 474.0,264.0 476.3,264.0 478.6,264.0 481.0,264.0 483.3,264.0 485.6,264.0 487.9,264.0 490.2,264.0 492.6,264.0 494.9,264.0 497.2,264.0 499.5,264.0 501.8,264.0 504.2,264.0 506.5,263.9 508.8,263.9 511.1,263.8 513.4,263.7 515.7,263.6 518.1,263.4 520.4,263.1 522.7,262.7 525.0,262.2 527.3,261.6 529.7,260.8 532.0,259.8 534.3,258.5 536.6,257.0 538.9,255.1 541.3,252.8 543.6,250.1 545.9,247.0 548.2,243.4 550.5,239.2 552.8,234.5 555.2,229.2 557.5,223.3 559.8,216.8 562.1,209.8 564.4,202.2 566.8,194.2 569.1,185.7 571.4,176.8 573.7,167.6 576.0,158.3 578.4,148.9 580.7,139.5 583.0,130.3 585.3,121.5 587.6,113.0 589.9,105.2 592.3,98.0 594.6,91.7 596.9,86.2 599.2,81.8 601.5,78.5 603.9,76.4 606.2,75.4 608.5,75.7 610.8,77.1 613.1,79.8 615.5,83.6 617.8,88.4 620.1,94.2 622.4,101.0 624.7,108.5 627.0,116.6 629.4,125.3 631.7,134.3 634.0,143.6 636.3,153.0 638.6,162.5 641.0,171.8 643.3,180.9 645.6,189.6 647.9,198.0 650.2,205.9 652.6,213.2 654.9,220.0 657.2,226.3 659.5,231.9 661.8,236.9 664.1,241.4 666.5,245.3 668.8,248.8 671.1,251.7 673.4,254.1 675.7,256.2 678.1,257.9 680.4,259.3 682.7,260.4 685.0,261.3 687.3,262.0 689.7,262.6 692.0,263.0 694.3,263.3 696.6,263.5 698.9,263.7 701.2,263.8 703.6,263.9 705.9,263.9 708.2,264.0 710.5,264.0 712.8,264.0 715.2,264.0 717.5,264.0 719.8,264.0 722.1,264.0 724.4,264.0 726.8,264.0 729.1,264.0 731.4,264.0 733.7,264.0 736.0,264.0 738.3,264.0 740.7,264.0 743.0,264.0 745.3,264.0" fill="none" stroke="#ffb454" stroke-width="2"/>
+<polyline points="52.0,16.0 54.3,16.2 56.6,16.8 59.0,17.9 61.3,19.4 63.6,21.2 65.9,23.5 68.2,26.1 70.5,29.2 72.9,32.5 75.2,36.2 77.5,40.3 79.8,44.6 82.1,49.2 84.5,54.0 86.8,59.1 89.1,64.4 91.4,69.8 93.7,75.4 96.1,81.2 98.4,87.0 100.7,92.9 103.0,98.9 105.3,104.9 107.6,110.9 110.0,116.9 112.3,122.9 114.6,128.8 116.9,134.6 119.2,140.3 121.6,145.9 123.9,151.4 126.2,156.8 128.5,162.0 130.8,167.1 133.2,171.9 135.5,176.6 137.8,181.2 140.1,185.5 142.4,189.6 144.7,193.6 147.1,197.3 149.4,200.9 151.7,204.2 154.0,207.4 156.3,210.4 158.7,213.2 161.0,215.8 163.3,218.2 165.6,220.5 167.9,222.6 170.3,224.5 172.6,226.3 174.9,227.9 177.2,229.4 179.5,230.8 181.8,232.0 184.2,233.0 186.5,234.0 188.8,234.8 191.1,235.5 193.4,236.1 195.8,236.6 198.1,237.0 200.4,237.3 202.7,237.5 205.0,237.6 207.4,237.6 209.7,237.5 212.0,237.3 214.3,237.0 216.6,236.6 218.9,236.1 221.3,235.5 223.6,234.9 225.9,234.1 228.2,233.3 230.5,232.3 232.9,231.3 235.2,230.1 237.5,228.9 239.8,227.6 242.1,226.2 244.5,224.6 246.8,223.0 249.1,221.3 251.4,219.5 253.7,217.7 256.0,215.7 258.4,213.7 260.7,211.6 263.0,209.4 265.3,207.2 267.6,204.9 270.0,202.5 272.3,200.2 274.6,197.8 276.9,195.3 279.2,192.9 281.6,190.5 283.9,188.0 286.2,185.6 288.5,183.2 290.8,180.9 293.1,178.6 295.5,176.4 297.8,174.3 300.1,172.3 302.4,170.3 304.7,168.5 307.1,166.8 309.4,165.3 311.7,163.9 314.0,162.6 316.3,161.5 318.7,160.6 321.0,159.9 323.3,159.3 325.6,158.9 327.9,158.8 330.2,158.8 332.6,158.9 334.9,159.3 337.2,159.9 339.5,160.7 341.8,161.6 344.2,162.7 346.5,164.0 348.8,165.5 351.1,167.1 353.4,168.8 355.8,170.7 358.1,172.7 360.4,174.9 362.7,177.1 365.0,179.4 367.3,181.8 369.7,184.3 372.0,186.9 374.3,189.4 376.6,192.1 378.9,194.7 381.3,197.3 383.6,200.0 385.9,202.6 388.2,205.2 390.5,207.8 392.9,210.3 395.2,212.8 397.5,215.2 399.8,217.6 402.1,219.9 404.4,222.1 406.8,224.2 409.1,226.3 411.4,228.2 413.7,230.1 416.0,231.9 418.4,233.6 420.7,235.2 423.0,236.7 425.3,238.1 427.6,239.5 430.0,240.7 432.3,241.8 434.6,242.9 436.9,243.9 439.2,244.8 441.5,245.6 443.9,246.3 446.2,247.0 448.5,247.6 450.8,248.1 453.1,248.6 455.5,249.0 457.8,249.3 460.1,249.5 462.4,249.7 464.7,249.9 467.1,250.0 469.4,250.0 471.7,249.9 474.0,249.8 476.3,249.7 478.6,249.5 481.0,249.2 483.3,248.8 485.6,248.4 487.9,248.0 490.2,247.4 492.6,246.8 494.9,246.2 497.2,245.4 499.5,244.6 501.8,243.8 504.2,242.8 506.5,241.8 508.8,240.7 511.1,239.5 513.4,238.3 515.7,237.0 518.1,235.6 520.4,234.1 522.7,232.6 525.0,231.0 527.3,229.4 529.7,227.7 532.0,225.9 534.3,224.1 536.6,222.2 538.9,220.3 541.3,218.4 543.6,216.4 545.9,214.5 548.2,212.5 550.5,210.6 552.8,208.6 555.2,206.7 557.5,204.8 559.8,203.0 562.1,201.3 564.4,199.6 566.8,198.0 569.1,196.5 571.4,195.0 573.7,193.8 576.0,192.6 578.4,191.6 580.7,190.7 583.0,189.9 585.3,189.4 587.6,189.0 589.9,188.7 592.3,188.6 594.6,188.8 596.9,189.0 599.2,189.5 601.5,190.2 603.9,191.0 606.2,192.0 608.5,193.1 610.8,194.4 613.1,195.9 615.5,197.5 617.8,199.3 620.1,201.2 622.4,203.2 624.7,205.3 627.0,207.5 629.4,209.8 631.7,212.1 634.0,214.5 636.3,217.0 638.6,219.4 641.0,221.9 643.3,224.4 645.6,226.9 647.9,229.3 650.2,231.7 652.6,234.1 654.9,236.4 657.2,238.6 659.5,240.7 661.8,242.8 664.1,244.8 666.5,246.6 668.8,248.4 671.1,250.1 673.4,251.6 675.7,253.1 678.1,254.4 680.4,255.7 682.7,256.8 685.0,257.8 687.3,258.7 689.7,259.5 692.0,260.3 694.3,260.9 696.6,261.5 698.9,261.9 701.2,262.3 703.6,262.7 705.9,263.0 708.2,263.2 710.5,263.4 712.8,263.6 715.2,263.7 717.5,263.8 719.8,263.9 722.1,263.9 724.4,263.9 726.8,264.0 729.1,264.0 731.4,264.0 733.7,264.0 736.0,264.0 738.3,264.0 740.7,264.0 743.0,264.0 745.3,264.0" fill="none" stroke="#6ea8fe" stroke-width="2"/>
+<polyline points="52.0,16.0 54.3,16.1 56.6,16.6 59.0,17.2 61.3,18.2 63.6,19.4 65.9,20.9 68.2,22.7 70.5,24.7 72.9,26.9 75.2,29.4 77.5,32.1 79.8,35.0 82.1,38.1 84.5,41.3 86.8,44.8 89.1,48.3 91.4,52.1 93.7,55.9 96.1,59.9 98.4,64.0 100.7,68.1 103.0,72.3 105.3,76.6 107.6,80.9 110.0,85.2 112.3,89.6 114.6,93.9 116.9,98.3 119.2,102.6 121.6,106.9 123.9,111.2 126.2,115.4 128.5,119.5 130.8,123.6 133.2,127.6 135.5,131.6 137.8,135.5 140.1,139.2 142.4,142.9 144.7,146.5 147.1,150.0 149.4,153.4 151.7,156.7 154.0,159.9 156.3,162.9 158.7,165.9 161.0,168.8 163.3,171.6 165.6,174.2 167.9,176.8 170.3,179.3 172.6,181.6 174.9,183.9 177.2,186.1 179.5,188.1 181.8,190.1 184.2,192.0 186.5,193.8 188.8,195.6 191.1,197.2 193.4,198.8 195.8,200.3 198.1,201.7 200.4,203.1 202.7,204.4 205.0,205.6 207.4,206.8 209.7,207.9 212.0,208.9 214.3,209.9 216.6,210.9 218.9,211.8 221.3,212.6 223.6,213.4 225.9,214.2 228.2,214.9 230.5,215.7 232.9,216.3 235.2,217.0 237.5,217.6 239.8,218.2 242.1,218.7 244.5,219.3 246.8,219.8 249.1,220.4 251.4,220.9 253.7,221.3 256.0,221.8 258.4,222.3 260.7,222.8 263.0,223.3 265.3,223.7 267.6,224.2 270.0,224.7 272.3,225.2 274.6,225.6 276.9,226.1 279.2,226.6 281.6,227.1 283.9,227.7 286.2,228.2 288.5,228.7 290.8,229.3 293.1,229.9 295.5,230.5 297.8,231.1 300.1,231.7 302.4,232.3 304.7,233.0 307.1,233.6 309.4,234.3 311.7,235.0 314.0,235.7 316.3,236.4 318.7,237.1 321.0,237.9 323.3,238.6 325.6,239.4 327.9,240.1 330.2,240.9 332.6,241.6 334.9,242.4 337.2,243.2 339.5,244.0 341.8,244.7 344.2,245.5 346.5,246.2 348.8,247.0 351.1,247.7 353.4,248.4 355.8,249.1 358.1,249.8 360.4,250.5 362.7,251.2 365.0,251.8 367.3,252.5 369.7,253.1 372.0,253.7 374.3,254.3 376.6,254.8 378.9,255.3 381.3,255.9 383.6,256.3 385.9,256.8 388.2,257.3 390.5,257.7 392.9,258.1 395.2,258.5 397.5,258.8 399.8,259.2 402.1,259.5 404.4,259.8 406.8,260.1 409.1,260.4 411.4,260.6 413.7,260.9 416.0,261.1 418.4,261.3 420.7,261.5 423.0,261.7 425.3,261.8 427.6,262.0 430.0,262.1 432.3,262.3 434.6,262.4 436.9,262.5 439.2,262.6 441.5,262.7 443.9,262.8 446.2,262.9 448.5,263.0 450.8,263.0 453.1,263.1 455.5,263.2 457.8,263.2 460.1,263.3 462.4,263.3 464.7,263.4 467.1,263.4 469.4,263.4 471.7,263.5 474.0,263.5 476.3,263.5 478.6,263.6 481.0,263.6 483.3,263.6 485.6,263.6 487.9,263.6 490.2,263.7 492.6,263.7 494.9,263.7 497.2,263.7 499.5,263.7 501.8,263.7 504.2,263.7 506.5,263.8 508.8,263.8 511.1,263.8 513.4,263.8 515.7,263.8 518.1,263.8 520.4,263.8 522.7,263.8 525.0,263.8 527.3,263.8 529.7,263.8 532.0,263.8 534.3,263.8 536.6,263.8 538.9,263.8 541.3,263.8 543.6,263.9 545.9,263.9 548.2,263.9 550.5,263.9 552.8,263.9 555.2,263.9 557.5,263.9 559.8,263.9 562.1,263.9 564.4,263.9 566.8,263.9 569.1,263.9 571.4,263.9 573.7,263.9 576.0,263.9 578.4,263.9 580.7,263.9 583.0,263.9 585.3,263.9 587.6,263.9 589.9,263.9 592.3,263.9 594.6,263.9 596.9,264.0 599.2,264.0 601.5,264.0 603.9,264.0 606.2,264.0 608.5,264.0 610.8,264.0 613.1,264.0 615.5,264.0 617.8,264.0 620.1,264.0 622.4,264.0 624.7,264.0 627.0,264.0 629.4,264.0 631.7,264.0 634.0,264.0 636.3,264.0 638.6,264.0 641.0,264.0 643.3,264.0 645.6,264.0 647.9,264.0 650.2,264.0 652.6,264.0 654.9,264.0 657.2,264.0 659.5,264.0 661.8,264.0 664.1,264.0 666.5,264.0 668.8,264.0 671.1,264.0 673.4,264.0 675.7,264.0 678.1,264.0 680.4,264.0 682.7,264.0 685.0,264.0 687.3,264.0 689.7,264.0 692.0,264.0 694.3,264.0 696.6,264.0 698.9,264.0 701.2,264.0 703.6,264.0 705.9,264.0 708.2,264.0 710.5,264.0 712.8,264.0 715.2,264.0 717.5,264.0 719.8,264.0 722.1,264.0 724.4,264.0 726.8,264.0 729.1,264.0 731.4,264.0 733.7,264.0 736.0,264.0 738.3,264.0 740.7,264.0 743.0,264.0 745.3,264.0" fill="none" stroke="#7ee787" stroke-width="2"/>
+<polyline points="52.0,16.0 54.3,16.1 56.6,16.2 59.0,16.5 61.3,16.9 63.6,17.4 65.9,18.1 68.2,18.8 70.5,19.6 72.9,20.6 75.2,21.7 77.5,22.8 79.8,24.1 82.1,25.4 84.5,26.9 86.8,28.4 89.1,30.1 91.4,31.8 93.7,33.6 96.1,35.5 98.4,37.4 100.7,39.5 103.0,41.6 105.3,43.7 107.6,45.9 110.0,48.2 112.3,50.5 114.6,52.9 116.9,55.3 119.2,57.7 121.6,60.2 123.9,62.7 126.2,65.2 128.5,67.8 130.8,70.4 133.2,73.0 135.5,75.6 137.8,78.2 140.1,80.8 142.4,83.4 144.7,86.0 147.1,88.6 149.4,91.2 151.7,93.8 154.0,96.4 156.3,99.0 158.7,101.5 161.0,104.1 163.3,106.6 165.6,109.1 167.9,111.5 170.3,113.9 172.6,116.3 174.9,118.7 177.2,121.0 179.5,123.4 181.8,125.6 184.2,127.9 186.5,130.1 188.8,132.2 191.1,134.4 193.4,136.5 195.8,138.5 198.1,140.6 200.4,142.5 202.7,144.5 205.0,146.4 207.4,148.3 209.7,150.1 212.0,151.9 214.3,153.7 216.6,155.4 218.9,157.1 221.3,158.8 223.6,160.4 225.9,162.0 228.2,163.6 230.5,165.1 232.9,166.7 235.2,168.1 237.5,169.6 239.8,171.0 242.1,172.4 244.5,173.8 246.8,175.1 249.1,176.4 251.4,177.7 253.7,179.0 256.0,180.3 258.4,181.5 260.7,182.7 263.0,183.9 265.3,185.1 267.6,186.3 270.0,187.4 272.3,188.5 274.6,189.6 276.9,190.7 279.2,191.8 281.6,192.9 283.9,194.0 286.2,195.0 288.5,196.1 290.8,197.1 293.1,198.1 295.5,199.1 297.8,200.1 300.1,201.1 302.4,202.1 304.7,203.1 307.1,204.1 309.4,205.1 311.7,206.0 314.0,207.0 316.3,208.0 318.7,208.9 321.0,209.9 323.3,210.8 325.6,211.7 327.9,212.7 330.2,213.6 332.6,214.5 334.9,215.4 337.2,216.3 339.5,217.2 341.8,218.1 344.2,219.0 346.5,219.9 348.8,220.8 351.1,221.6 353.4,222.5 355.8,223.4 358.1,224.2 360.4,225.1 362.7,225.9 365.0,226.7 367.3,227.6 369.7,228.4 372.0,229.2 374.3,230.0 376.6,230.7 378.9,231.5 381.3,232.3 383.6,233.0 385.9,233.8 388.2,234.5 390.5,235.2 392.9,235.9 395.2,236.6 397.5,237.3 399.8,238.0 402.1,238.6 404.4,239.3 406.8,239.9 409.1,240.6 411.4,241.2 413.7,241.8 416.0,242.4 418.4,242.9 420.7,243.5 423.0,244.1 425.3,244.6 427.6,245.1 430.0,245.6 432.3,246.1 434.6,246.6 436.9,247.1 439.2,247.6 441.5,248.0 443.9,248.5 446.2,248.9 448.5,249.3 450.8,249.7 453.1,250.1 455.5,250.5 457.8,250.9 460.1,251.3 462.4,251.6 464.7,252.0 467.1,252.3 469.4,252.7 471.7,253.0 474.0,253.3 476.3,253.6 478.6,253.9 481.0,254.2 483.3,254.5 485.6,254.7 487.9,255.0 490.2,255.3 492.6,255.5 494.9,255.8 497.2,256.0 499.5,256.3 501.8,256.5 504.2,256.7 506.5,256.9 508.8,257.1 511.1,257.4 513.4,257.6 515.7,257.8 518.1,258.0 520.4,258.1 522.7,258.3 525.0,258.5 527.3,258.7 529.7,258.9 532.0,259.1 534.3,259.2 536.6,259.4 538.9,259.6 541.3,259.7 543.6,259.9 545.9,260.0 548.2,260.2 550.5,260.3 552.8,260.5 555.2,260.6 557.5,260.8 559.8,260.9 562.1,261.0 564.4,261.2 566.8,261.3 569.1,261.4 571.4,261.5 573.7,261.7 576.0,261.8 578.4,261.9 580.7,262.0 583.0,262.1 585.3,262.2 587.6,262.3 589.9,262.4 592.3,262.5 594.6,262.6 596.9,262.7 599.2,262.8 601.5,262.8 603.9,262.9 606.2,263.0 608.5,263.1 610.8,263.1 613.1,263.2 615.5,263.3 617.8,263.3 620.1,263.4 622.4,263.4 624.7,263.5 627.0,263.5 629.4,263.6 631.7,263.6 634.0,263.6 636.3,263.7 638.6,263.7 641.0,263.7 643.3,263.8 645.6,263.8 647.9,263.8 650.2,263.8 652.6,263.9 654.9,263.9 657.2,263.9 659.5,263.9 661.8,263.9 664.1,263.9 666.5,263.9 668.8,264.0 671.1,264.0 673.4,264.0 675.7,264.0 678.1,264.0 680.4,264.0 682.7,264.0 685.0,264.0 687.3,264.0 689.7,264.0 692.0,264.0 694.3,264.0 696.6,264.0 698.9,264.0 701.2,264.0 703.6,264.0 705.9,264.0 708.2,264.0 710.5,264.0 712.8,264.0 715.2,264.0 717.5,264.0 719.8,264.0 722.1,264.0 724.4,264.0 726.8,264.0 729.1,264.0 731.4,264.0 733.7,264.0 736.0,264.0 738.3,264.0 740.7,264.0 743.0,264.0 745.3,264.0" fill="none" stroke="#c9a0ff" stroke-width="2"/>
+<text x="380" y="296" fill="#9aa3b2" font-size="11" text-anchor="middle">r  (0 = centro del splat, 1 = borde)</text>
+<text x="14" y="150" fill="#9aa3b2" font-size="11" transform="rotate(-90 14,150)" text-anchor="middle">kernel = (f/f₀)^β</text>
+</svg>
+<div class="legend" style="margin-top:10px">
+<span><i class="sw" style="background:#ff7b72"></i> a=[0,000, 0,000, <b>0,500</b>] β=1,6 — <b>a₃ puro: tres crestas</b></span>
+<span><i class="sw" style="background:#ffb454"></i> a=[0,031, 0,000, <b>0,465</b>] β=4,7 — rebote p90</span><br>
+<span><i class="sw" style="background:#6ea8fe"></i> a=[0,188, 0,095, 0,217] β=2,4 — <b>el splat mediano</b></span>
+<span><i class="sw" style="background:#7ee787"></i> a=[0,429, 0,025, 0,046] β=5,7 — casi monótono (p10)</span><br>
+<span><i class="sw" style="background:#c9a0ff"></i> init «tent» de Fourier a 3 términos — <b>sí es monótono</b>: el punto de partida es sano, el entrenamiento lo abandona</span>
+</div>
+</div>
+
+<p><b>Estadística sobre 200 000 splats del PLY de run2</b> (rebote = cuánto vuelve a subir el kernel después de haber bajado):</p>
+
+<table>
+<tr><th>Métrica</th><th>Valor</th><th>Lectura</th></tr>
+<tr><td>kernel no monótono (algún tramo creciente)</td><td><b class="lo">86,5 %</b></td><td>la norma, no la excepción</td></tr>
+<tr><td>splats con <b>≥ 2 mínimos locales</b></td><td><b class="lo">67,3 %</b></td><td>dos valles ⟹ <b>tres crestas concéntricas</b></td></tr>
+<tr><td>rebote del kernel &gt; 0,05</td><td>79,7 %</td><td>—</td></tr>
+<tr><td>rebote del kernel, mediana / p90</td><td><b>0,32</b> / <b>0,90</b></td><td>el splat típico cae y recupera 1/3 del pico</td></tr>
+<tr><td>rebote en <b>α</b> (kernel × opacidad) &gt; 0,05</td><td><b class="lo">44,2 %</b></td><td>esto es lo que de verdad se ve</td></tr>
+<tr><td>a₁ / a₂ / a₃ medios</td><td>0,175 / 0,114 / <b>0,168</b></td><td>a₃ pesa <b>casi tanto como a₁</b></td></tr>
+<tr><td>Σaₙ pegado a la frontera 0,5</td><td>23,7 %</td><td>la restricción está activa en 1 de cada 4</td></tr>
+</table>
+
+<h4>Prueba A/B de render (esto es lo que cierra el caso)</h4>
+<p>Cargué el modelo de run2 y sustituí <code>a = [a₁,a₂,a₃]</code> por <code>[Σaₙ, 0, 0]</code> — es decir, <b>el mismo f₀,
+el mismo β, la misma geometría, la misma opacidad</b>, pero con el kernel forzado a ser monótono. Mismo crop del césped:</p>
+
+<div class="grid2">
+<figure>
+  <img src="assets/run2/anillos_orig.png" alt="crop con anillos">
+  <figcaption><b>run2 tal cual</b> — dos dianas nítidas, la grande con 3 anillos.</figcaption>
+</figure>
+<figure>
+  <img src="assets/run2/anillos_mono.png" alt="crop sin anillos">
+  <figcaption><b>Mismo modelo, kernel monótono</b> — las dianas <b>desaparecen</b>. Queda un blob suave.</figcaption>
+</figure>
+</div>
+<div class="grid2" style="margin-top:12px">
+<figure>
+  <img src="assets/run2/anillos2_orig.png" alt="segundo crop con anillos">
+  <figcaption>Segunda diana (izquierda del encuadre), original.</figcaption>
+</figure>
+<figure>
+  <img src="assets/run2/anillos2_mono.png" alt="segundo crop sin anillos">
+  <figcaption>La misma, con kernel monótono.</figcaption>
+</figure>
+</div>
+
+<div class="note danger-box">
+<b>El matiz incómodo — y es importante.</b> Ese mismo A/B, medido sobre las 22 vistas de test:
+<table style="margin-top:8px">
+<tr><th>Kernel</th><th>PSNR</th><th>SSIM</th><th>LPIPS (alex)</th></tr>
+<tr><td>run2 original (con anillos)</td><td><b class="hi">20,15</b></td><td>0,5534</td><td>0,3251</td></tr>
+<tr><td>forzado monótono <code>[Σa,0,0]</code></td><td>19,24</td><td>0,5180</td><td>0,3516</td></tr>
+<tr><td>forzado a la <em>tent</em> del init</td><td>17,82</td><td>0,4856</td><td>0,3831</td></tr>
+</table>
+<p style="margin-bottom:0">Los anillos <b>no son un residuo</b>: son parte de cómo el modelo compró su PSNR. Quitarlos
+a posteriori cuesta 0,92 dB. Eso <b>no</b> significa que imponer monotonía sea mala idea — significa que
+hay que <b>re-entrenar con la restricción puesta desde la iteración 0</b>, para que las opacidades y las
+escalas se re-equilibren, en vez de mutilar un modelo ya convergido. El número honesto de «Gabor monótono»
+solo lo da un run completo.</p>
+</div>
+
+<h4>Cómo de grande es el problema, y cómo se impone monotonía</h4>
+<p>Muestreando 200 000 puntos del conjunto factible actual <code>{aₙ≥0, Σaₙ≤½}</code>:
+<b class="lo">solo el 2,89 % de ese conjunto da un kernel monótono</b>. El optimizador se mueve
+casi todo el tiempo por la región oscilante — no es que «se desvíe», es que la región buena es
+un rincón diminuto del espacio en el que se le deja vivir.</p>
+
+<p>Monotonía ⟺ <code>f′(r) ≤ 0</code> en <code>[0,1]</code> ⟺ <code>a₁·sin(πr) + 3a₂·sin(3πr) + 5a₃·sin(5πr) ≥ 0</code> ∀r.
+Es un conjunto convexo (intersección de semiespacios), así que encaja con el esquema de gradiente
+proyectado que ya tiene <code>project_a_()</code>. Probé numéricamente los dos atajos lineales obvios,
+y <b>ninguno sirve</b>:</p>
+
+<table>
+<tr><th>Condición</th><th>¿Suficiente?</th><th>Cubre del conjunto</th><th>Captura de las monótonas</th></tr>
+<tr><td><code>a₁ ≥ 3a₂ + 5a₃</code> <span class="meta">(el candidato apuntado en su día)</span></td>
+    <td><b class="lo">no</b> — 96,9 % de las que la cumplen son monótonas</td><td>1,09 %</td><td>36,6 %</td></tr>
+<tr><td><code>a₁ ≥ 9a₂ + 25a₃</code> <span class="meta">(de <code>|sin nx| ≤ n·|sin x|</code>)</span></td>
+    <td><b class="hi">sí</b> — 100 %</td><td>0,07 %</td><td><b class="lo">2,3 %</b></td></tr>
+</table>
+
+<p>Es decir: la débil <b>deja pasar dianas</b> y la fuerte <b>tira el 97,7 % de los kernels monótonos
+válidos</b> — incluido el propio init de Fourier, que <b>sí es monótono</b> pero da
+<code>a₁ − 9a₂ − 25a₃ = −0,434</code>. Con la fuerte habría que reinicializar y aun así el espacio
+de búsqueda quedaría casi vacío: el experimento dejaría de medir «aprender la forma».</p>
+
+<div class="note ok-box">
+<b>La vía correcta es la proyección discretizada.</b> Evaluar <code>f′(r) ≤ 0</code> en ~64 valores
+de <code>r</code> da 64 semiespacios; añadirlos a la caja y al simplex que ya maneja
+<code>project_a_()</code> y resolver con unas pocas iteraciones de proyección alternada (Dykstra).
+En <b>3 dimensiones</b> esto es trivialmente barato, y es exacto salvo por la discretización.
+Como init, <code>a = [½, 0, 0]</code> (= <code>f = ½(1+cos πr)</code>: suave, monótono, derivada nula
+en el centro) es más limpio que el Fourier truncado y ya está en la frontera <code>Σa = ½</code>.
+</div>
+
+<h3 id="s22">2.2 · Splats gigantes translúcidos — <span class="pill p1">causa: dos prunes de tamaño muertos</span></h3>
+
+<div class="grid2">
+<figure>
+  <img src="assets/run2/blob_render.png" alt="blob gigante">
+  <figcaption>test 00011, esquina superior derecha · <b>render</b>: un splat enorme flotando sobre los árboles.</figcaption>
+</figure>
+<figure>
+  <img src="assets/run2/blob_gt.png" alt="gt sin blob">
+  <figcaption>El mismo crop en el <b>GT</b>: ahí no hay nada.</figcaption>
+</figure>
+</div>
+
+<p>En el PLY de run2: <b>2,05 % de los splats</b> (≈ 140 000) tienen escala &gt; 0,15 (3,1 % del extent),
+con <b>opacidad media 0,773</b>. No son fantasmas tenues; son discos grandes y bastante opacos.</p>
+
+<p>El código <em>tiene</em> dos defensas contra esto, en <code class="fileref">scene/gaussian_model.py:816-819</code>:</p>
+
+<pre><code>if max_screen_size:
+    big_points_vs = self.max_radii2D &gt; max_screen_size            # (A) radio en pantalla
+    big_points_ws = self.get_scaling.max(dim=1).values &gt; 0.1 * extent   # (B) tamaño en mundo
+    prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)</code></pre>
+
+<p>Y las dos están muertas. En el log de run2, <b>las 144 llamadas</b> a <code>densify_and_prune</code>
+imprimen <code>screen=0, world=0</code>. Ni una sola excepción:</p>
+
+<pre><code>[DENSIFY iter=14900] +clone=105135 +split=5590 | PRUNE total=9056
+   [sostenido(&gt;25)=9056 [low_now=125650 cnt_max=26], <b>screen=0</b>, <b>world=0</b>] | N:6838756-&gt;6829700</code></pre>
+
+<h4>(A) <code>big_points_vs</code> — lo mata el reset de <code>max_radii2D</code></h4>
+<p>El orden dentro de <code>densify_and_prune</code> es:</p>
+<ol>
+<li><code>densify_and_clone(...)</code> → llama a <code>densification_postfix</code></li>
+<li><code>densify_and_split(...)</code> → llama a <code>densification_postfix</code></li>
+<li>… y <b>después</b> se lee <code>self.max_radii2D &gt; 20</code></li>
+</ol>
+<p>Pero <code class="fileref">gaussian_model.py:629</code>, dentro de <code>densification_postfix</code>, dice:</p>
+<pre><code>self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")</code></pre>
+<p>Los pasos 1 y 2 <b>ponen el tensor a ceros</b> justo antes de que el paso 3 lo consulte. <code>0 &gt; 20</code> es
+siempre falso. El acumulador que se rellena fielmente en cada iteración
+(<code class="fileref">train.py:214-215</code>) se tira a la basura sin usarlo nunca.
+<span class="meta">(Este defecto viene heredado del 3DGS/2DGS original — pero allí la defensa (B) sí funciona y tapa el agujero. Aquí no.)</span></p>
+
+<h4>(B) <code>big_points_ws</code> — lo mata el clamp de escala</h4>
+<p>Este es el interesante, y es <b>propio de este repo</b>. <code>get_scaling</code>
+(<code class="fileref">gaussian_model.py:131-141</code>) devuelve la escala <b>ya recortada</b>:</p>
+<pre><code>s = self.scaling_activation(self._scaling)
+if self.spatial_lr_scale &gt; 0:
+    s = s.clamp(max=self.scale_clamp_factor * self.spatial_lr_scale)   # = 0.1 * extent
+return s</code></pre>
+<p>Y el prune pregunta <code>get_scaling.max() &gt; 0.1 * extent</code>. Con
+<code>scale_clamp_factor = 0.1</code>, el máximo que <code>get_scaling</code> puede devolver es
+<b>exactamente</b> <code>0.1·extent</code>, y la comparación es <b>estricta</b>.</p>
+<div class="eq" style="color:var(--danger)">clamp(x, max=C) &gt; C  &nbsp;⟹&nbsp;  <b>False, siempre</b></div>
+<p>En el 2DGS original <code>get_scaling</code> no está clampada, así que la escala cruda podía superar
+<code>0,1·extent</code> y el prune disparaba. Al añadir el techo, el umbral del prune quedó
+<b>pegado al techo</b> y la condición pasó a ser matemáticamente inalcanzable. El resultado es que
+<b>los splats gigantes son ahora un punto fijo del sistema</b>: crecen hasta el techo, ahí se quedan
+—perfectamente legales— y nadie los borra. Los 140 000 blobs del césped son eso.</p>
+
+<div class="note warn-box">
+Los dos arreglos son de una línea cada uno:
+<ul style="margin-bottom:0">
+<li>(A) guardar <code>max_radii2D</code> en una variable local <b>antes</b> de clone/split, o mover el cálculo
+de <code>big_points_vs</code> al principio de <code>densify_and_prune</code>.</li>
+<li>(B) comparar contra un umbral <b>estrictamente menor que el techo</b> (p. ej. <code>0.7 * scale_clamp_factor * extent</code>),
+o usar la escala <b>cruda</b> <code>scaling_activation(self._scaling)</code> en vez de <code>get_scaling</code>.
+Ojo: desde el fix B del 2026-07-26 la escala cruda también está clampada, así que <b>hay que bajar el umbral</b> — no sirve leer el crudo.</li>
+</ul>
+</div>
+
+<h3 id="s23">2.3 · Zonas negras — <span class="pill p2">causa: falta de geometría + un guard que corta el gradiente</span></h3>
+
+<div class="grid2">
+<figure><img src="assets/run2/negro_render.png" alt="franja negra render"><figcaption>test 00000, franja inferior · <b>render</b>.</figcaption></figure>
+<figure><img src="assets/run2/negro_gt.png" alt="franja gt"><figcaption>El mismo recorte del <b>GT</b>: césped.</figcaption></figure>
+</div>
+
+<p>Medido sobre las 22 vistas de test (píxel «casi negro» = máx. canal &lt; 0,02):</p>
+<table>
+<tr><th></th><th>render</th><th>GT</th></tr>
+<tr><td>global</td><td><b class="lo">0,765 %</b></td><td>0,166 %</td></tr>
+<tr><td>peor vista (00000)</td><td><b class="lo">2,66 %</b></td><td>0,09 %</td></tr>
+</table>
+<p>El mapa 8×8 de la peor vista concentra <b>todo</b> en la última banda horizontal
+(18,5 / 34,0 / <b>83,4</b> / 28,3 %): es el <b>suelo cercano a la cámara</b>, la zona que la SfM apenas
+reconstruye porque aparece en pocas vistas y sin textura. Es el fallo clásico de 2DGS con fondo negro.
+Dos ingredientes lo sostienen:</p>
+
+<ol>
+<li><b>Fondo negro.</b> <code>bg_color = [0,0,0]</code>; donde no hay splats, <code>C + T·bg</code> = 0. No hay
+ningún modelo del fondo lejano, así que «sin geometría» = «negro».</li>
+<li><b>El guard <code>pixel_invalid</code> corta el gradiente en esos píxeles.</b>
+<code class="fileref">forward.cu:533</code> marca inválido todo píxel con <code>alpha_accum &lt; 1e-4</code>,
+y <code class="fileref">backward.cu:204,260</code> hace <code>done = true</code> para él, así que <b>ningún</b>
+splat recibe gradiente desde ahí. Un hueco negro no puede generar la señal que empujaría a los splats
+vecinos a taparlo: <b>el hueco se autoperpetúa</b>. Este guard no está en el 2DGS original.
+<span class="meta">(Honestamente: el gradiente que se pierde es pequeño en magnitud —el píxel está casi vacío— así que
+por sí solo no explica la franja; es un factor de segundo orden que <em>impide la recuperación</em> más que
+causar el hueco.)</span></li>
+</ol>
+
+<p>El resto del recuadro «no debería estar» de esta sección es la propia densificación clásica: los splats
+solo se clonan/parten donde ya hay algo, y en esa franja no hay nada de dónde partir. El camino MCMC
+(<code>relocate_gs</code> / <code>add_new_gs</code> sesgados por error) sí sabría rellenarla, y por eso
+run36 (MCMC) va mejor en fondo.</p>
+
+<h2 id="s3">3 · Qué hace el código, paso a paso (Python)</h2>
+
+<p>Estructura general del repositorio: es 2DGS (Huang et al.) con el kernel gaussiano
+<b>sustituido</b> por el kernel Beta/Gabor de Deformable Beta Splatting, más dos caminos de densificación
+(clásico y MCMC) y una capa de instrumentación bastante densa.</p>
+
+<pre><code>train.py                      bucle de entrenamiento, densificación, proyecciones, logging
+render.py                     exporta test/train/trayectoria + malla
+metrics.py                    PSNR/SSIM/LPIPS "honestos" sobre las imágenes ya exportadas
+scene/__init__.py             clase Scene: lee COLMAP, calcula extent, crea o carga el modelo
+scene/gaussian_model.py       TODOS los parámetros, activaciones, densificación, save/load PLY
+gaussian_renderer/__init__.py puente Python -> rasterizer; postproceso de normales y profundidad
+utils/                        losses, SH, cámaras, depth->normal, mallado
+submodules/diff-surfel-rasterization/   el rasterizer CUDA (aquí está el kernel)
+submodules/simple-knn/        distCUDA2, usado solo para la escala inicial</code></pre>
+
+<h3 id="s31">3.1 · <code>train.py</code> — el bucle</h3>
+
+<p>Una iteración, en orden:</p>
+
+<table>
+<tr><th>Línea</th><th>Qué pasa</th><th>Comentario</th></tr>
+<tr><td>107</td><td><code>update_learning_rate</code></td><td>solo el LR de <code>xyz</code> (schedule exponencial). Todos los demás son fijos.</td></tr>
+<tr><td>110</td><td><code>oneupSHdegree()</code> cada 1000 iters</td><td>sube el grado de armónicos esféricos activo, 0→3.</td></tr>
+<tr><td>116</td><td>elige una cámara de train al azar (sin reemplazo hasta agotar)</td><td></td></tr>
+<tr><td>118</td><td><code>render(...)</code></td><td>→ §3.3. Devuelve imagen + alpha + normal + profundidad + distorsión.</td></tr>
+<tr><td>134-135</td><td><code>L = (1−λ)·L1 + λ·(1−SSIM)</code></td><td>pérdida fotométrica estándar 3DGS.</td></tr>
+<tr><td>138-149</td><td>regularizadores 2DGS: <b>normal</b> (a partir de 7000) y <b>distorsión</b> (a partir de 3000)</td><td>en run2, <code>λ_normal=0.05</code>, <code>λ_dist=0</code> → la distorsión está <b>apagada</b>.</td></tr>
+<tr><td>156-158</td><td><code>opacity_reg</code> y <code>scale_reg</code> L1</td><td>en run2 ambos valen <b>0</b>. Además se aplican sobre <code>get_scaling</code>, que ya viene clampada → no podrían apretar a los topados aunque estuvieran activos.</td></tr>
+<tr><td>160</td><td><code>backward()</code></td><td></td></tr>
+<tr><td>209-215</td><td>acumula <code>xyz_gradient_accum</code> y <code>max_radii2D</code></td><td><b>este <code>max_radii2D</code> nunca se usa</b> → §2.2 (A).</td></tr>
+<tr><td>222-238</td><td><b>rama CLÁSICA</b>: cada 100 iters <code>densify_and_prune</code>; <code>reset_opacity</code> cada 3000</td><td>la que usó run2.</td></tr>
+<tr><td>244-352</td><td><b>rama MCMC</b>: <code>relocate_gs</code> + <code>add_new_gs</code> + ruido posicional</td><td>inactiva en run2.</td></tr>
+<tr><td>364-367</td><td><code>nan_to_num_</code> sobre todos los gradientes</td><td>red de seguridad; enmascara explosiones en vez de avisar.</td></tr>
+<tr><td>383</td><td><code>optimizer.step()</code></td><td>Adam, <code>eps=1e-15</code>.</td></tr>
+<tr><td>405</td><td><code>_beta.data.clamp_(min=−4, max=2)</code></td><td>→ β ∈ [0,073 , 29,56].</td></tr>
+<tr><td>427-429</td><td><code>_scaling.data.clamp_(max=log(techo))</code></td><td><b>fix B</b>: el clamp del parámetro. Verificado activo.</td></tr>
+<tr><td>457</td><td><code>project_a_()</code></td><td><b>gradiente proyectado</b>: proyección euclídea exacta sobre <code>{aₙ≥0, Σaₙ≤½}</code>.</td></tr>
+</table>
+
+<div class="note warn-box">
+<b>Inconsistencia documental.</b> Los comentarios de <code class="fileref">train.py:399-403</code> y de
+<code class="fileref">gaussian_model.py:189-190</code> dicen que el techo de <code>_beta</code> se subió a
+<b>2,7081</b> (β≈60) en el run73. El <b>código</b> de los dos sitios dice <code>max=2.0</code> (β≈29,56).
+No afecta a run2 (β máximo medido = 24,39, no toca el techo) pero <b>el comentario miente</b> y el próximo
+que lo lea creerá que el techo es 60. Los dos clamps sí están sincronizados entre sí, que es lo importante.
+</div>
+
+<h3 id="s32">3.2 · <code>scene/gaussian_model.py</code> — los parámetros</h3>
+
+<p>Cada splat lleva estos parámetros optimizables (LR entre paréntesis, de <code>training_setup</code>):</p>
+
+<table>
+<tr><th>Parámetro</th><th>Forma</th><th>Activación → magnitud física</th><th>Restricción</th></tr>
+<tr><td><code>_xyz</code></td><td>(N,3)</td><td>identidad</td><td>—</td></tr>
+<tr><td><code>_features_dc / _rest</code></td><td>(N,1,3) / (N,15,3)</td><td>SH grado 3 → RGB</td><td>clamp ≥ 0 al evaluar</td></tr>
+<tr><td><code>_opacity</code></td><td>(N,1)</td><td><code>sigmoid</code> → (0,1)</td><td>—</td></tr>
+<tr><td><code>_scaling</code></td><td>(N,<b>2</b>)</td><td><code>exp</code> → escala del <b>disco</b> (2D, no 3D)</td><td><b>clamp ≤ 0,1·extent</b> en activación <b>y</b> en el parámetro</td></tr>
+<tr><td><code>_rotation</code></td><td>(N,4)</td><td>cuaternión normalizado</td><td>—</td></tr>
+<tr><td><code>_beta</code></td><td>(N,1)</td><td><code>4·exp(clamp(b,−4,2))</code> → β ∈ [0,073, 29,56]</td><td>clamp en parámetro y en activación</td></tr>
+<tr><td><b><code>_a</code></b></td><td>(N,<b>3</b>)</td><td><code>clamp(a, min=0)</code> → coeficientes Gabor</td><td><b><code>aₙ≥0</code> y <code>Σaₙ≤½</code></b> vía <code>project_a_()</code></td></tr>
+<tr><td><code>_sb_params</code></td><td>(N,M,6)</td><td>Spherical Betas</td><td>desactivado en run2 (<code>sb_number=0</code>)</td></tr>
+</table>
+
+<h4>El bit que importa: <code>get_a</code> y <code>project_a_</code></h4>
+<pre><code>@property
+def get_a(self):
+    return self._a.clamp(min=0.0).contiguous()      # <b>solo</b> la caja, no el tope de la suma
+
+@torch.no_grad()
+def project_a_(self):                                # proyección EXACTA sobre {a>=0, sum(a)&lt;=1/2}
+    a.clamp_(min=0.0)                                # (1) caja
+    over = a.sum(dim=1) &gt; S + 1e-6
+    if n_over: ...                                   # (2) simplex de Duchi et al. 2008 (sort + umbral)</code></pre>
+<p>El diseño es correcto y está bien argumentado: <code>project_a_</code> escribe sobre <b>el parámetro</b>,
+así que el PLY ya sale factible y <code>get_a</code> solo necesita re-imponer la caja para las rutas que no
+pasan por el bucle de train (<code>render.py</code>, <code>metrics.py</code>, el visor).
+<code>load_ply</code> vuelve a proyectar por si el PLY viene de un run antiguo. <b>Verificado en el PLY de run2:
+0 violaciones de signo, <code>Σa_max = 0,5000011</code></b> (el epsilon del roundtrip float32 que
+<code>_A_SUM_TOL</code> ya contempla). Nada roto aquí — el problema es que <b>al conjunto factible le falta
+la restricción de monotonía</b> (§2.1), no que la proyección esté mal implementada.</p>
+
+<h4>Herencia de <code>a</code> en la densificación</h4>
+<p>Las cuatro rutas de creación de splats (<code>densify_and_clone</code>, <code>densify_and_split</code>,
+<code>relocate_gs</code>, <code>add_new_gs</code>) heredan <code>a</code> <b>tal cual</b>, igual que <code>β</code>.
+Es la decisión correcta —<code>a</code> y <code>β</code> son parámetros de <b>forma</b>, adimensionales, no
+magnitudes extensivas como la opacidad o la escala— y evita el «trinquete» que sí ocurrió con β en el run67.
+<b>Efecto colateral:</b> un splat con <code>a₃</code> grande genera hijos con <code>a₃</code> grande, y el clon/split
+<b>propaga las dianas</b> por toda la nube.</p>
+
+<h3 id="s33">3.3 · <code>gaussian_renderer/__init__.py</code> — el puente</h3>
+
+<p>Prepara los tensores, llama al rasterizer y postprocesa. Tres cosas que merecen mirada:</p>
+
+<pre><code>85:  pipe.convert_SHs_python = False        # <b>pisa la opción del usuario, sin avisar</b>
+138: valid = radii &gt; 1e-4                   # radii es int -> equivale a "&gt; 0". OK, pero confuso
+141: radius_clip = 50.0
+142: radii = torch.clamp(radii, max=radius_clip)   # <b>trunca el radio DESPUÉS de rasterizar</b></code></pre>
+
+<ul>
+<li><b>Línea 85</b>: <code>convert_SHs_python</code> se fuerza a <code>False</code> en cada llamada. Si alguien
+pasa <code>--convert_SHs_python</code> no pasa nada y no hay mensaje. Inofensivo hoy (la rama de
+Spherical Betas se activa por <code>sb_number&gt;0</code>, no por este flag), pero es una trampa.</li>
+<li><b>Líneas 141-142</b>: este clamp <b>no afecta al render</b> — la imagen ya está calculada. Lo único que toca
+es el <code>radii</code> que sale hacia <code>max_radii2D</code>… que está muerto (§2.2 A). O sea, hoy es un
+<b>no-op puro</b> que además <b>enmascararía</b> el prune por radio si algún día se arregla (A): un splat de
+300 px se reportaría como 50. <b>Si arreglas (A), quita este clamp.</b></li>
+</ul>
+
+<p>El postproceso (líneas 154-203) es 2DGS estándar: alpha, normal transformada a mundo y normalizada,
+profundidad media/esperada, mapa de distorsión, y la pseudo-normal derivada de la profundidad para
+la <code>normal_loss</code>. Nada anómalo.</p>
+
+<h3 id="s34">3.4 · <code>scene/__init__.py</code> y <code>load_ply</code></h3>
+
+<p>Aquí vive el <b>fix A</b> (<code class="fileref">scene/__init__.py:93</code>):</p>
+<pre><code>self.gaussians.load_ply(...)
+self.gaussians.spatial_lr_scale = self.cameras_extent   # <b>fix A</b></code></pre>
+<p>Sin esta línea, <code>spatial_lr_scale</code> se quedaba en 0 al cargar un modelo, el guard
+<code>if self.spatial_lr_scale &gt; 0</code> de <code>get_scaling</code> <b>desactivaba el techo</b> y
+<code>render.py</code>/<code>metrics.py</code>/el visor pintaban la escala <b>cruda</b> del PLY. Medido: +0,042 dB
+de sesgo en run1. Correcto y verificado: el render de run2 imprime el mismo techo que el entrenamiento.</p>
+
+<p><code>load_ply</code> además tiene fallbacks bien hechos para PLYs antiguos (sin <code>beta</code>, sin
+<code>a_*</code>, sin <code>sb_params_*</code>) y re-proyecta <code>a</code> avisando solo si la violación es
+<b>de magnitud</b> (&gt;1e-3), no si hay filas con el epsilon de float32 — detalle fino y correcto.</p>
+
+<h2 id="s4">4 · El rasterizer CUDA, línea a línea</h2>
+
+<p class="meta"><code>submodules/diff-surfel-rasterization/</code> — es el 2DGS oficial con el kernel sustituido
+y dos toggles de diagnóstico añadidos.</p>
+
+<h3 id="s41">4.1 · Arquitectura y buffers</h3>
+
+<p>El camino completo de una llamada:</p>
+<pre><code>gaussian_renderer.render()
+  └─ GaussianRasterizer.forward()                 diff_surfel_rasterization/__init__.py
+      └─ _RasterizeGaussians (torch.autograd.Function)
+          ├─ forward:  _C.rasterize_gaussians       rasterize_points.cu
+          │             └─ CudaRasterizer::Rasterizer::forward   rasterizer_impl.cu
+          │                 ├─ FORWARD::preprocess  → preprocessCUDA   forward.cu
+          │                 ├─ cub::InclusiveSum(tiles_touched) → offsets
+          │                 ├─ duplicateWithKeys   → (tile|depth) → gaussian_id
+          │                 ├─ cub::SortPairs      → orden por tile y luego por profundidad
+          │                 ├─ identifyTileRanges  → rango [inicio,fin) de cada tile
+          │                 └─ FORWARD::render      → renderCUDA      forward.cu
+          └─ backward: _C.rasterize_gaussians_backward
+                        └─ BACKWARD::render + BACKWARD::preprocess   backward.cu</code></pre>
+
+<p>Los buffers viven en tres «chunks» redimensionables (<code>GeometryState</code>, <code>BinningState</code>,
+<code>ImageState</code>). En <code>GeometryState</code> se añadieron <code>beta</code> (P) y <code>a</code> (P×3)
+respecto al 2DGS original. La clave de ordenación es de 64 bits: <b>32 altos = índice de tile</b>,
+<b>32 bajos = el bit-pattern del float de profundidad</b> — truco estándar que funciona porque las
+profundidades son positivas.</p>
+
+<p>Tiles de <code>16×16</code> (<code>config.h</code>), un bloque CUDA por tile, un hilo por píxel.</p>
+
+<h3 id="s42">4.2 · <code>preprocessCUDA</code> (forward.cu:156-308)</h3>
+
+<p>Un hilo por splat. Decide si el splat existe en esta vista, dónde y cuánto ocupa.</p>
+
+<table>
+<tr><th>Línea</th><th>Qué hace</th></tr>
+<tr><td>191-195</td><td>copia <code>beta</code> y los tres <code>a</code> al buffer de geometría (paso a paso, para que <code>renderCUDA</code> los tenga contiguos).</td></tr>
+<tr><td>204</td><td><code>in_frustum</code>: culling near-plane.</td></tr>
+<tr><td>212</td><td><b><code>compute_transmat</code></b>: construye <code>T</code>, la homografía <b>plano tangente del surfel → plano imagen</b>. Es la esencia de 2DGS: no se proyecta una covarianza 3D, se proyecta un <b>disco</b>. <code>L = R·S</code> con <code>S</code> de 2 escalas, y <code>T = transpose(splat2world)·world2ndc·ndc2pix</code>.</td></tr>
+<tr><td>227-232</td><td><code>DUAL_VISIABLE</code>: voltea la normal hacia la cámara. El surfel es visible por las dos caras.</td></tr>
+<tr><td>238</td><td><b><code>float cutoff = 3.0f;</code></b> ← <b>ver aviso abajo</b></td></tr>
+<tr><td>246</td><td><code>compute_aabb</code>: caja envolvente del cónico proyectado a <code>cutoff</code> sigmas.</td></tr>
+<tr><td>268-276</td><td><b><code>CULL_SUBPIXEL</code></b>: si la huella geométrica es menor que <code>cutoff·FilterSize</code> (σ &lt; 0,707 px) el splat <b>se descarta</b> en lugar de inflarse al suelo del low-pass. Es un toggle de diagnóstico del velo (2026-07-05) y está <b>ON</b> — el banner del log lo confirma en train <b>y</b> en render, así que las dos rutas son consistentes.</td></tr>
+<tr><td>287-288</td><td>guard contra radios no finitos o mayores que la imagen. Evita el desbordamiento de <code>tiles_touched</code> que producía los OOM de «1050585 GiB».</td></tr>
+<tr><td>307</td><td><code>tiles_touched</code> = área en tiles del AABB.</td></tr>
+</table>
+
+<div class="note danger-box">
+<b><code>cutoff = 3.0</code> es el valor del kernel gaussiano y ya no corresponde al kernel que se usa.</b><br>
+Con una gaussiana, <code>exp(−ρ/2)</code> es despreciable más allá de 3σ, de ahí el 3. Pero el kernel
+Beta/Gabor de este repo tiene <b>soporte compacto</b>: <code class="fileref">forward.cu:451</code> hace
+<code>if (r2 &gt;= 1.0f) continue;</code>, o sea que <b>no pinta absolutamente nada más allá de 1σ</b>.
+Consecuencias, todas medibles:
+<ul style="margin-bottom:0">
+<li>el <code>radius</code> que se calcula es <b>3× el radio real</b> ⟹ el AABB cubre <b>9× el área necesaria</b>
+⟹ ~9× más pares (tile, splat) que ordenar y recorrer. Es coste puro: esos píxeles hacen el
+<code>continue</code> de la línea 451.</li>
+<li><code>radii</code> sale inflado ×3 hacia Python, donde alimenta <code>max_radii2D</code> y el
+<code>radius_clip=50</code>. Hoy da igual (los dos están muertos), pero <b>si arreglas el prune por radio,
+el umbral de 20 px pasa a ser un umbral efectivo de ~6,7 px</b> y podarás splats perfectamente sanos.</li>
+<li>el cull sub-pixel usa <code>cutoff·FilterSize</code> como umbral, así que también hereda el factor 3.</li>
+</ul>
+Poner <code>cutoff = 1.0f</code> debería dar renders <b>idénticos</b> y bastante más rápidos. Merece un A/B
+(exige recompilar y borrar <code>build/</code>).
+</div>
+
+<h3 id="s43">4.3 · <code>renderCUDA</code> forward (forward.cu:313-586) — aquí vive el kernel</h3>
+
+<p>Un bloque por tile, un hilo por píxel, y se procesan los splats del tile <b>de delante hacia atrás</b>
+en lotes de 256 cargados a memoria compartida (<code>collected_*</code>). El núcleo del bucle:</p>
+
+<pre><code>// 1. intersección rayo-plano (2DGS, Eqs. 8-10)
+float3 k = pix.x * Tw - Tu;
+float3 l = pix.y * Tw - Tv;
+float3 p = cross(k, l);                     // la intersección de dos planos es una recta
+float2 s = {p.x / p.z, p.y / p.z};          // división perspectiva -> (u,v) en el disco
+float rho3d = s.x*s.x + s.y*s.y;            // distancia² al centro EN EL PLANO DEL SURFEL
+
+// 2. low-pass de pantalla
+float2 d    = {xy.x - pixf.x, xy.y - pixf.y};
+float rho2d = FilterInvSquare * (d.x*d.x + d.y*d.y);   // FilterInvSquare = 2
+float rho   = min(rho3d, rho2d);            // el disco no puede ser más fino que ~0,7 px
+
+// 3. profundidad y guard
+float depth = (s.x*Tw.x + s.y*Tw.y) + Tw.z;
+if (depth &lt; near_n) continue;               // near_n = 0.2
+
+// 4. <b>EL KERNEL GABOR</b>
+float r2 = rho;
+if (r2 &gt;= 1.0f) continue;                   // soporte COMPACTO: fuera de r=1 no hay nada
+float r  = sqrtf(r2);
+float f  = 0.5f + a1*cosf(PI*r) + a2*cosf(3*PI*r) + a3*cosf(5*PI*r);
+float f0 = 0.5f + a1 + a2 + a3;             // f(0), porque cos(0)=1
+float g  = fmaxf(fmaxf(f,1e-6f) / fmaxf(f0,1e-6f), 1e-6f);
+float kernel = powf(g, beta_j);
+
+// 5. blending front-to-back
+float alpha = min(0.99f, opa * kernel);
+if (alpha &lt; 1.0f/255.0f) continue;
+float test_T = T * (1 - alpha);
+if (test_T &lt; 0.0001f) { done = true; continue; }   // saturación: el píxel ya está opaco
+float w = alpha * T;
+C[ch] += features[...] * w;   T = test_T;</code></pre>
+
+<p><b>Comentarios sobre esta parte:</b></p>
+<ul>
+<li>El kernel está <b>correctamente implementado</b> y es consistente con <code>model.tex</code>. Los pisos
+<code>f_safe</code> / <code>f0_safe</code> son código muerto bajo las restricciones actuales
+(<code>f₀ ≥ ½</code> siempre), tal como documentan los comentarios. Nada que arreglar aquí.</li>
+<li><b>El low-pass está prácticamente desactivado.</b> <code>rho2d &lt; 1 ⟺ |d| &lt; 1/√2 = 0,707 px</code>.
+En el 2DGS original el corte era <code>ρ &lt; 9</code>, así que el low-pass cubría un disco de <b>2,12 px</b>.
+Al truncar en <code>ρ &lt; 1</code>, el «suelo» anti-aliasing se ha encogido a <b>sub-píxel</b>. Combinado con
+<code>CULL_SUBPIXEL=ON</code> es coherente (los sub-pixel se matan, no se rescatan), pero conviene ser
+consciente: <b>no hay filtro anti-aliasing efectivo</b> en este build.</li>
+<li>El comentario de <code class="fileref">forward.cu:477</code> dice <em>«NO se topa a 1: lóbulos &gt; centro OK
+(Gabor)»</em>. Bajo <code>aₙ≥0</code> eso es imposible (<code>g≤1</code> garantizado), así que el comentario
+describe un régimen que ya no existe. Es el <b>rastro documental</b> de que la restricción se pensó para
+matar los lóbulos <em>por encima</em> del centro… y se olvidó que los lóbulos <em>por debajo</em>
+siguen siendo anillos. Ver §2.1.</li>
+</ul>
+
+<h4>El guard de píxel inválido (líneas 530-585)</h4>
+<pre><code>bool pixel_invalid = (alpha_accum &lt; 1e-4f);
+if (pixel_invalid) {  // escribe fondo, T=1, alpha=0, normal=0, profundidad=0
+    out_color[...] = bg_color[ch];  ...
+}
+if (inside &amp;&amp; !pixel_invalid) { /* escritura normal */ }</code></pre>
+<p>No está en el 2DGS original. En forward es casi inocuo (con <code>α&lt;1e-4</code> el resultado ya era
+prácticamente el fondo). Lo relevante es su <b>gemelo en el backward</b>: §2.3 punto 2.</p>
+
+<h3 id="s44">4.4 · <code>renderCUDA</code> backward (backward.cu:143-576)</h3>
+
+<p>Recorre los mismos splats <b>de atrás hacia delante</b>, reconstruyendo <code>T</code> mediante
+<code>T = T / (1−α)</code> desde <code>T_final</code>. Recalcula el kernel exactamente igual que el forward
+(bien: cualquier divergencia forward↔backward envenena los gradientes) y reparte:</p>
+
+<table>
+<tr><th>Destino</th><th>Fórmula</th><th>Estado</th></tr>
+<tr><td><code>dL_dcolors</code></td><td><code>α·T·dL_dpixel</code></td><td>estándar</td></tr>
+<tr><td><code>dL_dbeta</code></td><td><code>dL_dα · α · ln(g)</code>, clampado a ±1e-3</td><td>solo si <code>β ≥ 0,1</code></td></tr>
+<tr><td><code>dL_da[n]</code></td><td><code>dL_dα · opa·β·g^(β−1)/f₀ · (cₙ − g)</code>, clampado a ±50</td><td>forma <b>sin singularidad</b> (2026-07-24) — correcta</td></tr>
+<tr><td><code>dL_dtransMat</code> / <code>dL_dmean2D</code></td><td>vía <code>dL_d_rho = dL_dα · α·β·f′(r)/(2r·f)</code></td><td>ver aviso</td></tr>
+<tr><td><code>dL_dopacity</code></td><td><code>G · dL_dα</code> con <code>G = kernel</code> sin clampar</td><td>ver aviso</td></tr>
+</table>
+
+<p>El gradiente de <code>a</code> está <b>bien pensado</b>: la reagrupación de
+<code>α·β·(cₙ/f − 1/f₀)</code> a <code>opa·β·g^(β−1)·(cₙ−g)/f₀</code> elimina la división por <code>f</code>,
+que era el sesgo del run1. El piso sobre <code>g</code> solo se aplica cuando <code>β &lt; 1</code>, que es
+el único caso realmente singular. Y el clamp de <code>α</code> a 0,99 se replica en el backward
+(<code class="fileref">backward.cu:351</code>), como debe ser.</p>
+
+<div class="note warn-box">
+<b>Dos asimetrías menores que quedan:</b>
+<ol style="margin-bottom:0">
+<li><b><code>d_alpha_d_rho</code> sí divide por <code>f_safe</code></b>
+(<code class="fileref">backward.cu:498</code>). El propio comentario reconoce que el fix definitivo sería
+reagrupar como se hizo con <code>grad_a</code>, y que no se aplicó por no recompilar. Bajo las restricciones
+actuales <code>f ≥ 0</code>, así que el caso masivo del run1 está cerrado; queda la cola con
+<code>β &lt; 0,5</code>. En run2, <b>β&lt;1 es solo el 0,32 % de los splats</b> → riesgo real bajo, pero
+sigue siendo la única división por <code>f</code> que queda en el código.</li>
+<li><b><code>dL_dopacity</code> usa <code>G</code> sin aplicar el <code>min(0,99, ·)</code>.</b> Cuando
+<code>opa·kernel &gt; 0,99</code> el forward es constante y la derivada verdadera respecto a la opacidad es
+<b>0</b>, no <code>G</code>. El comentario de <code class="fileref">backward.cu:349-350</code> afirma que «el min
+ya reproduce derivada 0», pero eso vale para <code>α</code>, no para esta línea. Afecta solo a splats
+saturados; con opacidad media 0,42 no es masivo, pero <b>los splats gigantes del §2.2 tienen opacidad 0,77</b>
+y son justamente los que saturan.</li>
+</ol>
+</div>
+
+<p>El <code>freeze_low_beta</code> (línea 431) es un toggle A/B histórico; con el default <code>False</code>
+solo se salta el gradiente de β para <code>β&lt;0,1</code>, dejando geometría y opacidad vivas — que es lo
+correcto y lo que quería el FIX #2 del run9.</p>
+
+<h3 id="s45">4.5 · Constantes de <code>auxiliary.h</code></h3>
+<table>
+<tr><th>Constante</th><th>Valor</th><th>Efecto</th></tr>
+<tr><td><code>near_n</code> / <code>far_n</code></td><td>0,2 / 100,0</td><td>plano cercano del guard de profundidad y normalización del mapa de distorsión.</td></tr>
+<tr><td><code>FilterSize</code></td><td>0,707106</td><td>σ del low-pass de pantalla.</td></tr>
+<tr><td><code>FilterInvSquare</code></td><td>2,0</td><td><code>1/FilterSize²</code>.</td></tr>
+<tr><td><code>DUAL_VISIABLE</code></td><td>1</td><td>surfel visible por ambas caras.</td></tr>
+<tr><td><code>TIGHTBBOX</code></td><td>0</td><td>si fuese 1, el cutoff dependería de la opacidad. Desactivado.</td></tr>
+<tr><td><code>DETACH_WEIGHT</code></td><td>0</td><td>el peso sí propaga gradiente en la pérdida de distorsión. Irrelevante en run2 (<code>λ_dist=0</code>).</td></tr>
+<tr><td><code>RENDER_AXUTILITY</code></td><td>1</td><td>se calculan alpha/normal/profundidad/distorsión.</td></tr>
+</table>
+
+<h2 id="s5">5 · Tabla de hallazgos</h2>
+
+<table>
+<tr><th>#</th><th>Dónde</th><th>Qué</th><th>Impacto</th><th>Confirmado por</th></tr>
+
+<tr><td><span class="pill p1">P1</span></td><td><code>gaussian_model.py:818</code></td>
+<td><code>big_points_ws</code>: <code>get_scaling.max() &gt; 0.1·extent</code> es <b>siempre False</b> porque
+<code>get_scaling</code> está clampada a exactamente ese valor.</td>
+<td><b>Los splats gigantes no se podan nunca.</b> 2,05 % de la nube con escala &gt;0,15 y opacidad 0,77.</td>
+<td><code>world=0</code> en las 144 densificaciones + PLY.</td></tr>
+
+<tr><td><span class="pill p1">P1</span></td><td><code>gaussian_model.py:629</code> vs <code>:817</code></td>
+<td><code>densification_postfix</code> pone <code>max_radii2D</code> a ceros; <code>densify_and_prune</code> lo
+lee <b>después</b> de clone/split.</td>
+<td><b>Prune por radio en pantalla muerto.</b> Segunda red de seguridad caída.</td>
+<td><code>screen=0</code> en las 144.</td></tr>
+
+<tr><td><span class="pill p1">P1</span></td><td>diseño del kernel<br><code>train.py:457</code></td>
+<td>El conjunto factible <code>{aₙ≥0, Σaₙ≤½}</code> <b>no impone monotonía</b>. 86,5 % de los splats tienen
+lóbulos secundarios; 67,3 % tienen ≥2 mínimos locales.</td>
+<td><b>Las dianas del césped.</b> Rebote mediano del kernel = 0,32.</td>
+<td>A/B de render (desaparecen) + estadística del PLY.</td></tr>
+
+<tr><td><span class="pill p2">P2</span></td><td><code>forward.cu:238</code></td>
+<td><code>cutoff = 3.0f</code> (valor gaussiano) con un kernel de <b>soporte compacto en r=1</b>.</td>
+<td><b>~9× de trabajo de rasterización desperdiciado</b>; <code>radii</code> inflado ×3 hacia Python.</td>
+<td>lectura del código: <code>if(r2&gt;=1.0f) continue</code> en la línea 451.</td></tr>
+
+<tr><td><span class="pill p2">P2</span></td><td><code>backward.cu:204,260</code></td>
+<td><code>pixel_invalid</code> ⟹ <code>done=true</code>: los píxeles con <code>α&lt;1e-4</code> <b>no propagan
+ningún gradiente</b>. No está en el 2DGS original.</td>
+<td>Los huecos negros <b>no pueden</b> generar la señal que los taparía.</td>
+<td>lectura del código; 0,765 % de píxeles negros vs 0,166 % en GT.</td></tr>
+
+<tr><td><span class="pill p2">P2</span></td><td><code>gaussian_renderer/__init__.py:141</code></td>
+<td><code>radius_clip = 50.0</code> aplicado <b>después</b> de rasterizar.</td>
+<td>Hoy no-op. <b>Enmascararía</b> el prune por radio si se arregla el hallazgo anterior.</td>
+<td>lectura del código.</td></tr>
+
+<tr><td><span class="pill p3">P3</span></td><td><code>backward.cu:573</code></td>
+<td><code>dL_dopacity += G·dL_dα</code> ignora el <code>min(0,99,·)</code>: derivada errónea (debería ser 0)
+para splats saturados.</td>
+<td>Sesgo de opacidad hacia arriba justo en los splats más opacos — los mismos del hallazgo P1.</td>
+<td>lectura del código.</td></tr>
+
+<tr><td><span class="pill p3">P3</span></td><td><code>backward.cu:498</code></td>
+<td><code>d_alpha_d_rho</code> aún divide por <code>f_safe</code>; el fix documentado no se aplicó.</td>
+<td>Cola de gradiente inflado para <code>β&lt;0,5</code>. En run2, <b>β&lt;1 = 0,32 %</b> → riesgo bajo.</td>
+<td>lectura del código + PLY.</td></tr>
+
+<tr><td><span class="pill p3">P3</span></td><td><code>gaussian_model.py:189</code><br><code>train.py:399</code></td>
+<td>Los comentarios anuncian techo <code>_beta = 2,7081</code> (β≈60); el código dice <code>max=2.0</code> (β≈29,56).</td>
+<td>Documentación falsa. No afecta a run2 (β_max = 24,39).</td>
+<td>PLY + lectura.</td></tr>
+
+<tr><td><span class="pill p4">P4</span></td><td><code>gaussian_renderer/__init__.py:85</code></td>
+<td><code>pipe.convert_SHs_python = False</code> pisa la opción del usuario en silencio.</td>
+<td>Trampa para el futuro.</td><td>lectura.</td></tr>
+
+<tr><td><span class="pill p4">P4</span></td><td><code>forward.cu:432</code></td>
+<td>Low-pass efectivo reducido a un disco de <b>0,707 px</b> (era 2,12 px en el original) por el truncado en <code>ρ&lt;1</code>.</td>
+<td>Sin anti-aliasing real. Coherente con <code>CULL_SUBPIXEL=ON</code>, pero no es una decisión explícita.</td>
+<td>aritmética de las constantes.</td></tr>
+
+<tr><td><span class="pill p4">P4</span></td><td>schedule</td>
+<td>El eval in-train satura en la iteración 20 000 y luego <b>baja</b> (20,28 → 20,21).</td>
+<td>10 000 iteraciones desperdiciadas por run.</td><td>log de run2.</td></tr>
+</table>
+
+<div class="note ok-box">
+<b>Lo que está BIEN y no hay que tocar</b> — verificado explícitamente en este repaso:
+<ul style="margin-bottom:0">
+<li>Fix A (<code>spatial_lr_scale</code> en <code>load_ply</code>): funciona; el render usa el mismo techo que el train.</li>
+<li>Fix B (<code>_scaling.data.clamp_</code>): funciona; <code>recorte_max = 0,000000</code> y <code>s_max</code> en el PLY = techo exacto.</li>
+<li><code>project_a_()</code>: proyección euclídea exacta y correcta. 0 violaciones en 6,8 M splats.</li>
+<li>Gradiente de <code>a</code> en el backward: reagrupación sin singularidad, correcta.</li>
+<li>Herencia de <code>a</code> y <code>β</code> en clone/split/relocate/add: criterio correcto (parámetros de forma).</li>
+<li>Consistencia del clamp <code>α ≤ 0,99</code> entre forward y backward.</li>
+<li><code>CULL_SUBPIXEL</code>: activo y <b>consistente</b> entre entrenamiento y render (banner en los dos logs).</li>
+</ul>
+</div>
+
+<h2 id="s6">6 · Qué haría a continuación</h2>
+
+<ol>
+<li><b>Arreglar los dos prunes de tamaño y re-entrenar</b> (run3). Son 2 líneas, no tocan el kernel, y atacan
+directamente los blobs. <code>big_points_ws</code> con umbral <code>0,7·scale_clamp_factor·extent</code>;
+<code>big_points_vs</code> leyendo <code>max_radii2D</code> <b>antes</b> de clone/split, y quitando el
+<code>radius_clip=50</code> de Python. Esto es un A/B limpio contra run2: <b>mismo kernel, misma config</b>.</li>
+
+<li><b>Añadir monotonía al conjunto factible y re-entrenar</b> (run4), con la <b>proyección discretizada</b>
+(64 semiespacios + Dykstra dentro de <code>project_a_()</code>, ~15 líneas de Python, sin tocar CUDA) e init
+<code>a=[½,0,0]</code>. <b>No</b> con los atajos lineales: la débil deja pasar dianas y la fuerte vacía el
+espacio de búsqueda (tabla del §2.1). El objetivo del experimento es responder la pregunta abierta del <code>CLAUDE.md</code>:
+<b>¿cuánto aporta aprender la forma cuando la forma está obligada a ser un kernel decente?</b>
+Contrastar contra run67 (tent fijo), que es el baseline correcto para esa pregunta.</li>
+
+<li><b>A/B de <code>cutoff = 1.0f</code></b> en <code>forward.cu:238</code>. Debe dar métricas
+<b>idénticas</b> (si no, hay algo que no entendemos) y bastante velocidad, que se reinvierte en los dos
+runs anteriores.</li>
+
+<li><b>Bajar <code>iterations</code> a 20 000</b> mientras se itera. El run satura ahí; son ~10 000 iteraciones
+gratis por experimento.</li>
+
+<li>Cuando el kernel esté cerrado, atacar el fondo negro por la vía que ya sabemos que funciona
+(<b>MCMC</b>, run36) en lugar de clásico — pero eso es un eje distinto y no debe mezclarse con el A/B del kernel.</li>
+</ol>
+
+<p class="meta" style="margin-top:36px;border-top:1px solid var(--line);padding-top:14px">
+Documento generado el 2026-07-27. Evidencia reproducible en
+<code>docs/assets/run2/</code>. Métricas honestas de run2 obtenidas con
+<code>python metrics.py -m output/m360/flowers_beta_run2</code>; el A/B de kernel monótono se hizo
+sustituyendo <code>_a</code> en memoria sobre el modelo cargado y re-renderizando las 22 vistas de test
+(LPIPS de esa tabla usa la red <em>alex</em> por defecto de <code>lpipsPyTorch</code>, no <em>vgg</em>: sirve
+para comparar entre sí, no contra las tablas de arriba).
+</p>
+
+</div>
+</body>
+</html>

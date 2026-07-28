@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Los dos prunes de tamaño explicados — max_radii2D, big_points_vs y big_points_ws</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.68}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.85rem;margin:.2em 0 .1em;line-height:1.25}
+  h2{font-size:1.4rem;margin:2.2em 0 .5em;padding-top:.5em;border-top:1px solid var(--line)}
+  h3{font-size:1.1rem;margin:1.6em 0 .4em;color:var(--accent)}
+  h4{font-size:1.0rem;margin:1.2em 0 .3em;color:var(--warn)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.65em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.88em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.79rem;line-height:1.55}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:18px 0}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.9rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.5em 0 .5em 14px;color:var(--muted);margin:16px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.35em 0}
+  ol{margin:.5em 0;padding-left:1.3em} ol li{margin:.5em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:14px 0;font-family:"JetBrains Mono",monospace;font-size:.95rem;color:var(--accent2);text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg,img{max-width:100%;height:auto;display:block;margin:0 auto}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)} b.md{color:var(--warn)}
+  figure{margin:0} figcaption{color:var(--muted);font-size:.84rem;margin-top:8px;text-align:center}
+  .step{background:var(--panel2);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:14px 18px;margin:14px 0}
+  .step b.n{display:inline-block;background:var(--accent);color:#0b0d13;border-radius:50%;width:24px;height:24px;text-align:center;line-height:24px;font-size:.85rem;margin-right:8px}
+  .kill{background:linear-gradient(180deg,#2a1b1e,#211a1d);border:1px solid #5c3a3a;border-left:5px solid var(--danger);border-radius:12px;padding:18px 20px;margin:18px 0}
+  .kill h3{margin-top:0;color:var(--danger)}
+  .fix{background:linear-gradient(180deg,#17281d,#151f19);border:1px solid #2f5c3a;border-left:5px solid var(--accent2);border-radius:12px;padding:18px 20px;margin:18px 0}
+  .fix h3{margin-top:0;color:var(--accent2)}
+  .fileref{color:var(--warn);font-family:"JetBrains Mono",monospace;font-size:.85em}
+  .tl{display:grid;grid-template-columns:auto 1fr;gap:0 16px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  del{color:var(--danger);text-decoration-color:var(--danger)}
+  ins{color:var(--accent2);text-decoration:none;background:#14261a}
+  .tocbox a{color:var(--accent);text-decoration:none} .tocbox a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Los dos prunes de tamaño, explicados despacio</h1>
+<p class="sub">Qué son <code>max_radii2D</code>, <code>big_points_vs</code> y <code>big_points_ws</code>,
+por qué los dos están rotos en este repo, y cómo se arreglan. Con un juguete de <b>6 splats</b> que puedes
+ejecutar: <code>python scripts/juguete_prunes_de_tamano.py</code>.</p>
+
+<div class="card tocbox">
+<b>Ruta:</b>
+<a href="#s1">1 · La idea de fondo</a> ·
+<a href="#s2">2 · Mundo ≠ pantalla</a> ·
+<a href="#s3">3 · De dónde sale max_radii2D</a> ·
+<a href="#s4">4 · El juguete</a> ·
+<a href="#s5">5 · Bug A: el reset</a> ·
+<a href="#s6">6 · Bug B: el clamp</a> ·
+<a href="#s7">7 · El arreglo</a> ·
+<a href="#s8">8 · Cómo comprobarlo</a>
+</div>
+
+<h2 id="s1">1 · La idea de fondo: dos maneras de ser «demasiado grande»</h2>
+
+<p>Durante el entrenamiento, algunos splats se hinchan. Un splat hinchado es malo porque pinta una mancha
+enorme y borrosa en vez de detalle — son los blobs translúcidos que ves en el césped. Así que el código
+tiene un <b>prune</b> (una poda): cada 100 iteraciones se buscan los splats demasiado grandes y se borran.</p>
+
+<p>Pero «demasiado grande» tiene <b>dos significados distintos</b>, y el código comprueba los dos:</p>
+
+<table>
+<tr><th></th><th><code>big_points_ws</code></th><th><code>big_points_vs</code></th></tr>
+<tr><td><b>ws / vs significan</b></td><td><b>w</b>orld <b>s</b>pace = espacio del mundo</td><td><b>v</b>iew <b>s</b>pace = espacio de vista (pantalla)</td></tr>
+<tr><td><b>La pregunta</b></td><td>«¿este splat es un disco gigante <b>en la escena 3D</b>?»</td><td>«¿este splat tapa media <b>imagen</b> cuando lo miro?»</td></tr>
+<tr><td><b>La mide en</b></td><td>unidades del mundo (metros, más o menos)</td><td>píxeles</td></tr>
+<tr><td><b>La variable</b></td><td><code>get_scaling</code> (el tamaño del splat)</td><td><code>max_radii2D</code> (el radio en píxeles)</td></tr>
+<tr><td><b>Depende de la cámara</b></td><td><b class="lo">No.</b> Es una propiedad del splat.</td><td><b class="hi">Sí.</b> Cambia con cada vista.</td></tr>
+</table>
+
+<p>Y la línea que las usa dice, literalmente, «poda si se cumple <b>cualquiera</b> de las dos»
+(<code class="fileref">scene/gaussian_model.py:816-819</code>):</p>
+
+<pre><code>if max_screen_size:
+    big_points_vs = self.max_radii2D &gt; max_screen_size                  # ¿gigante en PANTALLA?
+    big_points_ws = self.get_scaling.max(dim=1).values &gt; 0.1 * extent    # ¿gigante en el MUNDO?
+    prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+    #                             └── prune por opacidad ──┘   └─ o esto ─┘   └─ o esto ─┘</code></pre>
+
+<h2 id="s2">2 · ¿Por qué hacen falta las dos? (mundo ≠ pantalla)</h2>
+
+<p>Esta es la parte que más se atraganta, así que va con dibujo. La clave: <b>un splat pequeño muy cerca
+de la cámara ocupa más píxeles que un splat enorme muy lejos.</b> Por eso ninguno de los dos criterios
+sustituye al otro.</p>
+
+<div class="card">
+<svg viewBox="0 0 720 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagrama: un splat pequeño cerca ocupa más píxeles que un splat grande lejos">
+  <rect x="0" y="0" width="720" height="320" fill="#0b0d13"/>
+
+  <!-- frustum -->
+  <line x1="60" y1="160" x2="700" y2="20"  stroke="#2a2f3c" stroke-width="1.5"/>
+  <line x1="60" y1="160" x2="700" y2="300" stroke="#2a2f3c" stroke-width="1.5"/>
+
+  <!-- camara -->
+  <path d="M40,146 L40,174 L64,160 Z" fill="#6ea8fe"/>
+  <rect x="20" y="150" width="22" height="20" rx="3" fill="#6ea8fe"/>
+  <text x="30" y="196" fill="#6ea8fe" font-size="12" text-anchor="middle">cámara</text>
+
+  <!-- plano imagen -->
+  <line x1="180" y1="88" x2="180" y2="232" stroke="#9aa3b2" stroke-width="2"/>
+  <text x="180" y="252" fill="#9aa3b2" font-size="11" text-anchor="middle">plano imagen</text>
+  <text x="180" y="266" fill="#9aa3b2" font-size="11" text-anchor="middle">(lo que se rasteriza)</text>
+
+  <!-- rayos al splat P -->
+  <line x1="60" y1="160" x2="260" y2="179" stroke="#7ee787" stroke-width="1" stroke-dasharray="3,3" opacity=".7"/>
+  <line x1="60" y1="160" x2="260" y2="211" stroke="#7ee787" stroke-width="1" stroke-dasharray="3,3" opacity=".7"/>
+  <!-- splat P: pequeño y cerca -->
+  <ellipse cx="260" cy="195" rx="9" ry="16" fill="#7ee787" opacity=".85"/>
+  <text x="260" y="232" fill="#7ee787" font-size="12" text-anchor="middle">splat P</text>
+  <text x="260" y="247" fill="#9aa3b2" font-size="11" text-anchor="middle">escala mundo 0,30</text>
+  <text x="260" y="261" fill="#9aa3b2" font-size="11" text-anchor="middle">CERCA</text>
+  <!-- huella de P en el plano -->
+  <line x1="180" y1="167" x2="180" y2="187" stroke="#7ee787" stroke-width="7"/>
+
+  <!-- rayos al splat G -->
+  <line x1="60" y1="160" x2="640" y2="68"  stroke="#ff7b72" stroke-width="1" stroke-dasharray="3,3" opacity=".7"/>
+  <line x1="60" y1="160" x2="640" y2="132" stroke="#ff7b72" stroke-width="1" stroke-dasharray="3,3" opacity=".7"/>
+  <!-- splat G: grande y lejos -->
+  <ellipse cx="640" cy="100" rx="18" ry="32" fill="#ff7b72" opacity=".85"/>
+  <text x="620" y="152" fill="#ff7b72" font-size="12" text-anchor="middle">splat G</text>
+  <text x="620" y="167" fill="#9aa3b2" font-size="11" text-anchor="middle">escala mundo 4,00</text>
+  <text x="620" y="181" fill="#9aa3b2" font-size="11" text-anchor="middle">LEJOS</text>
+  <!-- huella de G en el plano -->
+  <line x1="180" y1="133" x2="180" y2="146" stroke="#ff7b72" stroke-width="7"/>
+
+  <!-- anotaciones de las huellas -->
+  <line x1="196" y1="167" x2="196" y2="187" stroke="#7ee787" stroke-width="1"/>
+  <line x1="192" y1="167" x2="200" y2="167" stroke="#7ee787" stroke-width="1"/>
+  <line x1="192" y1="187" x2="200" y2="187" stroke="#7ee787" stroke-width="1"/>
+  <text x="206" y="181" fill="#7ee787" font-size="11">19 px</text>
+
+  <line x1="196" y1="133" x2="196" y2="146" stroke="#ff7b72" stroke-width="1"/>
+  <line x1="192" y1="133" x2="200" y2="133" stroke="#ff7b72" stroke-width="1"/>
+  <line x1="192" y1="146" x2="200" y2="146" stroke="#ff7b72" stroke-width="1"/>
+  <text x="206" y="144" fill="#ff7b72" font-size="11">13 px</text>
+
+  <text x="360" y="292" fill="#e6e8ee" font-size="12.5" text-anchor="middle">G es <tspan fill="#ff7b72">13× más grande en el mundo</tspan> que P, pero P <tspan fill="#7ee787">ocupa más píxeles</tspan> que G.</text>
+  <text x="360" y="310" fill="#9aa3b2" font-size="11.5" text-anchor="middle">Un solo criterio dejaría escapar a uno de los dos. Por eso hay dos.</text>
+</svg>
+</div>
+
+<div class="note">
+Cada criterio caza un fallo distinto:
+<ul style="margin-bottom:0">
+<li><b><code>big_points_ws</code></b> caza el splat que se ha <b>hinchado de verdad</b> — el disco de 4 metros
+en una escena de 10. Aunque esté lejísimos y ocupe 3 píxeles, es un splat degenerado.</li>
+<li><b><code>big_points_vs</code></b> caza el splat que <b>arruina la imagen</b> — puede ser diminuto en el
+mundo, pero si flota pegado a la cámara, embadurna media foto. Son los <em>floaters</em>.</li>
+</ul>
+</div>
+
+<h2 id="s3">3 · De dónde sale <code>max_radii2D</code></h2>
+
+<p>Aquí está el matiz que hace falta para entender el primer bug. <code>big_points_ws</code> puede
+calcularse en cualquier momento, porque <code>get_scaling</code> es un parámetro que siempre está ahí.
+Pero <code>big_points_vs</code> necesita saber <b>cuántos píxeles ocupa el splat</b>, y eso
+<b>solo se sabe al renderizar</b>, y <b>cambia con cada cámara</b>.</p>
+
+<p>La solución del código es un <b>acumulador</b>: en cada iteración se renderiza desde una cámara al
+azar, el rasterizer devuelve el radio en píxeles de cada splat, y se guarda el <b>máximo visto hasta ahora</b>
+(<code class="fileref">train.py:214-215</code>):</p>
+
+<pre><code>gaussians.max_radii2D[visibility_filter] = torch.max(
+    gaussians.max_radii2D[visibility_filter], radii[visibility_filter])</code></pre>
+
+<p>Léelo como: «para cada splat que se ha visto en esta vista, quédate con el mayor entre lo que ya tenías
+y lo que acabas de medir». Es una <b>marca de agua alta</b> (<em>high-water mark</em>).</p>
+
+<div class="card">
+<svg viewBox="0 0 720 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="max_radii2D acumula el máximo radio visto a lo largo de las iteraciones">
+  <rect x="0" y="0" width="720" height="210" fill="#0b0d13"/>
+  <!-- eje -->
+  <line x1="70" y1="160" x2="660" y2="160" stroke="#2a2f3c" stroke-width="1.5"/>
+  <text x="365" y="196" fill="#9aa3b2" font-size="11.5" text-anchor="middle">iteración (cada una usa una cámara distinta, al azar)</text>
+  <!-- barras: radio medido en cada iter -->
+  <rect x="90"  y="130" width="26" height="30" fill="#2a3040"/><text x="103" y="176" fill="#9aa3b2" font-size="10" text-anchor="middle">1</text>
+  <rect x="140" y="100" width="26" height="60" fill="#2a3040"/><text x="153" y="176" fill="#9aa3b2" font-size="10" text-anchor="middle">2</text>
+  <rect x="190" y="118" width="26" height="42" fill="#2a3040"/><text x="203" y="176" fill="#9aa3b2" font-size="10" text-anchor="middle">3</text>
+  <rect x="240" y="66"  width="26" height="94" fill="#2a3040"/><text x="253" y="176" fill="#9aa3b2" font-size="10" text-anchor="middle">4</text>
+  <rect x="290" y="112" width="26" height="48" fill="#2a3040"/><text x="303" y="176" fill="#9aa3b2" font-size="10" text-anchor="middle">5</text>
+  <rect x="340" y="86"  width="26" height="74" fill="#2a3040"/><text x="353" y="176" fill="#9aa3b2" font-size="10" text-anchor="middle">6</text>
+  <rect x="390" y="126" width="26" height="34" fill="#2a3040"/><text x="403" y="176" fill="#9aa3b2" font-size="10" text-anchor="middle">7</text>
+  <rect x="440" y="104" width="26" height="56" fill="#2a3040"/><text x="453" y="176" fill="#9aa3b2" font-size="10" text-anchor="middle">8</text>
+  <text x="500" y="176" fill="#9aa3b2" font-size="12" text-anchor="middle">…</text>
+  <!-- escalera del maximo -->
+  <polyline points="90,130 116,130 116,100 166,100 166,100 216,100 216,66 660,66"
+            fill="none" stroke="#7ee787" stroke-width="2.5"/>
+  <text x="620" y="58" fill="#7ee787" font-size="12" text-anchor="end">max_radii2D</text>
+  <line x1="70" y1="66" x2="660" y2="66" stroke="#7ee787" stroke-width="1" stroke-dasharray="4,4" opacity=".45"/>
+  <!-- umbral -->
+  <line x1="70" y1="40" x2="660" y2="40" stroke="#ff7b72" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="660" y="34" fill="#ff7b72" font-size="11.5" text-anchor="end">umbral: max_screen_size = 20 px</text>
+  <text x="60" y="70" fill="#9aa3b2" font-size="11" text-anchor="end">px</text>
+  <text x="365" y="20" fill="#e6e8ee" font-size="12.5" text-anchor="middle">Barras grises = radio medido en esa vista · Escalón verde = el máximo acumulado</text>
+</svg>
+</div>
+
+<p>Un splat que en la mayoría de las vistas se ve normal pero que en <b>una sola</b> vista tapa 60 píxeles,
+es sospechoso — y por eso se guarda el <b>máximo</b>, no la media.</p>
+
+<h2 id="s4">4 · El juguete: 6 splats, a mano</h2>
+
+<p>Para ver dónde se rompe, montamos una escena mínima. <code>extent = 10</code>,
+<code>scale_clamp_factor = 0.1</code> ⟹ <b>techo de escala = 1,0</b>. Umbral de pantalla = 20 px.</p>
+
+<table>
+<tr><th>splat</th><th>escala <b>cruda</b> en el mundo</th><th>radio en pantalla</th><th>¿qué le pasa?</th><th>¿hay que podarlo?</th></tr>
+<tr><td>A</td><td>0,20</td><td>4 px</td><td>nada, está sano</td><td>no</td></tr>
+<tr><td>B</td><td>0,35</td><td>7 px</td><td>nada, está sano</td><td>no</td></tr>
+<tr><td><b>C</b></td><td><b class="lo">4,00</b></td><td>12 px</td><td>disco gigante, pero lejos</td><td><b class="lo">sí</b>, por mundo</td></tr>
+<tr><td><b>D</b></td><td>0,30</td><td><b class="lo">45 px</b></td><td>pequeño, pero pegado a la cámara</td><td><b class="lo">sí</b>, por pantalla</td></tr>
+<tr><td>E</td><td>0,15</td><td>3 px</td><td>nada, está sano</td><td>no</td></tr>
+<tr><td><b>F</b></td><td><b class="lo">3,00</b></td><td><b class="lo">60 px</b></td><td>gigante <em>y</em> cerca</td><td><b class="lo">sí</b>, por las dos</td></tr>
+</table>
+
+<p><b>Respuesta correcta: podar C, D y F. Sobreviven A, B y E.</b> Veamos qué hace el código real.</p>
+
+<h2 id="s5">5 · Bug A — el acumulador se borra justo antes de leerlo</h2>
+
+<p>Sigamos el reloj de una iteración de densificación. Todo esto pasa dentro de una sola llamada a
+<code>densify_and_prune</code>:</p>
+
+<div class="step"><b class="n">1</b><b>Iteraciones 1 a 100:</b> se acumula <code>max_radii2D</code> normalmente.
+En el juguete acaba en <code>[4.4, 7.7, 13.2, 49.5, 3.3, 65.9]</code>. <b class="hi">Perfecto</b> — D y F
+destacan claramente por encima de 20.</div>
+
+<div class="step"><b class="n">2</b><b>Se entra en <code>densify_and_prune</code></b> y lo primero que hace es
+<code>densify_and_clone(...)</code>, que crea splats nuevos y llama a <code>densification_postfix</code>.
+Y ahí, en <code class="fileref">gaussian_model.py:629</code>, está esto:
+<pre style="margin:10px 0 0"><code>self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")</code></pre>
+<b class="lo">El acumulador se pone a cero.</b> Tiene su lógica —han cambiado los splats, el array tenía otro
+tamaño— pero el dato se pierde sin haberlo usado.</div>
+
+<div class="step"><b class="n">3</b><b><code>densify_and_split(...)</code></b> hace lo mismo. Segundo borrado.</div>
+
+<div class="step"><b class="n">4</b><b>Ahora</b> se lee <code>big_points_vs = max_radii2D &gt; 20</code>.
+Pero <code>max_radii2D</code> es <code>[0, 0, 0, 0, 0, 0]</code>. Y <code>0 &gt; 20</code> es falso.
+<b class="lo">Nadie se poda jamás por radio en pantalla.</b></div>
+
+<p>Salida literal del juguete:</p>
+<pre><code>estado al ENTRAR en densify_and_prune:
+   max_radii2D = ['4.4', '7.7', '13.2', '49.5', '3.3', '65.9']
+
+  1) densify_and_clone(...)  -&gt; llama a densification_postfix
+     max_radii2D = ['0.0', '0.0', '0.0', '0.0', '0.0', '0.0']
+
+  2) densify_and_split(...)  -&gt; llama a densification_postfix
+     max_radii2D = ['0.0', '0.0', '0.0', '0.0', '0.0', '0.0']
+
+  3) AHORA se leen los dos prunes de tamaño:
+     big_points_vs = max_radii2D &gt; 20   -&gt; [False, False, False, False, False, False]</code></pre>
+
+<div class="card">
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cronología: el acumulador se pone a cero antes de leerse">
+  <rect x="0" y="0" width="720" height="250" fill="#0b0d13"/>
+  <line x1="50" y1="120" x2="680" y2="120" stroke="#2a2f3c" stroke-width="2"/>
+
+  <!-- fase acumulacion -->
+  <rect x="50" y="96" width="220" height="48" rx="6" fill="#17281d" stroke="#2f5c3a"/>
+  <text x="160" y="118" fill="#7ee787" font-size="12" text-anchor="middle">iters 1…100: acumula</text>
+  <text x="160" y="134" fill="#9aa3b2" font-size="11" text-anchor="middle">[4.4, 7.7, 13.2, 49.5, 3.3, 65.9]</text>
+  <text x="160" y="82" fill="#7ee787" font-size="11" text-anchor="middle">✓ el dato es bueno</text>
+
+  <!-- clone -->
+  <rect x="286" y="96" width="106" height="48" rx="6" fill="#2a1b1e" stroke="#5c3a3a"/>
+  <text x="339" y="114" fill="#ff7b72" font-size="12" text-anchor="middle">clone</text>
+  <text x="339" y="132" fill="#ff7b72" font-size="11" text-anchor="middle">→ ceros</text>
+  <line x1="339" y1="88" x2="339" y2="60" stroke="#ff7b72" stroke-width="1"/>
+  <text x="339" y="52" fill="#ff7b72" font-size="11" text-anchor="middle">postfix borra</text>
+
+  <!-- split -->
+  <rect x="408" y="96" width="106" height="48" rx="6" fill="#2a1b1e" stroke="#5c3a3a"/>
+  <text x="461" y="114" fill="#ff7b72" font-size="12" text-anchor="middle">split</text>
+  <text x="461" y="132" fill="#ff7b72" font-size="11" text-anchor="middle">→ ceros</text>
+  <line x1="461" y1="88" x2="461" y2="60" stroke="#ff7b72" stroke-width="1"/>
+  <text x="461" y="52" fill="#ff7b72" font-size="11" text-anchor="middle">postfix borra</text>
+
+  <!-- lectura -->
+  <rect x="530" y="96" width="150" height="48" rx="6" fill="#1e222e" stroke="#2a2f3c"/>
+  <text x="605" y="114" fill="#e6e8ee" font-size="12" text-anchor="middle">se LEE el prune</text>
+  <text x="605" y="132" fill="#ff7b72" font-size="11" text-anchor="middle">[0,0,0,0,0,0] &gt; 20 → nada</text>
+
+  <!-- flecha del dato perdido -->
+  <path d="M160,160 C 300,205 470,205 600,163" fill="none" stroke="#ff7b72" stroke-width="1.6" stroke-dasharray="5,4"/>
+  <polygon points="600,163 592,172 605,172" fill="#ff7b72"/>
+  <text x="380" y="222" fill="#ff7b72" font-size="12" text-anchor="middle">el dato bueno nunca llega al sitio donde se usa</text>
+</svg>
+</div>
+
+<h2 id="s6">6 · Bug B — el umbral está pegado al techo</h2>
+
+<p>Este es más sutil y es <b>propio de este repo</b> (el 2DGS original no lo tiene). Hay dos piezas que,
+por separado, están bien, y juntas se anulan.</p>
+
+<h4>Pieza 1: el techo de escala</h4>
+<p><code>get_scaling</code> no devuelve la escala tal cual: la <b>recorta</b> a un máximo
+(<code class="fileref">gaussian_model.py:131-141</code>). Es el techo que se añadió para que ningún splat
+pudiera crecer sin límite y reventar el rasterizer:</p>
+<pre><code>s = self.scaling_activation(self._scaling)
+if self.spatial_lr_scale &gt; 0:
+    s = s.clamp(max=self.scale_clamp_factor * self.spatial_lr_scale)   # = 0.1 * extent
+return s</code></pre>
+
+<h4>Pieza 2: el umbral del prune</h4>
+<pre><code>big_points_ws = self.get_scaling.max(dim=1).values &gt; 0.1 * extent</code></pre>
+
+<p>¿Ves el problema? El techo del clamp es <code>0.1 * extent</code>. El umbral del prune es
+<code>0.1 * extent</code>. <b>Son el mismo número.</b> Y la comparación es estricta (<code>&gt;</code>, no <code>&gt;=</code>).</p>
+
+<div class="eq" style="color:var(--danger)">clamp(x, max=C) &nbsp;&gt;&nbsp; C &nbsp;&nbsp;⟹&nbsp;&nbsp; <b>False, siempre, para todo x</b></div>
+
+<p>Un splat con escala cruda 4,00 pasa por <code>get_scaling</code> y sale valiendo <b>exactamente 1,0</b>.
+El prune pregunta «¿es mayor que 1,0?». No: es <em>igual</em> a 1,0. Sobrevive. Y lo mismo le pasaría
+a uno de escala 40, o 400.</p>
+
+<div class="card">
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="El clamp comprime todas las escalas grandes exactamente al techo, donde está el umbral">
+  <rect x="0" y="0" width="720" height="300" fill="#0b0d13"/>
+
+  <text x="360" y="26" fill="#e6e8ee" font-size="13" text-anchor="middle">escala del splat</text>
+
+  <!-- eje ARRIBA: escala CRUDA -->
+  <text x="30" y="66" fill="#9aa3b2" font-size="11.5">cruda</text>
+  <line x1="90" y1="80" x2="670" y2="80" stroke="#2a2f3c" stroke-width="1.5"/>
+  <g fill="#9aa3b2" font-size="10" text-anchor="middle">
+    <line x1="90"  y1="76" x2="90"  y2="84" stroke="#2a2f3c"/><text x="90"  y="98">0</text>
+    <line x1="219" y1="76" x2="219" y2="84" stroke="#2a2f3c"/><text x="219" y="98">1,0</text>
+    <line x1="348" y1="76" x2="348" y2="84" stroke="#2a2f3c"/><text x="348" y="98">2,0</text>
+    <line x1="477" y1="76" x2="477" y2="84" stroke="#2a2f3c"/><text x="477" y="98">3,0</text>
+    <line x1="606" y1="76" x2="606" y2="84" stroke="#2a2f3c"/><text x="606" y="98">4,0</text>
+  </g>
+  <!-- splats arriba -->
+  <circle cx="116" cy="80" r="5" fill="#7ee787"/>
+  <circle cx="135" cy="80" r="5" fill="#7ee787"/>
+  <circle cx="129" cy="80" r="5" fill="#7ee787"/>
+  <circle cx="109" cy="80" r="5" fill="#7ee787"/>
+  <line x1="122" y1="70" x2="150" y2="50" stroke="#7ee787" stroke-width="1"/>
+  <text x="156" y="47" fill="#7ee787" font-size="10.5">A, B, D, E (sanos: 0,15–0,35)</text>
+  <circle cx="477" cy="80" r="6" fill="#ff7b72"/><text x="477" y="66" fill="#ff7b72" font-size="10.5" text-anchor="middle">F (3,0)</text>
+  <circle cx="606" cy="80" r="6" fill="#ff7b72"/><text x="606" y="66" fill="#ff7b72" font-size="10.5" text-anchor="middle">C (4,0)</text>
+
+  <!-- flechas del clamp -->
+  <path d="M606,92 C 606,140 240,140 221,166" fill="none" stroke="#ff7b72" stroke-width="1.4" stroke-dasharray="4,4"/>
+  <polygon points="219,172 214,161 226,163" fill="#ff7b72"/>
+  <path d="M477,92 C 477,134 245,134 222,164" fill="none" stroke="#ff7b72" stroke-width="1.4" stroke-dasharray="4,4"/>
+  <text x="380" y="132" fill="#ff7b72" font-size="11.5" text-anchor="middle">el clamp los aplasta al techo</text>
+
+  <!-- eje ABAJO: get_scaling -->
+  <text x="15" y="186" fill="#9aa3b2" font-size="11.5">get_scaling</text>
+  <line x1="90" y1="200" x2="670" y2="200" stroke="#2a2f3c" stroke-width="1.5"/>
+  <g fill="#9aa3b2" font-size="10" text-anchor="middle">
+    <line x1="90"  y1="196" x2="90"  y2="204" stroke="#2a2f3c"/><text x="90"  y="218">0</text>
+    <line x1="219" y1="196" x2="219" y2="204" stroke="#2a2f3c"/><text x="219" y="218">1,0</text>
+  </g>
+  <!-- zona imposible -->
+  <rect x="221" y="190" width="449" height="20" fill="#2a1b1e" opacity=".8"/>
+  <text x="446" y="204" fill="#ff7b72" font-size="11.5" text-anchor="middle">zona INALCANZABLE — el clamp no deja pasar a nadie</text>
+
+  <!-- muro del techo -->
+  <line x1="219" y1="160" x2="219" y2="240" stroke="#ffb454" stroke-width="3"/>
+  <text x="219" y="254" fill="#ffb454" font-size="11.5" text-anchor="middle">techo = 0,1 × extent = 1,0</text>
+
+  <!-- splats abajo -->
+  <circle cx="116" cy="200" r="5" fill="#7ee787"/>
+  <circle cx="135" cy="200" r="5" fill="#7ee787"/>
+  <circle cx="129" cy="200" r="5" fill="#7ee787"/>
+  <circle cx="109" cy="200" r="5" fill="#7ee787"/>
+  <circle cx="219" cy="200" r="7" fill="#ff7b72"/>
+  <text x="219" y="186" fill="#ff7b72" font-size="10.5" text-anchor="middle">C y F, ambos en 1,0 exacto</text>
+
+  <!-- umbral roto -->
+  <line x1="221" y1="228" x2="300" y2="228" stroke="#ff7b72" stroke-width="2"/>
+  <polygon points="300,228 292,224 292,232" fill="#ff7b72"/>
+  <text x="306" y="232" fill="#ff7b72" font-size="11.5">umbral actual: "&gt; 1,0" — al otro lado del muro</text>
+
+  <!-- umbral arreglado -->
+  <line x1="180" y1="272" x2="670" y2="272" stroke="#7ee787" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <circle cx="180" cy="272" r="4" fill="#7ee787"/>
+  <text x="360" y="290" fill="#7ee787" font-size="11.5" text-anchor="middle">arreglo: bajar el umbral a 0,7 × techo = 0,7 → C y F caen del lado correcto</text>
+</svg>
+</div>
+
+<div class="kill">
+<h3>Y esto no pasaba antes</h3>
+<p style="margin-bottom:0">En el 2DGS original <code>get_scaling</code> <b>no</b> lleva clamp, así que la
+escala podía valer 4,0 de verdad y el prune disparaba. El techo se añadió a este repo por una razón
+buena (evitar los OOM absurdos del rasterizer), pero <b>nadie se dio cuenta de que el umbral del prune
+usaba el mismo número</b>. El techo no solo limita la escala: además <b>desactivó silenciosamente el
+prune que vigilaba la escala</b>. Es un caso de libro de dos defensas que se anulan entre sí.</p>
+</div>
+
+<h2 id="s7">7 · El arreglo</h2>
+
+<p>Los dos son de una línea. El juguete los aplica y comprueba el resultado.</p>
+
+<h3>Arreglo A — guardar el acumulador antes de que lo borren</h3>
+<p>En <code class="fileref">scene/gaussian_model.py</code>, dentro de <code>densify_and_prune</code>, hay que
+copiar <code>max_radii2D</code> <b>antes</b> de llamar a clone/split. Es un tensor de N floats: la copia
+es barata.</p>
+
+<pre><code>    n0 = self.get_xyz.shape[0]
+<ins>+   # El postfix de clone/split resetea max_radii2D a ceros (línea 629), así que
++   # hay que quedarse con el acumulado ANTES o el prune por radio lee siempre 0.
++   radii_acumulado = self.max_radii2D.clone()</ins>
+    self.densify_and_clone(grads, max_grad, extent)
+    n1 = self.get_xyz.shape[0]
+    self.densify_and_split(grads, max_grad, extent)
+    n2 = self.get_xyz.shape[0]
+
+    ...
+
+    if max_screen_size:
+<del>-       big_points_vs = self.max_radii2D &gt; max_screen_size</del>
+<ins>+       big_points_vs = radii_acumulado &gt; max_screen_size</ins>
+</code></pre>
+
+<div class="note warn-box">
+<b>Cuidado con el tamaño del tensor.</b> <code>radii_acumulado</code> tiene <b>N₀</b> elementos (los splats
+que había al entrar), pero <code>prune_mask</code> se construye sobre <b>N₂</b> (después de clonar y partir).
+Hay que rellenar con ceros los splats nuevos —que aún no tienen radio medido y por tanto no deben podarse—
+igual que ya se hace en <code>densify_and_split</code> con <code>padded_grad</code>:
+<pre style="margin:10px 0 0"><code>vs_full = torch.zeros(self.get_xyz.shape[0], dtype=torch.bool, device="cuda")
+vs_full[:radii_acumulado.shape[0]] = radii_acumulado &gt; max_screen_size
+big_points_vs = vs_full</code></pre>
+<b>Ojo, un detalle más:</b> <code>densify_and_split</code> termina llamando a <code>prune_points</code> para
+borrar los padres que ha partido, así que el orden de los splats <b>cambia</b> antes de llegar al prune.
+Es más seguro calcular <code>big_points_vs</code> del todo (máscara booleana) <b>antes</b> de clone/split y
+pasarla filtrada, o bien mover el prune por radio a un paso propio, delante de la densificación.
+Este punto conviene mirarlo con calma al implementarlo — es el único sitio del arreglo que tiene chicha.
+</div>
+
+<h3>Arreglo B — separar el umbral del techo</h3>
+<pre><code>    if max_screen_size:
+        big_points_vs = ...
+<del>-       big_points_ws = self.get_scaling.max(dim=1).values &gt; 0.1 * extent</del>
+<ins>+       # OJO: get_scaling viene CLAMPEADA a scale_clamp_factor*extent, así que un
++       # umbral igual al techo es inalcanzable ("clamp(x,max=C) &gt; C" es False siempre).
++       # El umbral tiene que quedar por DEBAJO del techo.
++       ws_thr = 0.7 * self.scale_clamp_factor * self.spatial_lr_scale
++       big_points_ws = self.get_scaling.max(dim=1).values &gt; ws_thr</ins>
+</code></pre>
+
+<div class="note danger-box">
+<b>Lo que NO funciona:</b> leer la escala «cruda» con <code>self.scaling_activation(self._scaling)</code>
+para saltarse el clamp. Desde el <b>fix B del 2026-07-26</b> (<code class="fileref">train.py:427-429</code>)
+el <b>parámetro</b> también se clampa después de cada paso, así que la escala cruda <b>tampoco</b> puede
+superar el techo. La única salida es <b>bajar el umbral</b>.
+</div>
+
+<h4>Resultado en el juguete</h4>
+<pre><code>umbral de mundo con el fix: 0.7 x 1.0 = 0.7
+
+splat                 radio px     vs  get_scaling     ws   PODADO
+A normal                   4.4  False         0.20  False    False
+B normal                   7.7  False         0.35  False    False
+C GIGANTE mundo           13.2  False         1.00   True     True
+D GIGANTE pantalla        49.5   True         0.30  False     True
+E normal                   3.3  False         0.15  False    False
+F GIGANTE ambos           65.6   True         1.00   True     True
+
+PODADOS: 3 de 6  -&gt;  ['C GIGANTE mundo', 'D GIGANTE pantalla', 'F GIGANTE ambos']
+ESPERADO: C, D, F.   CORRECTO</code></pre>
+
+<p>Fíjate en que <b>cada criterio caza a uno distinto</b>: C solo lo pilla <code>ws</code>,
+D solo lo pilla <code>vs</code>, y F lo pillan los dos. Si arreglas solo uno, se te escapa el otro.</p>
+
+<div class="fix">
+<h3>Un tercer detalle que va en el mismo lote</h3>
+<p style="margin-bottom:0">En <code class="fileref">gaussian_renderer/__init__.py:141-142</code> hay esto:</p>
+<pre style="margin:10px 0"><code>radius_clip = 50.0
+radii = torch.clamp(radii, max=radius_clip)</code></pre>
+<p>Hoy es inofensivo porque <code>max_radii2D</code> está muerto. Pero en cuanto arregles el arreglo A,
+esta línea <b>trunca todos los radios a 50 px</b> antes de que lleguen al acumulador. Un splat que tape
+400 píxeles se registrará como 50. Seguiría superando el umbral de 20, así que el prune funcionaría… pero
+estarías midiendo mal a propósito y sin razón. <b>Quítala cuando apliques el arreglo A.</b></p>
+</div>
+
+<div class="note warn-box">
+<b>Y un aviso sobre el umbral de 20 px</b> (<code class="fileref">train.py:228</code>). El <code>radii</code>
+que devuelve el rasterizer está calculado con <code>cutoff = 3.0f</code>
+(<code class="fileref">forward.cu:238</code>), un valor heredado del kernel gaussiano. Como el kernel
+Beta/Gabor de este repo tiene soporte compacto en <code>r=1</code>, <b>ese radio es 3× el radio que de
+verdad se pinta</b>. O sea que «20 px» es en realidad «unos 6,7 px de huella real», que es bastante
+agresivo. Al reactivar el prune conviene <b>vigilar cuántos splats poda</b> en las primeras densificaciones:
+si son cientos de miles, sube el umbral (o arregla el <code>cutoff</code>, que es lo correcto de fondo).
+</div>
+
+<h2 id="s8">8 · Cómo compruebas que ha funcionado</h2>
+
+<p>No hace falta re-entrenar entero para saberlo: se ve en la <b>primera</b> densificación tras la
+iteración 3000 (antes de eso <code>size_threshold</code> es <code>None</code> y los dos prunes están
+apagados a propósito). El log ya imprime justo lo que necesitas
+(<code class="fileref">gaussian_model.py:824-833</code>):</p>
+
+<pre><code><b>ANTES (run2, las 144 densificaciones, sin excepción):</b>
+[DENSIFY iter=14900] +clone=105135 +split=5590 | PRUNE total=9056
+   [sostenido(&gt;25)=9056, <b class="lo">screen=0</b>, <b class="lo">world=0</b>] | N:6838756-&gt;6829700
+
+<b>DESPUÉS (lo que tiene que salir):</b>
+[DENSIFY iter=14900] +clone=... +split=... | PRUNE total=...
+   [sostenido(&gt;25)=..., <b class="hi">screen=1234</b>, <b class="hi">world=567</b>] | N:...</code></pre>
+
+<p>Comprobación en una línea sobre el log nuevo:</p>
+<pre><code>grep -c "screen=0, world=0" logs/flowers3.log     # tiene que bajar de 144 a ~0
+grep -o "screen=[0-9]*" logs/flowers3.log | sort -u | head</code></pre>
+
+<div class="note ok-box">
+<b>Qué esperar del resultado.</b> Este arreglo <b>no toca el kernel</b>: es un A/B limpio contra run2 con
+la misma configuración. Debería reducir los blobs gigantes del césped (2,05 % de la nube tiene escala
+&gt;0,15 con opacidad media 0,77). Sobre las métricas, la apuesta razonable es <b>SSIM y LPIPS arriba</b>
+—son las que castigan las manchas borrosas— y PSNR más o menos plano. Si el PSNR <em>baja</em> mucho,
+significa que esos splats gigantes estaban tapando huecos, y entonces el problema real es de cobertura
+(§2.3 del otro documento), no de tamaño.
+</div>
+
+<h2>Resumen en cinco frases</h2>
+<ol>
+<li><code>max_radii2D</code> es una <b>marca de agua</b>: el mayor radio en píxeles que ha tenido cada
+splat en cualquier vista vista hasta ahora.</li>
+<li><code>big_points_vs</code> poda por <b>píxeles</b> (usa <code>max_radii2D</code>);
+<code>big_points_ws</code> poda por <b>tamaño en el mundo</b> (usa <code>get_scaling</code>). Hacen falta
+las dos porque cerca/lejos desacopla ambas medidas.</li>
+<li><code>big_points_vs</code> está muerto porque <code>densification_postfix</code> pone
+<code>max_radii2D</code> a cero en clone y en split, <b>justo antes</b> de que se lea.</li>
+<li><code>big_points_ws</code> está muerto porque su umbral es <b>exactamente</b> el techo del clamp de
+<code>get_scaling</code>, y <code>clamp(x, max=C) &gt; C</code> nunca es cierto.</li>
+<li>Se arregla guardando una copia del acumulador antes de clone/split, y bajando el umbral de mundo por
+debajo del techo (p. ej. <code>0,7 × techo</code>).</li>
+</ol>
+
+<p class="meta" style="margin-top:36px;border-top:1px solid var(--line);padding-top:14px">
+Documento del 2026-07-28. Todas las salidas de consola de este documento son reales, generadas por
+<code>scripts/juguete_prunes_de_tamano.py</code> (ejecútalo con el entorno <code>surfel_splatting_modificate</code>).
+Los diagramas son esquemáticos. La evidencia sobre el run2 real está en
+<code>docs/analisis_run2_y_codigo_completo.html</code> §2.2.
+</p>
+
+</div>
+</body>
+</html>

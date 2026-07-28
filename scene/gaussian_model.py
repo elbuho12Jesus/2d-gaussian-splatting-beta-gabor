@@ -90,6 +90,14 @@ class GaussianModel:
         self.scale_clamp_source = "env SCALE_CLAMP_FACTOR" if _scf else "DEFAULT (env var NO exportada)"
         print("[CLAMP] scale_clamp_factor = {:.4f}  <- {}".format(
             self.scale_clamp_factor, self.scale_clamp_source))
+        # FIX B (2026-07-28, docs/prunes_de_tamano_explicado.html): fracción del TECHO de
+        # escala que marca el umbral del prune por mundo (big_points_ws). El umbral
+        # histórico (0.1*extent) coincide exactamente con el techo del clamp de
+        # get_scaling, y "clamp(x, max=C) > C" es False SIEMPRE → el prune estaba muerto
+        # (world=0 en las 144 densificaciones de run2). El umbral tiene que quedar por
+        # DEBAJO del techo. Configurable por env var para A/B.
+        _wpf = os.environ.get("WS_PRUNE_FRACTION", "").strip()
+        self.ws_prune_fraction = float(_wpf) if _wpf else 0.7
         self.setup_functions()
 
     def capture(self):
@@ -626,7 +634,23 @@ class GaussianModel:
 
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        # FIX A (2026-07-28, docs/prunes_de_tamano_explicado.html): PRESERVAR el acumulado
+        # de max_radii2D (los nuevos arrancan en 0, aún no se han medido). Antes se
+        # reseteaba entero aquí, y como densify_and_prune llama a clone/split ANTES de
+        # leer big_points_vs, el prune por radio de pantalla leía siempre ceros
+        # (0 > umbral = False) → código muerto (screen=0 en las 144 densificaciones de
+        # run2). Mismo patrón que low_opacity_counter (abajo): concat, no reset.
+        # prune_points (línea 573) ya filtra max_radii2D, así que el tensor sigue
+        # alineado aunque densify_and_split reordene los splats al podar los padres.
+        # El reinicio de la ventana de acumulación se hace ahora en densify_and_prune,
+        # DESPUÉS de haber usado el dato.
+        n_new_r = new_xyz.shape[0]
+        n_total_r = self.get_xyz.shape[0]
+        if self.max_radii2D.shape[0] == n_total_r - n_new_r:
+            self.max_radii2D = torch.cat(
+                [self.max_radii2D, torch.zeros(n_new_r, device="cuda")])
+        else:
+            self.max_radii2D = torch.zeros((n_total_r), device="cuda")
         # low_opacity_counter: PRESERVAR el conteo de los splats existentes (los nuevos
         # arrancan en 0). Reiniciarlo a ceros aquí rompía el conteo sostenido en el
         # camino MCMC, porque add_new_gs llama a este postfix CADA paso → el contador
@@ -814,8 +838,20 @@ class GaussianModel:
         big_points_vs = None
         big_points_ws = None
         if max_screen_size:
+            # FIX A: max_radii2D ya NO se borra en densification_postfix, así que aquí
+            # llega el acumulado real de las últimas `densification_interval` iteraciones,
+            # alineado splat a splat (los creados por clone/split valen 0 → no se podan,
+            # que es lo correcto: todavía no se han medido en ninguna vista).
             big_points_vs = self.max_radii2D > max_screen_size
-            big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
+            # FIX B: el umbral debe quedar por DEBAJO del techo del clamp de get_scaling
+            # (scale_clamp_factor*spatial_lr_scale), o la comparación es inalcanzable.
+            # Se toma el mínimo con el umbral histórico (0.1*extent) para que el fix solo
+            # pueda podar MÁS agresivo, nunca menos, sea cual sea el factor del clamp.
+            ws_thr = 0.1 * extent
+            if self.spatial_lr_scale > 0:
+                ceil_s = self.scale_clamp_factor * self.spatial_lr_scale
+                ws_thr = min(ws_thr, self.ws_prune_fraction * ceil_s)
+            big_points_ws = self.get_scaling.max(dim=1).values > ws_thr
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
 
         if _dbg:
@@ -828,13 +864,30 @@ class GaussianModel:
                              f"[low_now={int(low_now.sum())} cnt_max={int(self.low_opacity_counter.max())}]")
             else:
                 alpha_lbl = f"opac<{min_opacity:g}={n_alpha}"
+            # Diagnóstico de los dos prunes de tamaño: si vuelven a salir screen=0 y
+            # world=0 SIEMPRE, es que se han vuelto a morir (ver el doc). r2d_max/s_max
+            # dicen si es que nadie llega al umbral o es que el criterio no dispara.
+            if max_screen_size:
+                r2d_max = float(self.max_radii2D.max()) if self.max_radii2D.numel() else 0.0
+                s_max = float(self.get_scaling.max()) if self.get_xyz.shape[0] else 0.0
+                size_lbl = (f", screen={n_screen}(thr={max_screen_size:g} r2d_max={r2d_max:.1f})"
+                            f", world={n_world}(thr={ws_thr:.4f} s_max={s_max:.4f})")
+            else:
+                size_lbl = f", screen={n_screen}, world={n_world}"
             print(f"[DENSIFY iter={iteration}] +clone={n1-n0} +split={n2-n1} "
                   f"(sel={(n2-n1)}) | PRUNE total={int(prune_mask.sum())} "
-                  f"[{alpha_lbl}, screen={n_screen}, world={n_world}] | "
+                  f"[{alpha_lbl}{size_lbl}] | "
                   f"N:{n_before}->{n_before-int(prune_mask.sum())}", flush=True)
 
         # ---- aplicar pruning ----
         self.prune_points(prune_mask)
+
+        # FIX A (2ª mitad): reiniciar la ventana de acumulación AHORA que el dato ya se
+        # ha usado. max_radii2D es una marca de agua alta; sin este reinicio sería el
+        # máximo de TODO el entrenamiento y un splat que fue grande una vez y luego
+        # encogió se podaría para siempre. Con el reinicio la ventana es exactamente
+        # "desde la última densificación", que es la semántica que describe el doc.
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
         torch.cuda.empty_cache()
 
