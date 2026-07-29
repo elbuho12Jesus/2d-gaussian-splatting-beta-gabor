@@ -137,9 +137,17 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # --- Beta-splatting style visibility filtering ---
     valid = radii > 1e-4
 
-    # --- Radius clipping to avoid oversized splats ---
-    radius_clip = 50.0  # empieza con 30–50 píxeles
-    radii = torch.clamp(radii, max=radius_clip)
+    # QUITADO 2026-07-29: `radii = torch.clamp(radii, max=50.0)`, que estaba aquí bajo el
+    # rótulo "radius clipping to avoid oversized splats". No evitaba ninguno: cuando el
+    # tensor llega a Python la imagen YA está rasterizada y el binning YA se hizo con el
+    # radio real (forward.cu:275 -> getRect), así que lo único que recortaba era el número
+    # que se informa. Su único consumidor es max_radii2D (train.py:214), o sea el prune por
+    # pantalla, y allí hacía dos daños: (1) "clamp(x,max=50) > 50" es False siempre -> ningún
+    # umbral >=50 podía disparar jamás, que es el mismo bug del umbral pegado al techo; y
+    # (2) borraba la magnitud -> r2d_max=50.0 clavado en las 119 densificaciones de run3,
+    # cuando el rango real medido va de 0 a 1600 px (= max(W,H), donde corta el guard de
+    # forward.cu:287). Medido sobre run2 con 30 vistas: el 4,85% de los splats visibles pasa
+    # de 50 px y el p99,9 está en 286 px. Detalle: docs/prunes_de_tamano_explicado.html §9.
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.

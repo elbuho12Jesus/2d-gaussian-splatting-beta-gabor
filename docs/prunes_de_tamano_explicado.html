@@ -64,7 +64,8 @@ ejecutar: <code>python scripts/juguete_prunes_de_tamano.py</code>.</p>
 <a href="#s5">5 · Bug A: el reset</a> ·
 <a href="#s6">6 · Bug B: el clamp</a> ·
 <a href="#s7">7 · El arreglo</a> ·
-<a href="#s8">8 · Cómo comprobarlo</a>
+<a href="#s8">8 · Cómo comprobarlo</a> ·
+<a href="#s9"><b class="lo">9 · radius_clip = 50</b></a>
 </div>
 
 <h2 id="s1">1 · La idea de fondo: dos maneras de ser «demasiado grande»</h2>
@@ -485,20 +486,10 @@ D solo lo pilla <code>vs</code>, y F lo pillan los dos. Si arreglas solo uno, se
 <p style="margin-bottom:0">En <code class="fileref">gaussian_renderer/__init__.py:141-142</code> hay esto:</p>
 <pre style="margin:10px 0"><code>radius_clip = 50.0
 radii = torch.clamp(radii, max=radius_clip)</code></pre>
-<p>Hoy es inofensivo porque <code>max_radii2D</code> está muerto. Pero en cuanto arregles el arreglo A,
-esta línea <b>trunca todos los radios a 50 px</b> antes de que lleguen al acumulador. Un splat que tape
-400 píxeles se registrará como 50. Seguiría superando el umbral de 20, así que el prune funcionaría… pero
-estarías midiendo mal a propósito y sin razón. <b>Quítala cuando apliques el arreglo A.</b></p>
-</div>
-
-<div class="note warn-box">
-<b>Y un aviso sobre el umbral de 20 px</b> (<code class="fileref">train.py:228</code>). El <code>radii</code>
-que devuelve el rasterizer está calculado con <code>cutoff = 3.0f</code>
-(<code class="fileref">forward.cu:238</code>), un valor heredado del kernel gaussiano. Como el kernel
-Beta/Gabor de este repo tiene soporte compacto en <code>r=1</code>, <b>ese radio es 3× el radio que de
-verdad se pinta</b>. O sea que «20 px» es en realidad «unos 6,7 px de huella real», que es bastante
-agresivo. Al reactivar el prune conviene <b>vigilar cuántos splats poda</b> en las primeras densificaciones:
-si son cientos de miles, sube el umbral (o arregla el <code>cutoff</code>, que es lo correcto de fondo).
+<p>Hoy es inofensivo porque <code>max_radii2D</code> está muerto. Pero en cuanto apliques el arreglo A,
+esta línea <b>trunca todos los radios a 50 px</b> antes de que lleguen al acumulador — y resulta que no es
+un detalle menor, sino el que decide si el prune de pantalla se puede calibrar o no. Tiene sección propia:
+<b><a href="#s9" style="color:var(--accent2)">§9</a></b>.</p>
 </div>
 
 <h2 id="s8">8 · Cómo compruebas que ha funcionado</h2>
@@ -520,13 +511,251 @@ apagados a propósito). El log ya imprime justo lo que necesitas
 <pre><code>grep -c "screen=0, world=0" logs/flowers3.log     # tiene que bajar de 144 a ~0
 grep -o "screen=[0-9]*" logs/flowers3.log | sort -u | head</code></pre>
 
+<div class="note danger-box">
+<b>Lo que salió (run3, 2026-07-28).</b> Los dos prunes resucitaron —<code>screen</code> y <code>world</code>
+dejaron de ser 0— y aun así el run <b>colapsó</b>: PSNR honesto <b>8,8</b> contra los 20,16 de run2. El
+culpable es el prune de pantalla con el umbral heredado de 20 px, que en la primera densificación con
+<code>size_threshold</code> activo se lleva el 35 % del modelo y no para.
+
+<br><br><b>Y el arreglo B tampoco sobrevive.</b> A/B honesto con <code>metrics.py</code> sobre dos runs de
+10.000 iteraciones (el reloj del run real escalado ×⅓, ~1,9 M splats, <code>-r 4</code>), con el prune de
+pantalla apagado y como único delta el de mundo:
+
+<pre style="margin:10px 0"><code>off    (= run2)  <b class="hi">19,906</b> / <b class="hi">0,5266</b> / <b class="hi">0,4135</b>
+world  (= fix B) <b class="lo">18,475</b> / <b class="lo">0,5007</b> / <b class="lo">0,4340</b>   &lt;- peor en las TRES</code></pre>
+
+y eso podando <b>32.843 splats en 39 densificaciones: el 1,7 % del modelo</b>. Los valores absolutos del
+brazo <code>off</code> están ya muy cerca del run2 real de 30.000 iters (20,16 / 0,554 / 0,390), así que el
+smoke reproduce el régimen bueno y no es un artefacto de configuración comprimida.
+
+<br><br><b>La conclusión, entonces, no es sobre umbrales sino sobre la premisa:</b> en una escena 360
+exterior <b>un splat grande es el fondo</b>, no un artefacto. Los dos prunes, cada uno a su escala, quitan
+cobertura — el de pantalla a lo bruto (35 %) y el de mundo con delicadeza (1,7 %), y los dos empeoran las
+tres métricas. Esto <em>invierte</em> la hipótesis de partida: los blobs gigantes del césped parecen ser
+cobertura necesaria, y el problema real sería el tercero del diagnóstico (falta de geometría), no el
+tamaño. Por eso <code>SIZE_PRUNE_MODE</code> tiene <code>off</code> por defecto.
+
+<br><br>La historia completa, con la medida del histograma de radios y por qué el
+<code>radius_clip</code> impide calibrar el umbral, está en <b><a href="#s9" style="color:var(--accent2)">§9</a></b>.
+El párrafo de abajo es lo que se esperaba <em>antes</em> de medirlo; se conserva porque su última frase
+resultó ser la correcta.
+</div>
+
 <div class="note ok-box">
-<b>Qué esperar del resultado.</b> Este arreglo <b>no toca el kernel</b>: es un A/B limpio contra run2 con
+<b>Qué esperábamos del resultado.</b> Este arreglo <b>no toca el kernel</b>: es un A/B limpio contra run2 con
 la misma configuración. Debería reducir los blobs gigantes del césped (2,05 % de la nube tiene escala
 &gt;0,15 con opacidad media 0,77). Sobre las métricas, la apuesta razonable es <b>SSIM y LPIPS arriba</b>
 —son las que castigan las manchas borrosas— y PSNR más o menos plano. Si el PSNR <em>baja</em> mucho,
 significa que esos splats gigantes estaban tapando huecos, y entonces el problema real es de cobertura
 (§2.3 del otro documento), no de tamaño.
+</div>
+
+<h2 id="s9">9 · <code>radius_clip = 50</code>: el termómetro con la escala cortada</h2>
+
+<p>Dos líneas en <code class="fileref">gaussian_renderer/__init__.py:141-142</code>, entre el rasterizer y
+el resto del código:</p>
+
+<pre><code># --- Radius clipping to avoid oversized splats ---
+radius_clip = 50.0  # empieza con 30–50 píxeles
+radii = torch.clamp(radii, max=radius_clip)</code></pre>
+
+<p>El comentario promete que esto <em>evita splats sobredimensionados</em>. No evita ninguno. Para ver por
+qué, hay que seguir de dónde viene ese número y a dónde va.</p>
+
+<h3>9.1 · Qué es <code>radii</code> exactamente</h3>
+
+<p>Lo calcula el rasterizer en CUDA, una vez por splat y por vista
+(<code class="fileref">forward.cu:275</code>):</p>
+
+<pre><code>radius = ceil(max(max(extent.x, extent.y), cutoff * FilterSize));
+...
+radii[idx] = (int)radius;</code></pre>
+
+<p><code>extent</code> es la semi-extensión de la caja que envuelve la elipse del surfel proyectado, medida
+a <code>cutoff = 3.0</code> «sigmas» (<code class="fileref">forward.cu:238</code>). O sea: <b>un entero, en
+píxeles, que dice cuánto ocupa el splat en esta imagen</b>. Dentro del kernel se usa para una única cosa,
+<code>getRect(point_image, radius, ...)</code>: decidir qué <em>tiles</em> toca el splat para el binning.</p>
+
+<p>Ese uso interno es intocable desde Python — cuando el tensor <code>radii</code> vuelve a
+<code>render()</code>, la imagen <b>ya está pintada</b> y el binning <b>ya se ha hecho</b>, los dos con el
+radio de verdad. El <code>clamp</code> llega después de la fiesta.</p>
+
+<div class="kill">
+<h3>Lo que el clamp NO hace</h3>
+<ul>
+<li><b>No</b> encoge ningún splat: la escala de la Gaussiana no se toca.</li>
+<li><b>No</b> cambia un solo píxel del render: el splat de 400 px se sigue pintando de 400 px.</li>
+<li><b>No</b> cambia el binning ni el coste: los tiles ya se repartieron con el radio real.</li>
+<li><b>No</b> toca la visibilidad: <code>valid = radii &gt; 1e-4</code> se evalúa en la línea
+<em>anterior</em> al clamp (<code class="fileref">__init__.py:138</code>).</li>
+</ul>
+<p style="margin-bottom:0">Lo único que recorta es <b>el número que se informa</b>. Es un termómetro al que
+le han serrado la escala por arriba: el enfermo tiene la fiebre que tiene, tú solo dejas de poder leerla.</p>
+</div>
+
+<h3>9.2 · Quién lee ese número</h3>
+
+<p>Un solo sitio en todo el repo. <code>radii</code> sale de <code>render()</code> dentro del
+<code>render_pkg</code>, lo recoge <code class="fileref">train.py:119</code> y muere aquí
+(<code class="fileref">train.py:213-215</code>):</p>
+
+<pre><code>if use_classic_densify:
+    gaussians.max_radii2D[visibility_filter] = torch.max(
+        gaussians.max_radii2D[visibility_filter], radii[visibility_filter])</code></pre>
+
+<p>Es decir: <b>el clamp existe exclusivamente para alimentar el prune por pantalla</b> — el mismo que
+llevaba muerto desde siempre por el bug A (<a href="#s5">§5</a>). Hasta hoy recortaba un número que nadie
+leía: cero efecto observable, en ningún run del historial. Al aplicar el arreglo A, esta línea entra en
+funcionamiento <b>por primera vez</b>.</p>
+
+<h3>9.3 · Cuánto se está tirando: la medida</h3>
+
+<p>No hay que suponerlo. Cargando el ply de <b>run2</b> (30.000 iteraciones, 6.829.700 splats) y
+renderizando 30 cámaras de train a la resolución de entrenamiento (1600×1054) <b>con el clamp
+desactivado</b> (<code>scripts/medir_radii_sin_clamp.py</code>), la marca de agua <code>max_radii2D</code>
+queda así:</p>
+
+<pre><code>splats vistos al menos una vez: 5.663.328 de 6.829.700
+mediana=10 px   p90=33 px   p99=100 px   p99.9=286 px   MAX=1600 px
+
+radio &gt;   20 px: 1.064.965   (<b class="lo">18,80 %</b> de los vistos)   &lt;- umbral actual
+radio &gt;   50 px:   274.927   (  4,85 %)                    &lt;- techo del clamp
+radio &gt;  100 px:    56.007   (  0,99 %)
+radio &gt;  200 px:    12.121   (  0,21 %)
+radio &gt;  400 px:     2.992   (  0,05 %)
+radio &gt;  800 px:       995   (  0,02 %)</code></pre>
+
+<p>El rango real de la variable es <b>[0, 1600]</b>, no [0, 50]: el propio rasterizer ya descarta cualquier
+splat cuyo radio supere <code>max(W,H)</code> (<code class="fileref">forward.cu:287</code>, el guard contra
+los OOM de «1050571 GiB»), y ese es justo el tope que se observa. <b>El clamp aplasta 285.960 splats
+—el 5,05 % de los visibles— en un único valor, borrando toda la diferencia entre uno de 50 px y uno de
+1600 px, que es la anchura entera de la imagen.</b></p>
+
+<figure>
+<svg viewBox="0 0 900 300" role="img" aria-label="El clamp aplasta el rango 50-1600 px en un solo valor">
+  <defs>
+    <linearGradient id="gr" x1="0" x2="1">
+      <stop offset="0%" stop-color="#7ee787"/><stop offset="45%" stop-color="#ffb454"/><stop offset="100%" stop-color="#ff7b72"/>
+    </linearGradient>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="#ff7b72"/>
+    </marker>
+  </defs>
+
+  <!-- fila A: radio real -->
+  <text x="60" y="34" fill="#9aa3b2" font-size="13" font-family="monospace">radio REAL del splat en pantalla (lo que mide de verdad)</text>
+  <rect x="60" y="44" width="780" height="20" rx="4" fill="url(#gr)" opacity=".85"/>
+  <g font-size="11" fill="#9aa3b2" font-family="monospace" text-anchor="middle">
+    <line x1="60"  y1="64" x2="60"  y2="72" stroke="#2a2f3c"/><text x="60"  y="86">1</text>
+    <line x1="303" y1="64" x2="303" y2="72" stroke="#2a2f3c"/><text x="303" y="86">10</text>
+    <line x1="377" y1="64" x2="377" y2="72" stroke="#2a2f3c"/><text x="377" y="86">20</text>
+    <line x1="474" y1="64" x2="474" y2="72" stroke="#2a2f3c"/><text x="474" y="86">50</text>
+    <line x1="547" y1="64" x2="547" y2="72" stroke="#2a2f3c"/><text x="547" y="86">100</text>
+    <line x1="620" y1="64" x2="620" y2="72" stroke="#2a2f3c"/><text x="620" y="86">200</text>
+    <line x1="694" y1="64" x2="694" y2="72" stroke="#2a2f3c"/><text x="694" y="86">400</text>
+    <line x1="767" y1="64" x2="767" y2="72" stroke="#2a2f3c"/><text x="767" y="86">800</text>
+    <line x1="840" y1="64" x2="840" y2="72" stroke="#2a2f3c"/><text x="840" y="86">1600</text>
+  </g>
+  <text x="450" y="103" fill="#6b7280" font-size="10.5" font-family="monospace" text-anchor="middle">escala logarítmica · píxeles</text>
+
+  <!-- percentiles medidos -->
+  <g font-size="10.5" font-family="monospace" fill="#9aa3b2" text-anchor="middle">
+    <text x="303" y="40">mediana</text>
+    <text x="547" y="40">p99</text>
+    <text x="640" y="40">p99,9 = 286</text>
+  </g>
+
+  <!-- zona aplastada -->
+  <rect x="474" y="118" width="366" height="26" rx="4" fill="#ff7b72" opacity=".13" stroke="#ff7b72" stroke-dasharray="4 3"/>
+  <text x="657" y="136" fill="#ff7b72" font-size="12" font-family="monospace" text-anchor="middle">285.960 splats viven aquí (5,05 %)</text>
+  <g stroke="#ff7b72" stroke-width="1.2" marker-end="url(#ar)" opacity=".8">
+    <path d="M540,150 C540,175 480,165 476,186" fill="none"/>
+    <path d="M620,150 C620,178 482,168 477,186" fill="none"/>
+    <path d="M700,150 C700,180 484,170 478,186" fill="none"/>
+    <path d="M800,150 C800,182 486,172 479,186" fill="none"/>
+  </g>
+
+  <!-- fila B: lo que ve el prune -->
+  <text x="60" y="215" fill="#9aa3b2" font-size="13" font-family="monospace">lo que llega a max_radii2D (después del clamp)</text>
+  <rect x="60" y="225" width="414" height="20" rx="4" fill="url(#gr)" opacity=".85"/>
+  <rect x="474" y="219" width="7" height="32" rx="2" fill="#ff7b72"/>
+  <rect x="481" y="225" width="359" height="20" rx="4" fill="#171a23" stroke="#2a2f3c" stroke-dasharray="3 3"/>
+  <text x="660" y="240" fill="#4b5563" font-size="12" font-family="monospace" text-anchor="middle">nunca ocurre — territorio inalcanzable</text>
+
+  <!-- umbrales -->
+  <line x1="377" y1="219" x2="377" y2="262" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="377" y="276" fill="#7ee787" font-size="11" font-family="monospace" text-anchor="middle">umbral 20</text>
+  <text x="377" y="290" fill="#7ee787" font-size="10" font-family="monospace" text-anchor="middle">poda 18,8 %</text>
+  <line x1="547" y1="219" x2="547" y2="262" stroke="#ffb454" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <line x1="620" y1="219" x2="620" y2="262" stroke="#ffb454" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <rect x="547" y="255" width="73" height="3" fill="#ffb454" opacity=".5"/>
+  <text x="600" y="276" fill="#ffb454" font-size="11" font-family="monospace" text-anchor="middle">umbrales que harían falta (100–200)</text>
+  <text x="600" y="290" fill="#ffb454" font-size="10" font-family="monospace" text-anchor="middle">bloqueados por el clamp</text>
+</svg>
+<figcaption>Medido sobre run2 (30.000 iters, 30 vistas de train, 1600×1054). Todo lo que está a la derecha
+de 50 px se colapsa en un único punto, y con ello desaparece la única evidencia que permitiría elegir un
+umbral sensato.</figcaption>
+</figure>
+
+<h3>9.4 · Los tres problemas, en orden de gravedad</h3>
+
+<div class="kill">
+<h3>Problema 1 — es el bug B otra vez, en otro archivo</h3>
+<p>Ya lo vimos en <a href="#s6">§6</a>, y vuelve idéntico:</p>
+<div class="eq" style="color:var(--danger)">clamp(x, max=50) &nbsp;&gt;&nbsp; 50 &nbsp;&nbsp;⟹&nbsp;&nbsp; <b>False, siempre</b></div>
+<p>Con esta línea puesta, <b>el mayor umbral de pantalla que puede disparar alguna vez es 49</b>. Y la
+medida de arriba dice que un umbral razonable —el que caza a los verdaderamente gigantes sin llevarse el
+fondo— está en <b>100–200 px</b> (0,99 % y 0,21 % de los splats). Es decir: el clamp bloquea exactamente el
+rango de umbrales que la evidencia señala como correcto. La misma trampa de dos defensas que se anulan,
+en un sitio donde nadie la buscaría porque vive en el <em>renderer</em>, no en el modelo.</p>
+</div>
+
+<div class="kill">
+<h3>Problema 2 — el diagnóstico miente</h3>
+<p>El log de densificación imprime <code>r2d_max</code>, el mayor radio acumulado. En las 119
+densificaciones de run3 sale, sin una sola excepción:</p>
+<pre style="margin:10px 0"><code>screen=406924(thr=20 <b class="lo">r2d_max=50.0</b>) ... screen=25946(thr=20 <b class="lo">r2d_max=50.0</b>)</code></pre>
+<p style="margin-bottom:0">Leído sin saber lo del clamp, eso parece «el splat más grande mide 50 px» —
+tranquilizador, un umbral de 20 sería razonable. Lo que de verdad significa es «hay al menos un splat de
+50 px <b>o más</b>, y no te voy a decir cuánto». Sin la magnitud no se puede responder a la única pregunta
+que importa al calibrar: ¿el prune se está llevando cuatro monstruos, o media escena?</p>
+</div>
+
+<div class="note warn-box">
+<b>Problema 3 — el <code>cutoff = 3.0</code> desplaza el significado del umbral.</b> El <code>radii</code>
+del rasterizer se mide a 3 «sigmas» (<code class="fileref">forward.cu:238</code>), valor heredado del kernel
+gaussiano, donde 3σ ≈ el borde visible. Pero el kernel Beta/Gabor de este repo tiene <b>soporte compacto en
+r = 1</b>: lo que se pinta acaba en torno a <b>un tercio</b> de ese radio. Así que «20 px» de umbral son
+unos <b>6,7 px de huella realmente pintada</b>, con una mediana de 10 px (≈3,3 px reales). El umbral que se
+copió del 3DGS no significa aquí lo mismo que allí: es <b>~3× más severo</b>. Esto es independiente del
+clamp, pero se suma: por eso conviene resolver también el A/B del <code>cutoff</code> antes de fijar
+ningún número.
+</div>
+
+<div class="fix">
+<h3>Qué hacer</h3>
+<ol>
+<li><b>Quitar las dos líneas</b> (o poner <code>radius_clip</code> en <code>max(W,H)</code>, que es donde
+el rasterizer ya corta de todos modos). No protegen de nada: ni del coste, ni de la memoria, ni de los
+splats grandes. Su único efecto es cegar al prune y al diagnóstico.</li>
+<li><b>Volver a medir</b> con el <code>r2d_max</code> ya sincero, y elegir el umbral con el histograma
+delante, no con el 20 heredado.</li>
+<li>Mientras el prune de pantalla siga apagado, quitarlas no cambia ni una métrica —
+<code>radii</code> no tiene ningún otro consumidor. Es un cambio gratis que solo mejora lo que ves.</li>
+</ol>
+</div>
+
+<div class="note danger-box">
+<b>Y el contexto en el que esto salió a la luz.</b> run3 (= run2 + los arreglos A y B) colapsó: el loss es
+idéntico al de run2 dígito a dígito hasta el <code>opacity_reset</code> de la iteración 3000, y en la
+densificación siguiente —la primera con <code>size_threshold</code> activo— el prune de pantalla se lleva
+<b>406.924 splats de 1.141.501 (35 %)</b> y a partir de ahí 25–45 k en cada densificación, para siempre. El
+loss se queda clavado en 0,4 (run2: 0,14), el modelo termina con 12,9 M splats en vez de 6,8 M, y el PSNR
+honesto cae a <b>8,8</b>. El prune por mundo, en cambio, se lleva 13.598 en el primer golpe y entre 0 y 15
+después: es inofensivo. La conclusión no es que el arreglo A esté mal implementado —hace exactamente lo que
+debía— sino que <b>el umbral de 20 px nunca había sido aplicado por nadie</b>, ni aquí ni en el 3DGS
+original, donde arrastra el mismo bug. Nunca fue calibrado: es un número heredado de un código en el que
+jamás llegó a ejecutarse. Y el <code>radius_clip</code> es lo que impide calibrarlo ahora.
 </div>
 
 <h2>Resumen en cinco frases</h2>
@@ -542,10 +771,17 @@ las dos porque cerca/lejos desacopla ambas medidas.</li>
 <code>get_scaling</code>, y <code>clamp(x, max=C) &gt; C</code> nunca es cierto.</li>
 <li>Se arregla guardando una copia del acumulador antes de clone/split, y bajando el umbral de mundo por
 debajo del techo (p. ej. <code>0,7 × techo</code>).</li>
+<li><b class="lo">Y una sexta, aprendida a golpes:</b> resucitar un prune no basta — hay que calibrar su
+umbral. El de mundo (arreglo B) es inofensivo, pero el de pantalla con el <code>20</code> heredado destruyó
+run3 (PSNR 8,8), y <code>radius_clip = 50</code> es justo lo que impide medir para elegir otro
+(<a href="#s9">§9</a>).</li>
 </ol>
 
 <p class="meta" style="margin-top:36px;border-top:1px solid var(--line);padding-top:14px">
-Documento del 2026-07-28. Todas las salidas de consola de este documento son reales, generadas por
+Documento del 2026-07-28; <b>§9 y las notas de resultado añadidas el 2026-07-28 tras run3</b>. Los números
+de §9 son medidos: el histograma de radios sale de renderizar el ply de run2 (30.000 iters) desde 30 cámaras
+de train con el <code>radius_clip</code> desactivado; el resto, del log <code>logs/flowers3.log</code>.
+Las demás salidas de consola son reales, generadas por
 <code>scripts/juguete_prunes_de_tamano.py</code> (ejecútalo con el entorno <code>surfel_splatting_modificate</code>).
 Los diagramas son esquemáticos. La evidencia sobre el run2 real está en
 <code>docs/analisis_run2_y_codigo_completo.html</code> §2.2.

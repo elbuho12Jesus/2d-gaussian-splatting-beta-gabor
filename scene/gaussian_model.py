@@ -98,6 +98,28 @@ class GaussianModel:
         # DEBAJO del techo. Configurable por env var para A/B.
         _wpf = os.environ.get("WS_PRUNE_FRACTION", "").strip()
         self.ws_prune_fraction = float(_wpf) if _wpf else 0.7
+        # Qué prunes de tamaño están activos: both | world | screen | off.
+        # Existe porque los dos NO son igual de peligrosos (run3, 2026-07-28):
+        #   - world (fix B): poda 13.598 en el primer disparo y 0-15 después. Inofensivo.
+        #   - screen (fix A): con el umbral heredado de 20 px se lleva el 35% del modelo en
+        #     la primera densificación con size_threshold activo y 25-45k en cada una de las
+        #     siguientes -> el loss se queda clavado en 0,4 y el PSNR honesto cae a 8,8
+        #     (run2: 20,16). El umbral de 20 px viene del 3DGS original, donde NUNCA llegó a
+        #     ejecutarse por el mismo bug del reset: no está calibrado por nadie.
+        # Default 'off' (2026-07-29): medido, el de mundo TAMBIÉN resta. A/B honesto con
+        # metrics.py sobre 10.000 iters (reloj del run real escalado x1/3, ~1,9M splats):
+        #     off    19.906 / 0.5266 / 0.4135
+        #     world  18.475 / 0.5007 / 0.4340   <- peor en las TRES
+        # y eso podando solo 32.843 splats en 39 densificaciones (el 1,7% del modelo). En una
+        # escena 360 exterior un splat grande es el FONDO, no un artefacto: quitarlo deja
+        # hueco. 'off' = comportamiento de run2, que sigue siendo el mejor conocido.
+        _spm = os.environ.get("SIZE_PRUNE_MODE", "").strip().lower()
+        self.size_prune_mode = _spm if _spm in ("both", "world", "screen", "off") else "off"
+        print("[PRUNE-TAM] size_prune_mode = {} (screen={}, world={}) | ws_prune_fraction = {:.2f}".format(
+            self.size_prune_mode,
+            "ON" if self.size_prune_mode in ("both", "screen") else "OFF",
+            "ON" if self.size_prune_mode in ("both", "world") else "OFF",
+            self.ws_prune_fraction))
         self.setup_functions()
 
     def capture(self):
@@ -837,28 +859,38 @@ class GaussianModel:
         prune_mask = prune_alpha_mask
         big_points_vs = None
         big_points_ws = None
+        # ws_thr se calcula siempre (el print de diagnóstico lo usa aunque el prune esté OFF).
+        # FIX B: el umbral debe quedar por DEBAJO del techo del clamp de get_scaling
+        # (scale_clamp_factor*spatial_lr_scale), o la comparación es inalcanzable.
+        # Se toma el mínimo con el umbral histórico (0.1*extent) para que el fix solo
+        # pueda podar MÁS agresivo, nunca menos, sea cual sea el factor del clamp.
+        ws_thr = 0.1 * extent
+        if self.spatial_lr_scale > 0:
+            ceil_s = self.scale_clamp_factor * self.spatial_lr_scale
+            ws_thr = min(ws_thr, self.ws_prune_fraction * ceil_s)
         if max_screen_size:
-            # FIX A: max_radii2D ya NO se borra en densification_postfix, así que aquí
-            # llega el acumulado real de las últimas `densification_interval` iteraciones,
-            # alineado splat a splat (los creados por clone/split valen 0 → no se podan,
-            # que es lo correcto: todavía no se han medido en ninguna vista).
-            big_points_vs = self.max_radii2D > max_screen_size
-            # FIX B: el umbral debe quedar por DEBAJO del techo del clamp de get_scaling
-            # (scale_clamp_factor*spatial_lr_scale), o la comparación es inalcanzable.
-            # Se toma el mínimo con el umbral histórico (0.1*extent) para que el fix solo
-            # pueda podar MÁS agresivo, nunca menos, sea cual sea el factor del clamp.
-            ws_thr = 0.1 * extent
-            if self.spatial_lr_scale > 0:
-                ceil_s = self.scale_clamp_factor * self.spatial_lr_scale
-                ws_thr = min(ws_thr, self.ws_prune_fraction * ceil_s)
-            big_points_ws = self.get_scaling.max(dim=1).values > ws_thr
-            prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+            if self.size_prune_mode in ("both", "screen"):
+                # FIX A: max_radii2D ya NO se borra en densification_postfix, así que aquí
+                # llega el acumulado real de las últimas `densification_interval` iteraciones,
+                # alineado splat a splat (los creados por clone/split valen 0 → no se podan,
+                # que es lo correcto: todavía no se han medido en ninguna vista).
+                # OJO: con size_prune_mode='screen'/'both' estás reactivando lo que mató a
+                # run3. No lo hagas sin haber calibrado max_screen_size (train.py:228).
+                big_points_vs = self.max_radii2D > max_screen_size
+                prune_mask = torch.logical_or(prune_mask, big_points_vs)
+            if self.size_prune_mode in ("both", "world"):
+                big_points_ws = self.get_scaling.max(dim=1).values > ws_thr
+                prune_mask = torch.logical_or(prune_mask, big_points_ws)
 
         if _dbg:
             n_before = self.get_xyz.shape[0]
             n_alpha = int(prune_alpha_mask.sum())
             n_screen = int(big_points_vs.sum()) if big_points_vs is not None else 0
             n_world = int(big_points_ws.sum()) if big_points_ws is not None else 0
+            # "OFF" != "0": el primero es que el criterio está apagado por size_prune_mode,
+            # el segundo es que está vivo y no ha encontrado nada (que fue el síntoma del bug).
+            scr_v = str(n_screen) if big_points_vs is not None else "OFF"
+            wld_v = str(n_world) if big_points_ws is not None else "OFF"
             if prune_sustain > 0:
                 alpha_lbl = (f"sostenido(>{prune_sustain})={n_alpha} "
                              f"[low_now={int(low_now.sum())} cnt_max={int(self.low_opacity_counter.max())}]")
@@ -870,10 +902,26 @@ class GaussianModel:
             if max_screen_size:
                 r2d_max = float(self.max_radii2D.max()) if self.max_radii2D.numel() else 0.0
                 s_max = float(self.get_scaling.max()) if self.get_xyz.shape[0] else 0.0
-                size_lbl = (f", screen={n_screen}(thr={max_screen_size:g} r2d_max={r2d_max:.1f})"
-                            f", world={n_world}(thr={ws_thr:.4f} s_max={s_max:.4f})")
+                # Histograma del radio en pantalla acumulado. Desde que se quitó el
+                # radius_clip=50 del renderer (2026-07-29) esto dice la VERDAD, y es lo que
+                # hace falta para calibrar max_screen_size: con el 20 heredado se podaba el
+                # 18,8% de los splats visibles (medido en run2) y eso mató a run3. Sale gratis
+                # aunque el prune de pantalla esté OFF -> run4 deja la calibración medida.
+                _r = self.max_radii2D[self.max_radii2D > 0]
+                if _r.numel():
+                    _QMAX = 16_000_000
+                    _rq = _r if _r.numel() <= _QMAX else _r[torch.randperm(_r.numel(), device=_r.device)[:_QMAX]]
+                    _q = torch.quantile(_rq, torch.tensor([0.5, 0.9, 0.99], device=_r.device))
+                    r2d_lbl = (f" r2d[p50={_q[0]:.0f} p90={_q[1]:.0f} p99={_q[2]:.0f} max={r2d_max:.0f}]"
+                               f" >20px={int((_r > 20).sum())} >50px={int((_r > 50).sum())}"
+                               f" >100px={int((_r > 100).sum())}")
+                else:
+                    r2d_lbl = " r2d[sin medidas]"
+                print(f"[RADIO2D iter={iteration}]{r2d_lbl}", flush=True)
+                size_lbl = (f", screen={scr_v}(thr={max_screen_size:g} r2d_max={r2d_max:.1f})"
+                            f", world={wld_v}(thr={ws_thr:.4f} s_max={s_max:.4f})")
             else:
-                size_lbl = f", screen={n_screen}, world={n_world}"
+                size_lbl = f", screen={scr_v}, world={wld_v}"
             print(f"[DENSIFY iter={iteration}] +clone={n1-n0} +split={n2-n1} "
                   f"(sel={(n2-n1)}) | PRUNE total={int(prune_mask.sum())} "
                   f"[{alpha_lbl}{size_lbl}] | "
