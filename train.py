@@ -396,13 +396,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             mem_probe("post_step", iteration, npts=gaussians.get_xyz.shape[0])
 
             # ✅ Clamp suave del parámetro b (no del beta)
-            # TECHO SUBIDO (run73, 2026-07-21): max 2.0 -> 2.7081. beta = 4*e^_beta,
-            # asi que 2.0 -> beta_techo 4*e^2 = 29.556 (viejo) y 2.7081 -> 4*e^2.7081 = 60 (nuevo).
-            # DEBE ir de la mano con get_beta (gaussian_model.py:184), que tambien clampa
-            # _beta a max=2.0 en el forward: si solo se sube este, get_beta sigue recortando
-            # a 29.556 y el experimento es un NO-OP (fallo tipo run65). Min = -4.0 en AMBOS.
+            # El techo vive en UN SOLO SITIO: GaussianModel.BETA_RAW_MIN/MAX
+            # (scene/gaussian_model.py). get_beta usa las mismas constantes, así que este
+            # clamp y el del forward no pueden volver a desincronizarse (fallo tipo run65:
+            # subir solo uno de los dos = NO-OP silencioso).
             with torch.no_grad():
-                gaussians._beta.data.clamp_(min=-4.0, max=2.0)
+                gaussians._beta.data.clamp_(min=gaussians.BETA_RAW_MIN, max=gaussians.BETA_RAW_MAX)
                 # ✅ (2026-07-26) MISMO patrón para la ESCALA: matar el trinquete del clamp.
                 # get_scaling recorta a techo = scale_clamp_factor*extent, pero torch.clamp
                 # NO propaga gradiente por encima del máximo -> un splat cuyo parámetro CRUDO
@@ -531,14 +530,15 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             # [BETA-TECHO] topados en el clamp SUPERIOR (run73). Leccion de
             # docs/techo_beta_clamp_superior.html: para saber si un techo MUERDE hay que
             # CONTAR topados, no mirar solo 'beta max' (que es un max sobre millones de
-            # muestras y satura con que UN solo splat llegue). Sin esto, subir el techo de
-            # 29.556 a 60 no se podria evaluar. beta>29.556 = cuantos superan el techo VIEJO.
+            # muestras y satura con que UN solo splat llegue).
+            # El techo se LEE de la constante, no se reescribe aqui: hardcodearlo fue lo que
+            # hizo que este print anunciara "beta~60" durante runs que clampaban a 29.556.
             _braw = scene.gaussians._beta.detach().flatten()
-            _ceil_raw = 2.7081                                  # max clamp -> beta_techo ~ 60
+            _ceil_raw = scene.gaussians.BETA_RAW_MAX
+            _ceil_beta = 4.0 * math.exp(_ceil_raw)
             _top = int((_braw >= _ceil_raw - 1e-3).sum().item())
-            _over_old = int((_beta > 29.556).sum().item())
-            print("[ITER {}] [BETA-TECHO] techo _beta={:.4f} (beta~60) | topados: {} ({:.4f}%) | beta>29.556 (techo viejo 4e2): {} ({:.4f}%)".format(
-                iteration, _ceil_raw, _top, 100.0 * _top / max(_n, 1), _over_old, 100.0 * _over_old / max(_n, 1)))
+            print("[ITER {}] [BETA-TECHO] techo _beta={:.4f} (beta~{:.3f}) | topados: {} ({:.4f}%)".format(
+                iteration, _ceil_raw, _ceil_beta, _top, 100.0 * _top / max(_n, 1)))
             # [A] diagnóstico del kernel Gabor (model.tex) con las restricciones
             # a_n >= 0 y sum(a_n) <= 1/2 (2026-07-25, proyección exacta en project_a_).
             # Aplica la REGLA DEL PROYECTO (mirar %topados / histograma, nunca el máximo,

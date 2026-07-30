@@ -231,13 +231,22 @@ class GaussianModel:
     def get_opacity(self):
         return self.opacity_activation(self._opacity)    
     
+    # ─── FUENTE ÚNICA del clamp de _beta ─────────────────────────────────────────
+    # beta = 4*e^_beta, así que _beta max 2.0 -> beta_techo 4*e^2 = 29.556 y
+    # 2.7081 -> 60 (el techo que probó run73, NO-OP confirmado: 0.0000% de topados).
+    # Antes esto vivía DUPLICADO en tres sitios (aquí, el clamp de train.py y el print
+    # [BETA-TECHO]) y se desincronizaron: el print decía "techo 2.7081 (beta~60)"
+    # mientras los dos clamps recortaban a 2.0, así que informaba de un experimento que
+    # NO se estaba corriendo (le costó una nota falsa al historial de run5, 2026-07-30).
+    # Para cambiar el techo se toca AQUÍ y solo aquí.
+    BETA_RAW_MIN = -4.0
+    BETA_RAW_MAX = 2.0
+
     @property
     def get_beta(self):
-        # min -4.0 (igualado con el clamp de train.py:399; el -6.0 previo era holgura
-        # muerta: train.py proyecta _beta a [-4,2] cada iter, nunca baja de -4).
-        # max 2.7081 (run73): beta_techo 4*e^2.7081 = 60 (viejo 4*e^2 = 29.556).
-        # Los DOS clamps deben moverse juntos o el forward recorta a 29.556 (NO-OP).
-        b = self._beta.clamp(min=-4.0, max=2.0)
+        # min -4.0 (igualado con el clamp de train.py; el -6.0 previo era holgura
+        # muerta: train.py proyecta _beta a [min,max] cada iter, nunca baja de -4).
+        b = self._beta.clamp(min=self.BETA_RAW_MIN, max=self.BETA_RAW_MAX)
         return (4.0 * torch.exp(b)).contiguous()
 
     # Coefs de Fourier de 1-|x| (a_n = 4/((2n-1)²π²)) para n=1,2,3, RENORMALIZADOS para
