@@ -24,10 +24,14 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 #  con los defaults es exactamente el bug de run5.
 # ───────────────────────────────────────────────────────────────────────────
 
-# ── ÚNICO bloque a editar entre runs ───────────────────────────────────────
-DATASET=flowers          # carpeta en Datasets/
-RUN=5                    # número de run
-ITER=30000               # iteración (checkpoint) a renderizar
+# ── USO ────────────────────────────────────────────────────────────────────
+#   ./render_server.sh 7            -> run7, iteración 30000
+#   ./render_server.sh 7 7000       -> run7, iteración 7000
+#   ./render_server.sh 7 30000 bonsai
+# Sin argumentos usa los valores por defecto de abajo.
+RUN=${1:-5}              # número de run
+ITER=${2:-30000}         # iteración (checkpoint) a renderizar
+DATASET=${3:-flowers}    # carpeta del dataset
 
 MODEL=output/m360/${DATASET}_beta_run${RUN}
 TRAIN_LOG=logs/${DATASET}${RUN}.log      # el log que dejó train.py
@@ -39,6 +43,29 @@ TRAIN_LOG=logs/${DATASET}${RUN}.log      # el log que dejó train.py
 # ───────────────────────────────────────────────────────────────────────────
 
 set -u
+
+# ── Dónde está el dataset ──────────────────────────────────────────────────
+# En el servidor es Datasets/<escena>; en local vive fuera del repo. El cfg_args
+# del modelo guarda el path del CONTENEDOR (/workspace/Datasets/...), que no existe
+# en ninguna de las dos máquinas, así que -s hay que pasarlo siempre.
+LOCAL_DS=/home/jesus/Documents/Gaussian_splatting/360_extra_scenes/${DATASET}
+if   [ -d "Datasets/${DATASET}" ]; then SOURCE="Datasets/${DATASET}"
+elif [ -d "$LOCAL_DS" ];           then SOURCE="$LOCAL_DS"
+else
+    echo "⛔ No encuentro el dataset '${DATASET}'. Probado:"
+    echo "   Datasets/${DATASET}   (servidor)"
+    echo "   ${LOCAL_DS}   (local)"
+    exit 1
+fi
+
+# ── Comprobaciones previas, para fallar pronto y con un mensaje útil ───────
+if [ ! -d "${MODEL}/point_cloud/iteration_${ITER}" ]; then
+    echo "⛔ No existe ${MODEL}/point_cloud/iteration_${ITER}"
+    echo "   Modelos disponibles:"; ls -d output/m360/*/ 2>/dev/null | sed 's/^/     /'
+    echo "   Si el run está en el servidor, bájalo antes con output/m360/cpsh_results.sh"
+    exit 1
+fi
+echo "════ run${RUN} · iter ${ITER} · dataset ${SOURCE} ════"
 
 # ═══ 1) Derivar la configuración del log del train ═════════════════════════
 if [ -f "$TRAIN_LOG" ]; then
@@ -104,7 +131,7 @@ echo
 # OJO: sin --render_path esta carpeta NO se regenera. Si re-renderizas por un fallo
 # de config, hay que rehacer traj Y test o te quedas con vídeos del kernel viejo
 # (pasó con run5: metrics.py solo lee test/, así que el PSNR salía bien y el vídeo mal).
-python render.py -s Datasets/${DATASET} \
+python render.py -s ${SOURCE} \
     -m $MODEL \
     --iteration $ITER \
     --skip_train --skip_test --skip_mesh \
@@ -115,7 +142,7 @@ python render.py -s Datasets/${DATASET} \
 # --skip_train --skip_mesh => exporta SOLO test (sin vídeo ni malla).
 # Salida: $MODEL/test/ours_$ITER/vis/ (render|GT), .../renders, .../gt
 # Es la carpeta que lee metrics.py.
-python render.py -s Datasets/${DATASET} \
+python render.py -s ${SOURCE} \
     -m $MODEL \
     --iteration $ITER \
     --skip_train --skip_mesh \
