@@ -67,6 +67,7 @@ namespace FORWARD
 		const float4* normal_opacity,
 		const float* beta,
 		const float* a,
+		const int gabor_mode,
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,

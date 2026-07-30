@@ -10,6 +10,7 @@
  */
 
 #include "forward.h"
+#include "gabor_kernel.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 
@@ -189,10 +190,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	
 	// Copy beta for later rasterization
 	beta_out[idx] = beta_in[idx];
-	// Copy los 3 coeficientes a_1,a_2,a_3 del kernel Gabor (por-Gaussiana)
-	a_out[3 * idx + 0] = a_in[3 * idx + 0];
-	a_out[3 * idx + 1] = a_in[3 * idx + 1];
-	a_out[3 * idx + 2] = a_in[3 * idx + 2];
+	// Copia del bloque Gabor por-Gaussiana: [a1,a2,a3,phi,b]. Ver gabor_kernel.h.
+	#pragma unroll
+	for (int _k = 0; _k < GABOR_STRIDE; _k++)
+		a_out[GABOR_STRIDE * idx + _k] = a_in[GABOR_STRIDE * idx + _k];
 
 	// Initialize radius and touched tiles to 0. If this isn't changed,
 	// this Gaussian will not be processed further.
@@ -324,6 +325,7 @@ renderCUDA(
 	const float4* __restrict__ normal_opacity,
 	const float* __restrict__ beta,
 	const float* __restrict__ a,
+	const int gabor_mode,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
@@ -354,7 +356,7 @@ renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float collected_beta[BLOCK_SIZE];
-	__shared__ float collected_a[3 * BLOCK_SIZE];
+	__shared__ float collected_a[GABOR_STRIDE * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
 	__shared__ float3 collected_Tw[BLOCK_SIZE];
@@ -397,9 +399,9 @@ renderCUDA(
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
 			collected_beta[block.thread_rank()] = beta[coll_id];
-			collected_a[3 * block.thread_rank() + 0] = a[3 * coll_id + 0];
-			collected_a[3 * block.thread_rank() + 1] = a[3 * coll_id + 1];
-			collected_a[3 * block.thread_rank() + 2] = a[3 * coll_id + 2];
+			#pragma unroll
+			for (int _k = 0; _k < GABOR_STRIDE; _k++)
+				collected_a[GABOR_STRIDE * block.thread_rank() + _k] = a[GABOR_STRIDE * coll_id + _k];
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
@@ -465,17 +467,40 @@ renderCUDA(
 			//                                tangencial (ahi f'=0 tambien) o en r=1, que el guard
 			//                                de arriba excluye; ya no en un anillo entero de f<0.
 			// Ver docs/diagnostico_run1_gabor.html y el bloque de project_a_ en train.py.
-			const float PI_ = 3.14159265358979323846f;
+			// MODO ÁTOMO (2026-07-30, gabor_mode 1/2): lo de arriba describe el modo LEGACY.
+			// En RADIAL/DIR el kernel se factoriza en envolvente x onda (ver gabor_kernel.h):
+			//   kernel = (1-r)^beta * S(phi*t),  t = r (radial) o t = u (direccional)
+			// y con a=0 => b=1 => S==1 => kernel = (1-r)^beta = el tent de run67 EXACTO.
+			const float PI_ = GABOR_PI;
 			float r  = sqrtf(r2);
-			float a1 = collected_a[3 * j + 0];
-			float a2 = collected_a[3 * j + 1];
-			float a3 = collected_a[3 * j + 2];
-			float f  = 0.5f + a1 * cosf(PI_ * r) + a2 * cosf(3.0f * PI_ * r) + a3 * cosf(5.0f * PI_ * r);
-			float f0 = 0.5f + a1 + a2 + a3;              // f(0): cos(0)=1
-			float f_safe  = fmaxf(f,  1e-6f);
-			float f0_safe = fmaxf(f0, 1e-6f);
-			float g = fmaxf(f_safe / f0_safe, 1e-6f);    // NO se topa a 1: lobulos > centro OK (Gabor)
-			float kernel = powf(g, beta_j);
+			float a1 = collected_a[GABOR_STRIDE * j + 0];
+			float a2 = collected_a[GABOR_STRIDE * j + 1];
+			float a3 = collected_a[GABOR_STRIDE * j + 2];
+			float kernel;
+			if (gabor_mode == GABOR_MODE_LEGACY)
+			{
+				float f  = 0.5f + a1 * cosf(PI_ * r) + a2 * cosf(3.0f * PI_ * r) + a3 * cosf(5.0f * PI_ * r);
+				float f0 = 0.5f + a1 + a2 + a3;              // f(0): cos(0)=1
+				float f_safe  = fmaxf(f,  1e-6f);
+				float f0_safe = fmaxf(f0, 1e-6f);
+				float g = fmaxf(f_safe / f0_safe, 1e-6f);    // NO se topa a 1: lobulos > centro OK (Gabor)
+				kernel = powf(g, beta_j);
+			}
+			else
+			{
+				const float phi = collected_a[GABOR_STRIDE * j + 3];
+				const float b   = collected_a[GABOR_STRIDE * j + 4];
+				// Interruptor de escala: la onda solo vive donde manda la geometría real.
+				// Si el splat es sub-píxel (manda el filtro paso-bajo rho2d) se queda en
+				// tent puro -> no puede pintar textura, y el backward de esa rama no cambia.
+				const bool modulate = (rho3d <= rho2d);
+				float dS_dt, dS_dphi;
+				const float t = (gabor_mode == GABOR_MODE_DIR) ? s.x : r;
+				const float S = modulate ? gabor_wave(a1, a2, a3, b, phi, t, dS_dt, dS_dphi) : 1.0f;
+				float dE_dr;
+				const float E = gabor_envelope(r, beta_j, dE_dr);
+				kernel = fmaxf(E * S, 0.0f);                 // S<0 -> el lóbulo negativo no pinta
+			}
 
 			// Eq. (2) from 3D Gaussian splatting paper.
 			// Obtain alpha by multiplying with Gaussian opacity
@@ -598,6 +623,7 @@ void FORWARD::render(
 	const float4* normal_opacity,
 	const float* beta,
 	const float* a,
+	const int gabor_mode,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
@@ -616,6 +642,7 @@ void FORWARD::render(
 		normal_opacity,
 		beta,
 		a,
+		gabor_mode,
 		final_T,
 		n_contrib,
 		bg_color,

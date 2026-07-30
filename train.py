@@ -554,7 +554,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             if _a.numel() > 0:
                 _asum = _a.sum(dim=1)
                 _top_a = [100.0 * (_a[:, k] <= 0.0).float().mean().item() for k in range(3)]
-                _pct_front = 100.0 * (_asum >= 0.5 - 1e-6).float().mean().item()
+                _lim = scene.gaussians.A_SUM_MAX
+                _pct_front = 100.0 * (_asum >= _lim - 1e-6).float().mean().item()
                 # a = 0 es un VÉRTICE del conjunto factible, y ahí f es CONSTANTE (=1/2) =>
                 # g == 1 en toda la huella => disco plano de opacidad uniforme, el mismo
                 # modo degenerado de run65 (kernel caja) pero por la vía de los a_n en vez
@@ -562,16 +563,40 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 # 0.04% con sum<0.01, así que existe pero es marginal).
                 _pct_box = 100.0 * (_asum < 0.05).float().mean().item()
                 _bad_neg = int((_a < 0).any(dim=1).sum().item())
-                _bad_sum = int((_asum > 0.5 + 1e-5).sum().item())
-                print(("[ITER {}] [A] sum(a_n) min/mean/max = {:.4f}/{:.4f}/{:.4f} (<=0.5; f0=1/2+sum) | "
+                _bad_sum = int((_asum > _lim + 1e-5).sum().item())
+                print(("[ITER {}] [A] sum(a_n) min/mean/max = {:.4f}/{:.4f}/{:.4f} (<={:.4f}) | "
                        "a1 {:.4f}±{:.4f} | a2 {:.4f}±{:.4f} | a3 {:.4f}±{:.4f} | "
-                       "topados a_n=0: {:.2f}%/{:.2f}%/{:.2f}% | sum en frontera 0.5: {:.2f}% | "
+                       "topados a_n=0: {:.2f}%/{:.2f}%/{:.2f}% | sum en frontera: {:.2f}% | "
                        "sum<0.05 (kernel casi plano): {:.3f}% | VIOLACIONES neg/sum: {}/{}").format(
-                    iteration, _asum.min().item(), _asum.mean().item(), _asum.max().item(),
+                    iteration, _asum.min().item(), _asum.mean().item(), _asum.max().item(), _lim,
                     _a[:, 0].mean().item(), _a[:, 0].std().item(),
                     _a[:, 1].mean().item(), _a[:, 1].std().item(),
                     _a[:, 2].mean().item(), _a[:, 2].std().item(),
                     _top_a[0], _top_a[1], _top_a[2], _pct_front, _pct_box, _bad_neg, _bad_sum))
+                # [GABOR-W] El interruptor de escala del modo átomo (docs §3.2): la onda
+                # solo aporta forma donde f·W >~ 1, con W = 2·s·sigma_env(beta) la ANCHURA
+                # EFECTIVA de la envolvente (NO el radio: con beta=3 el radio sobreestima
+                # ~2x). Si la masa se va a f·W < 0.5 el Gabor está APAGADO y las métricas
+                # no miden lo que se cree — y beta es aprendible, así que subirlo es la vía
+                # de escape barata del optimizador. Se mira el histograma, no el máximo.
+                _gm = scene.gaussians
+                if _gm.gabor_mode != 0 and _gm.gabor_freq_mode == "world":
+                    with torch.no_grad():
+                        _sc = _gm.get_scaling.detach()
+                        _sref = _sc[:, 0] if _gm.gabor_mode == 2 else torch.sqrt(
+                            (_sc[:, 0] * _sc[:, 1]).clamp_min(1e-12))
+                        _bt = _gm.get_beta.detach().squeeze(-1).clamp_min(1e-6)
+                        _sig = torch.sqrt(_bt + 1.0) / ((_bt + 2.0) * torch.sqrt(_bt + 3.0))
+                        _ext = _gm.spatial_lr_scale if _gm.spatial_lr_scale > 0 else 1.0
+                        _fW = (_gm.gabor_f1 / _ext) * _sref * 2.0 * _sig
+                        _q = torch.quantile(_fW.float(), torch.tensor(
+                            [0.1, 0.5, 0.9], device=_fW.device))
+                        print(("[ITER {}] [GABOR-W] f1={:.4f} | f*W p10/p50/p90 = "
+                               "{:.3f}/{:.3f}/{:.3f} | APAGADOS (f*W<0.5): {:.2f}% | "
+                               "encendidos (>1): {:.2f}%").format(
+                            iteration, _gm.gabor_f1, _q[0].item(), _q[1].item(), _q[2].item(),
+                            100.0 * (_fW < 0.5).float().mean().item(),
+                            100.0 * (_fW > 1.0).float().mean().item()))
                 # RIESGO RESIDUAL que sum(a_n)<=1/2 NO elimina: f >= 0 garantizado, pero f
                 # puede TOCAR cero tangencialmente DENTRO de la huella (a=[0,0,1/2] da
                 # f=1/2(1+cos5pi r), cero en r=0.2 y 0.6). Ahí f'=0 también, así que la

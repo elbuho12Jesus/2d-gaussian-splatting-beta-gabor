@@ -10,6 +10,7 @@
  */
 
 #include "rasterizer_impl.h"
+#include "gabor_kernel.h"
 #include <iostream>
 #include <fstream>
 #include <algorithm>
@@ -163,7 +164,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.transMat, P * 9, 128);
 	obtain(chunk, geom.normal_opacity, P, 128);
 	obtain(chunk, geom.beta, P, 128);
-	obtain(chunk, geom.a, P * 3, 128);
+	obtain(chunk, geom.a, P * GABOR_STRIDE, 128);   // [a1,a2,a3,phi,b]
 	obtain(chunk, geom.rgb, P * 3, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
@@ -211,6 +212,7 @@ int64_t CudaRasterizer::Rasterizer::forward(
 	const float* opacities,
 	const float* beta,
 	const float* a,
+	const int gabor_mode,
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
@@ -343,6 +345,7 @@ int64_t CudaRasterizer::Rasterizer::forward(
 		geomState.normal_opacity,
 		geomState.beta,
 		geomState.a,
+		gabor_mode,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		background,
@@ -387,7 +390,8 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dscale,
 	float* dL_drot,
 	bool debug,
-	bool freeze_low_beta)
+	bool freeze_low_beta,
+	int gabor_mode)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
@@ -436,7 +440,8 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dbeta,
 		dL_da,
 		dL_dcolor,
-		freeze_low_beta), debug)
+		freeze_low_beta,
+		gabor_mode), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,

@@ -23,6 +23,7 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& opacity,
 	const torch::Tensor& beta,
 	const torch::Tensor& a,
+	const int gabor_mode,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
 	const float scale_modifier,
@@ -65,7 +66,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	const bool debug,
-	const bool freeze_low_beta);
+	const bool freeze_low_beta,
+	const int gabor_mode);
 	
 torch::Tensor markVisible(
 		torch::Tensor& means3D,

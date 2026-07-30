@@ -120,6 +120,25 @@ class GaussianModel:
             "ON" if self.size_prune_mode in ("both", "screen") else "OFF",
             "ON" if self.size_prune_mode in ("both", "world") else "OFF",
             self.ws_prune_fraction))
+
+        # ─── Config del kernel Gabor en modo ÁTOMO (ver A_SUM_MAX y docs/rediseno_*) ───
+        _gk = os.environ.get("GABOR_KERNEL", "").strip().lower()
+        self.gabor_kernel_name = _gk if _gk in self._GABOR_MODE_IDS else "legacy"
+        self.gabor_mode = self._GABOR_MODE_IDS[self.gabor_kernel_name]
+        _gf = os.environ.get("GABOR_FREQ", "").strip().lower()
+        self.gabor_freq_mode = _gf if _gf in ("norm", "world") else "norm"
+        _gg = os.environ.get("GABOR_GAMMA", "").strip()
+        self.gabor_gamma = float(_gg) if _gg else 0.3
+        _gf1 = os.environ.get("GABOR_F1", "").strip()
+        self.gabor_f1 = float(_gf1) if _gf1 else 0.0      # 0 = autocalibrar en create_from_pcd
+        self.gabor_f1_source = "env GABOR_F1" if _gf1 else "autocalibrado (f*W=1 en el p90)"
+        _gkap = os.environ.get("GABOR_KAPPA", "").strip()
+        self.gabor_kappa = float(_gkap) if _gkap else 1.0
+        print("[GABOR] kernel={} (mode={}) | freq={} | gamma={:.3f} | f1={:g} <- {} | "
+              "kappa={:.3f} | sum(a_n) <= {:.4f}".format(
+                  self.gabor_kernel_name, self.gabor_mode, self.gabor_freq_mode,
+                  self.gabor_gamma, self.gabor_f1, self.gabor_f1_source,
+                  self.gabor_kappa, self.A_SUM_MAX))
         self.setup_functions()
 
     def capture(self):
@@ -245,7 +264,51 @@ class GaussianModel:
     #       Verificado por barrido: f cruza cero dentro de la huella <=> sum(a_n) > 1/2.
     # A es CONVEXO (caja ∩ semiespacio) -> se puede imponer con la proyección euclídea
     # EXACTA (project_a_), no con un clamp heurístico. Ver docs/diagnostico_run1_gabor.html.
-    A_SUM_MAX = 0.5
+    # ─── MODO ÁTOMO: envolvente × onda (2026-07-30) ────────────────────────────────────
+    # Rediseño completo con ecuaciones, medidas y gráficos:
+    #   docs/rediseno_kernel_gabor_adagar.html
+    # El kernel LEGACY (f/f0)^beta fusiona envolvente y onda en un solo factor: con a=0 da
+    # una CAJA (kernel plano), reproducir la envolvente consume el 93,3 % del presupuesto
+    # sum(a)<=1/2 y solo el 7,9 % del conjunto factible da un perfil decreciente.
+    # En modo ÁTOMO se factoriza como en AdaGaR:
+    #     kernel = (1-r)^beta * S(phi*t),   S = b + sum a_n cos((2n-1) phi t)
+    #     b = gamma + (1-gamma) * (1 - sum a_n)          <- pedestal (cambio 1)
+    #     t = r (radial)  |  t = u (direccional, cambio 3)
+    #     phi = f1 * s_u  (unidades de MUNDO, cambio 2)  |  phi = pi (adimensional)
+    # a = 0  =>  b = 1  =>  S == 1  =>  kernel = (1-r)^beta = el tent de run67 EXACTO:
+    # el baseline pasa a ser el punto NEUTRO del espacio de parámetros.
+    #
+    #   GABOR_KERNEL   legacy | radial | dir     (default legacy = comportamiento run4)
+    #   GABOR_FREQ     norm   | world            (norm: phi=pi; world: phi=f1*s_u)
+    #   GABOR_GAMMA    gamma del pedestal, default 0.3 (= AdaGaR)
+    #   GABOR_F1       f1 en rad por unidad de MUNDO. Default 0: se autocalibra por escena
+    #                  a f*W=1 en el p90 de las escalas (ver gabor_autocalibrate_f1).
+    #   GABOR_KAPPA    cambio 4: el tope de sum(a_n) se multiplica por kappa (default 1.0)
+    _GABOR_MODE_IDS = {"legacy": 0, "radial": 1, "dir": 2}
+
+    def a_init_row(self):
+        """Valor inicial de los a_n, por modo.
+
+        legacy: los coefs de Fourier de 1-|x| renormalizados (el kernel arranca ~tent,
+                pero es un punto INTERIOR concreto y consume el 93,3 % del presupuesto).
+        átomo : CEROS -> b=1 -> S==1 -> kernel = (1-r)^beta = run67 EXACTO. El baseline es
+                el punto neutro, así que aprender la forma solo puede sumar (y el eval
+                in-train de las primeras iters debe pisar el de run67: es el control).
+        """
+        return [0.0, 0.0, 0.0] if self.gabor_mode != 0 else list(self.A_FOURIER_INIT)
+
+    @property
+    def A_SUM_MAX(self):
+        """Tope de sum(a_n), dependiente del modo y del dial kappa (cambio 4).
+
+        legacy: 1/2         -> f(r) >= 0 en toda la huella (ver el bloque de abajo).
+        átomo : 1/(2-gamma) -> S(t) >= 1-(2-gamma)*sum(a) >= 0, el análogo exacto: es el
+                valor que hace que la onda no baje de cero teniendo en cuenta que el
+                pedestal ya sube cuando sum(a) sube. Con gamma=0.3 son 0.588.
+        kappa < 1 acota además el contraste valle/pico a (1-kappa)/(1+kappa).
+        """
+        base = 0.5 if self.gabor_mode == 0 else 1.0 / (2.0 - self.gabor_gamma)
+        return base * self.gabor_kappa
     # Tolerancia del test de suma. NO es cosmética: el init arranca EXACTAMENTE en
     # sum=0.5 y la propia proyección deja sum=0.5, así que en float32 una fracción de
     # los splats queda un epsilon POR ENCIMA del tope. Sin tolerancia (a) se contarían
@@ -270,6 +333,64 @@ class GaussianModel:
         # Gradiente: clamp(min=0) propaga grad para a_n >= 0 (frontera incluida), así que
         # un coeficiente que toca 0 puede volver a subir (no queda muerto).
         return self._a.clamp(min=0.0).contiguous()
+
+    # ─── Bloque Gabor que consume el rasterizer: (N,5) = [a1,a2,a3,phi,b] ──────────────
+    # phi y b se calculan AQUÍ, en Python y de forma diferenciable, a propósito: el
+    # rasterizer los trata como parámetros independientes y devuelve dL/dphi y dL/db, y es
+    # autograd quien compone la cadena hacia _a y _scaling. Así gamma y f1 no viven en CUDA
+    # (nada que recompilar para barrerlos) y el gradiente "crece y ganarás textura" llega
+    # solo a las escalas. Ver cuda_rasterizer/gabor_kernel.h.
+    @property
+    def get_gabor(self):
+        a = self.get_a                                       # (N,3), a_n >= 0
+        if self.gabor_mode == 0:                             # legacy: phi/b son ignorados
+            filler = torch.zeros_like(a[:, :1])
+            return torch.cat([a, filler, filler], dim=1).contiguous()
+        # Pedestal: b = gamma + (1-gamma)(1 - sum a_n).  a=0 -> b=1 -> S==1 -> tent puro.
+        b = self.gabor_gamma + (1.0 - self.gabor_gamma) * (1.0 - a.sum(dim=1, keepdim=True))
+        if self.gabor_freq_mode == "world":
+            s = self.get_scaling                             # (N,2), ya clampada
+            # DIR modula sobre el eje u -> su escala es s1. RADIAL modula sobre el radio,
+            # que en un surfel anisótropo no tiene una escala única: media geométrica.
+            s_ref = s[:, 0:1] if self.gabor_mode == 2 else torch.sqrt(
+                (s[:, 0:1] * s[:, 1:2]).clamp_min(1e-12))
+            # f1 va en rad por unidad de spatial_lr_scale (NO en px ni en unidades sueltas
+            # de mundo): es la única forma de que train y render coincidan, porque
+            # spatial_lr_scale es idéntico en ambos desde el fix A de load_ply. Lección
+            # run64: un kernel que se evalúa distinto en train y en render da haces de luz.
+            ext = self.spatial_lr_scale if self.spatial_lr_scale > 0 else 1.0
+            phi = (self.gabor_f1 / ext) * s_ref
+        else:
+            phi = torch.full_like(a[:, :1], math.pi)         # medio periodo en el soporte
+        return torch.cat([a, phi, b], dim=1).contiguous()
+
+    def gabor_autocalibrate_f1(self):
+        """Elige f1 para que el interruptor de escala (f·W = 1) caiga en el p90 de las
+        escalas actuales: el 10 % de surfels más grandes desarrolla textura y el resto
+        degenera al tent. W = 2·s·sigma_env(beta) es la ANCHURA EFECTIVA de la envolvente,
+        no el radio del soporte: con beta=3 el radio sobreestima el tamaño útil ~2x
+        (docs/rediseno_kernel_gabor_adagar.html §3.2, colapso verificado para beta 0,5-20).
+        No hace nada si GABOR_F1 vino por env var.
+        """
+        if self.gabor_mode == 0 or self.gabor_freq_mode != "world":
+            return
+        if self.gabor_f1 > 0:
+            return
+        with torch.no_grad():
+            s = self.get_scaling
+            s_ref = s[:, 0] if self.gabor_mode == 2 else torch.sqrt(
+                (s[:, 0] * s[:, 1]).clamp_min(1e-12))
+            s_p90 = float(torch.quantile(s_ref.float(), 0.9).item())
+            beta0 = float(self.get_beta.mean().item())
+            sig = math.sqrt(beta0 + 1.0) / ((beta0 + 2.0) * math.sqrt(beta0 + 3.0))
+            ext = self.spatial_lr_scale if self.spatial_lr_scale > 0 else 1.0
+            # f*W = 1  con  W = 2 * s_p90 * sigma_env   ->  f = 1/(2 s_p90 sigma_env);
+            # y f1 se guarda en unidades de extent (ver get_gabor).
+            self.gabor_f1 = ext / (2.0 * max(s_p90, 1e-9) * sig)
+        print("[GABOR] f1 autocalibrado = {:.4f} rad/extent  (s_p90={:.5f}, beta_mean={:.3f}, "
+              "sigma_env={:.4f}, extent={:.4f}).  EXPORTA GABOR_F1={:.4f} en el render o el "
+              "kernel NO será el mismo que en train.".format(
+                  self.gabor_f1, s_p90, beta0, sig, ext, self.gabor_f1))
 
     @torch.no_grad()
     def project_a_(self):
@@ -356,12 +477,13 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))       
         betas = torch.zeros((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda")
         self._beta = nn.Parameter(betas.requires_grad_(True))
-        # Coefs Gabor init a los de Fourier de 1-|x| -> kernel arranca en (1-r)^beta
-        a_init = torch.tensor(self.A_FOURIER_INIT, dtype=torch.float, device="cuda")
+        # Coefs Gabor: legacy -> Fourier de 1-|x|; átomo -> ceros (= tent exacto)
+        a_init = torch.tensor(self.a_init_row(), dtype=torch.float, device="cuda")
         a_init = a_init.unsqueeze(0).repeat(fused_point_cloud.shape[0], 1)  # (N,3)
         self._a = nn.Parameter(a_init.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self.low_opacity_counter = torch.zeros((self.get_xyz.shape[0],), device="cuda")
+        self.gabor_autocalibrate_f1()
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -528,7 +650,7 @@ class GaussianModel:
             for idx, attr_name in enumerate(a_names):
                 a_arr[:, idx] = np.asarray(plydata.elements[0][attr_name])
         else:
-            a_arr = np.asarray(self.A_FOURIER_INIT, dtype=np.float32)[None, :].repeat(xyz.shape[0], axis=0)
+            a_arr = np.asarray(self.a_init_row(), dtype=np.float32)[None, :].repeat(xyz.shape[0], axis=0)
         self._a = nn.Parameter(torch.tensor(a_arr, dtype=torch.float, device="cuda").requires_grad_(True))
         # Sanea plys de runs ANTERIORES a la restricción (2026-07-25): los del Gabor libre
         # pueden traer a_n<0 o sum(a_n)>1/2 -> f0 casi nulo y f cruzando cero dentro de la
@@ -631,7 +753,7 @@ class GaussianModel:
         if new_a is None:
             # fallback defensivo: coefs de Fourier (tent). Todas las rutas de creación
             # de abajo pasan new_a explícito heredando el del src.
-            new_a = torch.tensor(self.A_FOURIER_INIT, dtype=torch.float, device=new_xyz.device)
+            new_a = torch.tensor(self.a_init_row(), dtype=torch.float, device=new_xyz.device)
             new_a = new_a.unsqueeze(0).repeat(new_xyz.shape[0], 1)
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
@@ -1160,7 +1282,7 @@ class GaussianModel:
             self._sb_params.data[mask] = 0.0
             self._beta.data[mask] = 0.0
             # coefs Gabor -> reinit a los de Fourier (kernel válido = tent)
-            self._a.data[mask] = torch.tensor(self.A_FOURIER_INIT, dtype=self._a.dtype, device=dev)
+            self._a.data[mask] = torch.tensor(self.a_init_row(), dtype=self._a.dtype, device=dev)
             # buffers densificación
             if self.xyz_gradient_accum.shape[0] == mask.shape[0]:
                 self.xyz_gradient_accum[mask] = 0.0

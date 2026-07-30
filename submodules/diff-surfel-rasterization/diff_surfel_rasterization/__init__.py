@@ -70,6 +70,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             opacities,
             beta,
             a,
+            raster_settings.gabor_mode,
             scales,
             rotations,
             raster_settings.scale_modifier,
@@ -138,7 +139,8 @@ class _RasterizeGaussians(torch.autograd.Function):
                 binningBuffer,
                 imgBuffer,
                 raster_settings.debug,
-                raster_settings.freeze_low_beta)
+                raster_settings.freeze_low_beta,
+                raster_settings.gabor_mode)
 
         # Compute gradients for relevant tensors by invoking backward method
         if raster_settings.debug:
@@ -184,6 +186,12 @@ class GaussianRasterizationSettings(NamedTuple):
     # Toggle A/B del freeze de splats con beta<0.1 en el backward (FIX #2 run9).
     # Default False = comportamiento run9 (geometría/opacidad siempre vivas).
     freeze_low_beta : bool = False
+    # Modo del kernel Gabor (ver cuda_rasterizer/gabor_kernel.h):
+    #   0 LEGACY  (f/f0)^beta radial normalizado  -> run1..run4
+    #   1 RADIAL  (1-r)^beta * S(phi*r)           -> cambio 1 (pedestal)
+    #   2 DIR     (1-r)^beta * S(phi*u)           -> cambio 1 + cambio 3 (direccional)
+    # El tensor `a` es (N,5) = [a1,a2,a3,phi,b] en TODOS los modos; legacy ignora phi y b.
+    gabor_mode : int = 0
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

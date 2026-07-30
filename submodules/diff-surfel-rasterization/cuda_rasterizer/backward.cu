@@ -10,6 +10,7 @@
  */
 
 #include "backward.h"
+#include "gabor_kernel.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -166,7 +167,8 @@ renderCUDA(
 	float* __restrict__ dL_dbeta,
 	float* __restrict__ dL_da,
 	float* __restrict__ dL_dcolors,
-	const bool freeze_low_beta)
+	const bool freeze_low_beta,
+	const int gabor_mode)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -189,7 +191,7 @@ renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float collected_beta[BLOCK_SIZE];
-	__shared__ float collected_a[3 * BLOCK_SIZE];
+	__shared__ float collected_a[GABOR_STRIDE * BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
@@ -275,9 +277,9 @@ renderCUDA(
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
 			collected_beta[block.thread_rank()] = beta[coll_id];
-			collected_a[3 * block.thread_rank() + 0] = a[3 * coll_id + 0];
-			collected_a[3 * block.thread_rank() + 1] = a[3 * coll_id + 1];
-			collected_a[3 * block.thread_rank() + 2] = a[3 * coll_id + 2];
+			#pragma unroll
+			for (int _k = 0; _k < GABOR_STRIDE; _k++)
+				collected_a[GABOR_STRIDE * block.thread_rank() + _k] = a[GABOR_STRIDE * coll_id + _k];
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
@@ -328,19 +330,34 @@ renderCUDA(
 
 			float beta_j = collected_beta[j];
 			// ---- Kernel Gabor (recomputa lo mismo que el forward, forward.cu) ----
-			const float PI_ = 3.14159265358979323846f;
+			const float PI_ = GABOR_PI;
 			float r  = sqrtf(r2);
-			float a1 = collected_a[3 * j + 0];
-			float a2 = collected_a[3 * j + 1];
-			float a3 = collected_a[3 * j + 2];
+			float a1 = collected_a[GABOR_STRIDE * j + 0];
+			float a2 = collected_a[GABOR_STRIDE * j + 1];
+			float a3 = collected_a[GABOR_STRIDE * j + 2];
+			// --- legacy ---
 			float c1 = cosf(PI_ * r), c2 = cosf(3.0f * PI_ * r), c3 = cosf(5.0f * PI_ * r);
 			float f  = 0.5f + a1 * c1 + a2 * c2 + a3 * c3;
 			float f0 = 0.5f + a1 + a2 + a3;
 			float f_safe  = fmaxf(f,  1e-6f);
 			float f0_safe = fmaxf(f0, 1e-6f);
 			float g = fmaxf(f_safe / f0_safe, 1e-6f);
+			// --- atomo (gabor_mode 1/2): mismas expresiones que el forward ---
+			const float phi_j = collected_a[GABOR_STRIDE * j + 3];
+			const float b_j   = collected_a[GABOR_STRIDE * j + 4];
+			const bool  modulate = (gabor_mode != GABOR_MODE_LEGACY) && (rho3d <= rho2d);
+			const float t_mod = (gabor_mode == GABOR_MODE_DIR) ? s.x : r;
+			float dS_dt = 0.0f, dS_dphi = 0.0f, S_mod = 1.0f, E_env = 1.0f, dE_dr = 0.0f;
+			if (gabor_mode != GABOR_MODE_LEGACY)
+			{
+				if (modulate)
+					S_mod = gabor_wave(a1, a2, a3, b_j, phi_j, t_mod, dS_dt, dS_dphi);
+				E_env = gabor_envelope(r, beta_j, dE_dr);
+			}
 
-			float kernel = powf(g, beta_j);
+			float kernel = (gabor_mode == GABOR_MODE_LEGACY)
+			             ? powf(g, beta_j)
+			             : fmaxf(E_env * S_mod, 0.0f);
 			// FIX consistencia forward↔backward: el forward clampa alpha a 0.99
 			// (forward.cu:453, "avoid numerical instabilities"). El backward debe usar
 			// el MISMO alpha, o la reconstrucción T = T/(1-alpha) diverge para splats
@@ -439,7 +456,39 @@ renderCUDA(
 			// (para evitar NaN), NO la geometría/opacidad. Antes el `continue`
 			// saltaba TODO el resto del cuerpo del bucle -> congelaba posición/
 			// escala/rotación/opacidad de esos splats (ver doc backward_*).
-			if (beta_j >= 0.1f) {
+			// MODO ÁTOMO: kernel = E(r)*S(t), E=(1-r)^beta. Los gradientes se derivan
+			// directo del producto, sin la división por f0 del legacy:
+			//   ∂α/∂beta = opa*E*S*ln(1-r) = α_sin_clamp * ln(1-r)   (finito: r<1)
+			//   ∂α/∂a_n  = opa*E*cos(w_n t)      ∂α/∂b = opa*E      ∂α/∂phi = opa*E*dS/dphi
+			// El gate beta>=0.1 del legacy existía para que ln(g) no explotara con g→0;
+			// aquí ln(1-r) es finito en toda la huella, así que solo se aplica al grad de
+			// beta (por prudencia con el mismo clamp) y a/phi/b quedan siempre vivos.
+			if (gabor_mode != GABOR_MODE_LEGACY)
+			{
+				const float opaE = opa * E_env;
+				if (beta_j >= 0.1f)
+				{
+					float grad_beta = dL_dalpha * opaE * S_mod * logf(fmaxf(1.0f - r, 1e-6f));
+					grad_beta = fminf(fmaxf(grad_beta, -1e-3f), 1e-3f);
+					atomicAdd(&dL_dbeta[global_id], grad_beta);
+				}
+				if (modulate)
+				{
+					const float w1 = phi_j, w2 = 3.0f * phi_j, w3 = 5.0f * phi_j;
+					const float base = dL_dalpha * opaE;
+					const float ga1 = fminf(fmaxf(base * cosf(w1 * t_mod), -50.0f), 50.0f);
+					const float ga2 = fminf(fmaxf(base * cosf(w2 * t_mod), -50.0f), 50.0f);
+					const float ga3 = fminf(fmaxf(base * cosf(w3 * t_mod), -50.0f), 50.0f);
+					const float gph = fminf(fmaxf(base * dS_dphi, -50.0f), 50.0f);
+					const float gb  = fminf(fmaxf(base, -50.0f), 50.0f);
+					atomicAdd(&dL_da[global_id * GABOR_STRIDE + 0], ga1);
+					atomicAdd(&dL_da[global_id * GABOR_STRIDE + 1], ga2);
+					atomicAdd(&dL_da[global_id * GABOR_STRIDE + 2], ga3);
+					atomicAdd(&dL_da[global_id * GABOR_STRIDE + 3], gph);
+					atomicAdd(&dL_da[global_id * GABOR_STRIDE + 4], gb);
+				}
+			}
+			else if (beta_j >= 0.1f) {
 				// K = (f/f0)^beta = g^beta  ->  ∂α/∂beta = α * ln(g)
 				float d_alpha_d_beta = alpha * logf(g);
 				float grad_beta = dL_dalpha * d_alpha_d_beta;
@@ -469,9 +518,9 @@ renderCUDA(
 				float grad_a1 = fminf(fmaxf(a_coef * (c1 - g), -50.0f), 50.0f);
 				float grad_a2 = fminf(fmaxf(a_coef * (c2 - g), -50.0f), 50.0f);
 				float grad_a3 = fminf(fmaxf(a_coef * (c3 - g), -50.0f), 50.0f);
-				atomicAdd(&dL_da[global_id * 3 + 0], grad_a1);
-				atomicAdd(&dL_da[global_id * 3 + 1], grad_a2);
-				atomicAdd(&dL_da[global_id * 3 + 2], grad_a3);
+				atomicAdd(&dL_da[global_id * GABOR_STRIDE + 0], grad_a1);
+				atomicAdd(&dL_da[global_id * GABOR_STRIDE + 1], grad_a2);
+				atomicAdd(&dL_da[global_id * GABOR_STRIDE + 2], grad_a3);
 			}
 
 			// ∂α/∂rho = α * beta * (df/drho)/f   (generaliza -β·α/(1-ρ) del kernel viejo).
@@ -482,6 +531,10 @@ renderCUDA(
 			               + a3 * 5.0f * PI_ * sinf(5.0f * PI_ * r));
 			float r_safe = fmaxf(r, 1e-6f);
 			float df_drho = fprime / (2.0f * r_safe);
+			// MODO ÁTOMO: ∂α/∂r = opa*(dE/dr*S + E*dS/dr). En RADIAL la onda depende de r y
+			// entra entera por la cadena de rho; en DIR depende de u=s.x, así que su parte
+			// NO pasa por rho y se lleva aparte a dL_ds.x (dalpha_dsx_extra).
+			float dalpha_dsx_extra = 0.0f;
 			// NOTA (2026-07-25) sobre este 1/f_safe: era la singularidad §4.1 del diagnostico
 			// del run1 (con a_n libres f cruzaba CERO dentro de la huella en el 67% de los
 			// splats -> anillos enteros de pixeles con f pegado al piso 1e-6 -> ||dL/dmean2D||
@@ -495,7 +548,20 @@ renderCUDA(
 			//   d_alpha_d_rho = opa * beta * g^(beta-1) * f'(r) / (2r * f0)
 			// igual que ya se hizo con grad_a arriba. NO aplicado: exige recompilar y las
 			// restricciones ya cierran el caso masivo. Ver docs/diagnostico_run1_gabor.html.
-			float d_alpha_d_rho = alpha * beta_j * df_drho / f_safe;
+			float d_alpha_d_rho;
+			if (gabor_mode == GABOR_MODE_LEGACY)
+			{
+				d_alpha_d_rho = alpha * beta_j * df_drho / f_safe;
+			}
+			else
+			{
+				float dalpha_dr = opa * dE_dr * S_mod;
+				if (modulate && gabor_mode == GABOR_MODE_RADIAL)
+					dalpha_dr += opa * E_env * dS_dt;
+				d_alpha_d_rho = dalpha_dr / (2.0f * r_safe);
+				if (modulate && gabor_mode == GABOR_MODE_DIR)
+					dalpha_dsx_extra = opa * E_env * dS_dt;
+			}
 
 			// Account for fact that alpha also influences how much of
 			// the background color is added if nothing left to blend
@@ -525,7 +591,7 @@ renderCUDA(
 				//   equivale a la oficial gsplat: v_sigma = -v_alpha*opac*beta*(1-sigma)^(beta-1).
 				//   dL_d_rho ya es post-fondo (FIX #3), comun a ambas ramas.
 				const float2 dL_ds = {
-					dL_d_rho * 2.0f * s.x + dL_dz * Tw.x,
+					dL_d_rho * 2.0f * s.x + dL_dalpha * dalpha_dsx_extra + dL_dz * Tw.x,
 					dL_d_rho * 2.0f * s.y + dL_dz * Tw.y
 				};
 				const float3 dz_dTw = {s.x, s.y, 1.0};
@@ -843,7 +909,8 @@ void BACKWARD::render(
 	float* dL_dbeta,
 	float* dL_da,
 	float* dL_dcolors,
-	const bool freeze_low_beta)
+	const bool freeze_low_beta,
+	const int gabor_mode)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -869,6 +936,7 @@ void BACKWARD::render(
 		dL_dbeta,
 		dL_da,
 		dL_dcolors,
-		freeze_low_beta
+		freeze_low_beta,
+		gabor_mode
 		);
 }

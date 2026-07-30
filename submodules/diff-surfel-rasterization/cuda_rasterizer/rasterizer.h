@@ -45,6 +45,7 @@ namespace CudaRasterizer
 			const float* opacities,
 			const float* beta,
 			const float* a,
+			const int gabor_mode,
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
@@ -92,7 +93,8 @@ namespace CudaRasterizer
 			float* dL_dscale,
 			float* dL_drot,
 			bool debug,
-			bool freeze_low_beta);
+			bool freeze_low_beta,
+			int gabor_mode);
 	};
 };
 

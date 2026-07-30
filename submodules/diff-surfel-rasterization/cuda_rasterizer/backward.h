@@ -45,7 +45,8 @@ namespace BACKWARD
 		float* dL_dbeta,
 		float* dL_da,
 		float* dL_dcolors,
-		const bool freeze_low_beta);
+		const bool freeze_low_beta,
+		const int gabor_mode);
 
 	void preprocess(
 		int P, int D, int M,

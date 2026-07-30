@@ -20,6 +20,7 @@
 #include <memory>
 #include "cuda_rasterizer/config.h"
 #include "cuda_rasterizer/rasterizer.h"
+#include "cuda_rasterizer/gabor_kernel.h"
 #include <fstream>
 #include <string>
 #include <functional>
@@ -44,6 +45,7 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& opacity,
 	const torch::Tensor& beta,
 	const torch::Tensor& a,
+	const int gabor_mode,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
 	const float scale_modifier,
@@ -121,6 +123,7 @@ RasterizeGaussiansCUDA(
 		opacity.contiguous().data<float>(),
 		beta.contiguous().data<float>(),
 		a.contiguous().data<float>(),
+		gabor_mode,
 		scales.contiguous().data_ptr<float>(),
 		scale_modifier,
 		rotations.contiguous().data_ptr<float>(),
@@ -165,7 +168,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	const bool debug,
-	const bool freeze_low_beta)
+	const bool freeze_low_beta,
+	const int gabor_mode)
 {
 
   CHECK_INPUT(background);
@@ -201,7 +205,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dnormal = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
   torch::Tensor dL_dbeta = torch::zeros({P, 1}, means3D.options());
-  torch::Tensor dL_da = torch::zeros({P, 3}, means3D.options());
+  torch::Tensor dL_da = torch::zeros({P, GABOR_STRIDE}, means3D.options());
   torch::Tensor dL_dtransMat = torch::zeros({P, 9}, means3D.options());
   torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
   torch::Tensor dL_dscales = torch::zeros({P, 2}, means3D.options());
@@ -242,7 +246,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
 	  debug,
-	  freeze_low_beta);
+	  freeze_low_beta,
+	  gabor_mode);
   }
 
   return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dbeta, dL_da, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);

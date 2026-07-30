@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rediseño del kernel Gabor — lecciones de AdaGaR y cambios propuestos</title>
+<style>
+  :root{--bg:#0f1117;--panel:#171a23;--panel2:#1e222e;--ink:#e6e8ee;--muted:#9aa3b2;--accent:#6ea8fe;--accent2:#7ee787;--warn:#ffb454;--danger:#ff7b72;--code:#c9d1d9;--line:#2a2f3c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.65}
+  .wrap{max-width:1040px;margin:0 auto;padding:32px 24px 96px}
+  h1{font-size:1.9rem;margin:.2em 0 .1em;line-height:1.2}
+  h2{font-size:1.45rem;margin:2.2em 0 .5em;padding-top:.5em;border-top:1px solid var(--line)}
+  h3{font-size:1.12rem;margin:1.6em 0 .4em;color:var(--accent)}
+  h4{font-size:1.0rem;margin:1.2em 0 .3em;color:var(--warn)}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:0}
+  p{margin:.6em 0}
+  code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:.88em;background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--code)}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow:auto;font-size:.79rem;line-height:1.55}
+  pre code{background:none;border:none;padding:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .tag{display:inline-block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+  .ok{color:var(--accent2);border-color:#2c5} .bad{color:var(--danger);border-color:#a33} .warn{color:var(--warn);border-color:#a72}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:.9rem}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#10131b;color:var(--muted);font-weight:600}
+  tr:nth-child(even) td{background:#12151d}
+  .note{border-left:3px solid var(--accent);padding:.4em 0 .4em 14px;color:var(--muted);margin:14px 0}
+  .danger-box{border-left:3px solid var(--danger)} .ok-box{border-left:3px solid var(--accent2)} .warn-box{border-left:3px solid var(--warn)}
+  ul{margin:.5em 0;padding-left:1.2em} li{margin:.3em 0}
+  ol{margin:.5em 0;padding-left:1.3em} ol li{margin:.5em 0}
+  .eq{background:#0b0d13;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:12px 0;font-family:"JetBrains Mono",monospace;font-size:.92rem;color:var(--accent2);text-align:center;overflow-x:auto}
+  .eq .lbl{color:var(--muted);font-size:.78rem;display:block;margin-top:6px;text-align:center}
+  .meta{color:var(--muted);font-size:.85rem}
+  svg,img,canvas{max-width:100%;display:block}
+  b.hi{color:var(--accent2)} b.lo{color:var(--danger)} b.md{color:var(--warn)}
+  .verdict{background:linear-gradient(180deg,#2a1b1e,#211a1d);border:1px solid #5c3a3a;border-left:5px solid var(--danger);border-radius:12px;padding:20px 22px;margin:20px 0}
+  .verdict h3{margin-top:0;color:var(--danger)}
+  .good{background:linear-gradient(180deg,#16241c,#141d18);border:1px solid #2f5c40;border-left:5px solid var(--accent2)}
+  .good h3{color:var(--accent2)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  @media(max-width:820px){.grid2,.grid3{grid-template-columns:1fr}}
+  figure{margin:18px 0;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px}
+  figcaption{color:var(--muted);font-size:.85rem;margin-top:10px;line-height:1.5}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:.82rem;color:var(--muted);margin:8px 0 2px}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .sw{width:16px;height:3px;border-radius:2px;display:inline-block}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 20px;margin:20px 0}
+  .toc ol{columns:2;column-gap:28px} .toc a{color:var(--accent);text-decoration:none}
+  @media(max-width:820px){.toc ol{columns:1}}
+  .kbd{font-family:"JetBrains Mono",monospace;font-size:.8rem;color:var(--warn)}
+  .num{font-family:"JetBrains Mono",monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Rediseño del kernel Gabor</h1>
+<p class="sub">Qué aprendemos del repo <b>AdaGaR</b> (<i>Adaptive Gabor Video Representation</i>), por qué nuestro kernel resta
+—0,51 dB frente al tent, y cuatro cambios concretos con su ecuación, su justificación y su impacto simulado.</p>
+<p class="meta">2026-07-29 · datos medidos sobre <code>flowers_beta_run4</code> (6.247.803 splats, submuestreo ×4) y
+<code>flowers_beta_run2</code> · fuente del método comparado: <code>Adaptive_Gabor_Video_Representation/paper_Gabor/03_method.tex</code>,
+<code>submodules/dptr/dptr/gabor/src/alpha_blending_gabor.cu</code>, <code>model/dynamic_pchip_gabor_all.py</code>.</p>
+
+<div class="toc">
+<ol>
+<li><a href="#estado">El punto de partida: qué hace hoy nuestro kernel</a></li>
+<li><a href="#adagar">Qué hace AdaGaR y en qué se diferencia</a></li>
+<li><a href="#tamano">La pregunta del tamaño: ¿hay restricción sobre las Gaussianas?</a><br><span class="meta">3.1 · <a href="#acoplamiento">el acoplamiento tamaño↔kernel</a><br>3.2 · <a href="#compacta">¿y con soporte compacto (beta)?</a></span></li>
+<li><a href="#queaproxima">¿Qué aproxima cada kernel? Las dos Fourier</a></li>
+<li><a href="#c1">Cambio 1 — pedestal adaptativo (el importante)</a></li>
+<li><a href="#c2">Cambio 2 — frecuencia en píxeles</a></li>
+<li><a href="#c3">Cambio 3 — modulación direccional</a></li>
+<li><a href="#c4">Cambio 4 — dial de contraste κ</a></li>
+<li><a href="#mono">Cambio 5 — monotonía (y por qué va la última)</a></li>
+<li><a href="#plan">Plan de medida y resumen</a></li>
+</ol>
+</div>
+
+<!-- ================================================================= -->
+<h2 id="estado">1 · El punto de partida: qué hace hoy nuestro kernel</h2>
+
+<p>En <code>forward.cu:468-478</code>, para cada splat con <code>r = sqrt(rho) ∈ [0,1)</code>:</p>
+
+<div class="eq">
+f(r) = ½ + a₁·cos(πr) + a₂·cos(3πr) + a₃·cos(5πr)<br>
+f₀ = f(0) = ½ + a₁ + a₂ + a₃<br>
+g(r) = f(r) / f₀ &nbsp;&nbsp;→&nbsp;&nbsp; kernel(r) = g(r)<sup>β</sup> &nbsp;&nbsp;→&nbsp;&nbsp; α = min(0,99 , opacidad · kernel)
+<span class="lbl">Ec. (1) — kernel actual. Restricciones impuestas en Python (<code>project_a_</code>): aₙ ≥ 0 y Σaₙ ≤ ½</span>
+</div>
+
+<p>Las restricciones garantizan tres cosas: <code>f₀ ≥ ½</code> (no explota), <code>g ≤ 1</code> (ningún lóbulo por encima del
+centro) y <code>f ≥ 0</code> (sin alfa negativo). Lo que <b>no</b> garantizan es monotonía. Y esto es lo que ha salido:</p>
+
+<figure>
+  <canvas id="g1" height="360"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#ff7b72"></i> kernel medio medido de run4 (dato real del ply)</span>
+    <span><i class="sw" style="background:#6ea8fe"></i> kernel medio medido de run2</span>
+    <span><i class="sw" style="background:#7ee787"></i> tent (1−r)<sup>β</sup> con β=3,21 = run67</span>
+  </div>
+  <figcaption><b>Figura 1 — el kernel <i>promedio</i> del modelo ya son dianas.</b> No es un caso patológico de unos pocos
+  splats: promediando el perfil de 1,56 millones de splats de run4 salen tres lóbulos claros — mínimo en r≈0,25 (kernel 0,17),
+  rebote a 0,37 en r≈0,41, mínimo 0,13 en r≈0,56, rebote a 0,32 en r≈0,78. El tent, que es el baseline que hay que batir,
+  es la curva verde monótona.</figcaption>
+</figure>
+
+<p>Medido sobre el <code>.ply</code> de run4 (submuestreo ×4, 1.561.951 splats, perfil discretizado en 257 puntos de r):</p>
+
+<table>
+<tr><th>métrica</th><th>run2</th><th>run4</th><th>lectura</th></tr>
+<tr><td>splats <b>no monótonos</b></td><td class="num">85,98 %</td><td class="num">85,37 %</td><td>la forma aprendida rebota casi siempre</td></tr>
+<tr><td>con <b>≥2 mínimos locales</b></td><td class="num">67,09 %</td><td class="num">66,75 %</td><td>dos anillos o más</td></tr>
+<tr><td>contraste valle/pico (mediana)</td><td class="num">0,0392</td><td class="num">0,0402</td><td>el valle cae al <b>4 %</b> del pico</td></tr>
+<tr><td>contraste &lt; 0,10</td><td class="num">81,82 %</td><td class="num">79,75 %</td><td>4 de cada 5 splats con anillo casi negro</td></tr>
+<tr><td>Σaₙ medio · mediana</td><td class="num">0,4574 · 0,4907</td><td class="num">0,4518 · 0,4899</td><td>la mediana está pegada al tope ½</td></tr>
+<tr><td>Σaₙ <b>exactamente en la frontera</b> ½</td><td class="num">24,39 %</td><td class="num">24,02 %</td><td>1 de cada 4 splats en el borde del conjunto factible</td></tr>
+<tr><td>aₙ medios</td><td class="num">0,175 / 0,114 / 0,168</td><td class="num">0,174 / 0,111 / 0,166</td><td><b>a₃ &gt; a₂</b>: el espectro crece con la frecuencia (la tent decae 1/n²)</td></tr>
+<tr><td>«caja» (Σa &lt; 0,05)</td><td class="num">0,25 %</td><td class="num">0,44 %</td><td>pocos, pero el punto neutro del espacio está ahí (§5)</td></tr>
+</table>
+
+<div class="note danger-box">
+<b>La restricción que puso el suelo se convirtió en el problema.</b> <code>Σaₙ ≤ ½</code> se añadió para garantizar
+<code>f ≥ 0</code>. Pero el contraste valle/pico del kernel vale exactamente
+<code>(½ − Σaₙ) / (½ + Σaₙ)</code> en el peor caso: cuando Σaₙ → ½ el valle → <b>0</b>. El optimizador descubre que ahí
+compra PSNR y se planta en la frontera: mediana 0,4899 de 0,5, y el 24 % clavado en el tope.
+</div>
+
+<figure>
+  <canvas id="g5" height="300"></canvas>
+  <figcaption><b>Figura 2 — histograma medido de Σaₙ en run4.</b> 50 bins en [0, ½]. La masa se apila contra la pared derecha:
+  el último bin solo tiene 507.009 splats (32 % del total muestreado). El kernel no se ha quedado en un punto interior
+  cómodo — ha ido a buscar el máximo contraste que le permitimos.</figcaption>
+</figure>
+
+<!-- ================================================================= -->
+<h2 id="adagar">2 · Qué hace AdaGaR y en qué se diferencia</h2>
+
+<p>Su kernel (<code>alpha_blending_gabor.cu:110-139</code>, paper Ec. 4-5) es:</p>
+
+<div class="eq">
+α = opacidad · exp(−½ xᵀΣ⁻¹x) · S(x)<br>
+S(x) = b + (1/N)·Σᵢ ωᵢ·cos(fᵢ·⟨dᵢ,x⟩) &nbsp;&nbsp; con &nbsp; b = γ + (1−γ)·(1 − (1/N)Σᵢωᵢ)
+<span class="lbl">Ec. (2) — AdaGaR. N=2, fᵢ ∈ {1,2} rad/píxel, ωᵢ ∈ [0,1] vía hard-sigmoid STE, γ=0,3 en el código</span>
+</div>
+
+<p>Cuatro diferencias estructurales, ordenadas por lo que creo que pesan:</p>
+
+<table>
+<tr><th>#</th><th>eje</th><th>nuestro kernel</th><th>AdaGaR</th></tr>
+<tr><td>A</td><td><b>punto de degeneración</b></td><td>a=0 → kernel ≡ 1 = <b class="lo">CAJA</b></td><td>ω=0 → S≡1 → α = <b class="hi">Gaussiana exacta</b></td></tr>
+<tr><td>B</td><td><b>normalización</b></td><td>divide por f₀ (pico siempre 1) → sin pedestal, contraste total</td><td>pedestal b que sube cuando baja ω → ondulación sobre 1</td></tr>
+<tr><td>C</td><td><b>geometría</b></td><td>radial: f(r) → lóbulos = <b class="lo">anillos concéntricos</b></td><td>1-D sobre el eje mayor → lóbulos = <b>franjas orientadas</b></td></tr>
+<tr><td>D</td><td><b>frecuencia</b></td><td>normalizada al soporte: cos(πr), r∈[0,1] → mismo nº de anillos mida 3 px o 1600 px</td><td>en píxeles: λ ≈ 6,3 px y 3,1 px, <b>fija</b> → el nº de lóbulos escala con el tamaño en pantalla</td></tr>
+</table>
+
+<div class="note">
+Nótese lo que <b>no</b> restringen: con γ=0,3 su <code>S</code> vale entre <code>1 − 1,7·ω̄</code> y <code>1 + 0,3·ω̄</code>,
+o sea entre <b class="lo">−0,7</b> y <b>+1,3</b>. Permiten alfa negativo (lo tira el guard <code>alpha &lt; 1/255</code>) y
+lóbulos por encima del centro. Nosotros prohibimos ambas cosas. <b>La no-monotonía no es lo que nos separa de ellos</b> —
+su kernel tampoco es monótono nunca.
+</div>
+
+<figure>
+  <canvas id="g8" height="320"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#7ee787"></i> S<sub>max</sub> = 1 + γω̄</span>
+    <span><i class="sw" style="background:#ff7b72"></i> S<sub>min</sub> = 1 − (2−γ)ω̄</span>
+    <span><i class="sw" style="background:#6ea8fe"></i> pedestal b</span>
+  </div>
+  <figcaption><b>Figura 3 — el rango de S en AdaGaR (γ=0,3).</b> Con ω̄=0 todo colapsa a 1 (Gaussiana pura). El pedestal
+  <code>b</code> baja linealmente y abre la banda de modulación de forma simétrica-ish alrededor de 1. La zona sombreada roja
+  es donde S&lt;0 (α negativo descartado); empieza en ω̄ = 1/1,7 = 0,588.</figcaption>
+</figure>
+
+<!-- ================================================================= -->
+<h2 id="tamano">3 · La pregunta del tamaño: ¿hay restricción sobre las Gaussianas?</h2>
+
+<p><b>Directamente, no.</b> Lo busqué específicamente en su repo:</p>
+<ul>
+<li><code>get_scaling = torch.exp(scaling)</code>, <b>sin clamp</b> (<code>dynamic_pchip_gabor_all.py:203,266</code>).</li>
+<li><code>self.scale_threshold = 0.1</code> está declarado en <code>dynamic_pchip_gabor_all.py:222</code> y <b>no lo usa nadie</b>:
+código muerto (grep sobre todo el repo).</li>
+<li>El prune de tamaño es el de 3DGS sin tocar: <code>size_threshold = 20</code> fijo y <code>0.1·extent</code>
+(<code>atlas_gs_optimizer.py:427-431</code>) — el mismo par que nosotros medimos y descartamos en run3/run4.</li>
+<li>No hay ningún regularizador sobre ω ni sobre la escala en <code>loss.py</code> / <code>criterion.py</code>.</li>
+</ul>
+
+<div class="card">
+<h4>Por qué pueden permitírselo, y nosotros no</h4>
+<p>La condición «las Gaussianas deben ser pequeñas» que arrastramos de beta splatting no es una propiedad del kernel: viene de
+que la composición alfa <b>aproxima</b> la integral de <i>volume rendering</i>,</p>
+<div class="eq">
+1 − exp(−∫ σ(t) dt) ≈ α = opacidad · K(x)
+<span class="lbl">Ec. (3) — válida solo cuando la contribución de cada primitiva a lo largo del rayo es pequeña</span>
+</div>
+<p>AdaGaR trabaja en <b>cámara ortográfica fija</b>, mapeando ancho/alto/profundidad a X/Y/Z (§ <i>Camera Coordinate Space</i>
+del paper). Su blending es composición de capas 2D, <b>exacta por construcción</b>: no aproxima ninguna integral, así que un
+kernel de signo libre no rompe nada. Nuestro caso es una escena 360 real con Ec. (3) de por medio — por eso el signo y el
+tamaño sí nos importan.</p>
+</div>
+
+<h3 id="acoplamiento">3.1 · El acoplamiento tamaño↔kernel, en detalle</h3>
+
+<p class="note warn-box">Aviso previo, porque la frase corta engaña: la longitud de onda fija <b>no impone</b> ningún tamaño.
+No hay restricción, ni clamp, ni penalización. Lo que hace es que el kernel <b>signifique cosas distintas</b> según el tamaño del
+splat, y eso realimenta al optimizador. Es un acoplamiento <i>por gradiente</i>, no una restricción. Vamos por partes.</p>
+
+<h4>(a) La intuición: cuánta onda cabe dentro del splat</h4>
+
+<p>Con <code>f = 1 rad/px</code> la longitud de onda es <code>λ = 2π ≈ 6,28 px</code>, y <b>eso no cambia nunca</b>: ni con el
+splat, ni con la cámara, ni con la escena. Lo que sí cambia es cuánto de esa onda queda <i>dentro</i> del splat. La fase máxima
+que recorre el coseno dentro del soporte útil (tomemos 2σ) es:</p>
+
+<div class="eq">
+φ<sub>max</sub> = f · 2σ &nbsp;&nbsp;[rad] &nbsp;&nbsp;&nbsp;⟹&nbsp;&nbsp;&nbsp; periodos dentro del splat = f·σ/π
+<span class="lbl">Ec. (9) — el splat solo «ve» el trozo de coseno que le cabe</span>
+</div>
+
+<ul>
+<li><b>σ = 0,5 px</b> → φ<sub>max</sub> = 1 rad. El coseno pasa de 1 a 0,54: una rampa suave. <b>No hay ni un lóbulo.</b></li>
+<li><b>σ = 5 px</b> → φ<sub>max</sub> = 10 rad ≈ 1,6 periodos. El coseno sube, baja, cruza el cero, vuelve a subir:
+<b>hay franjas de verdad</b>.</li>
+</ul>
+
+<h4>(b) El criterio riguroso: <span class="num">f·σ ≈ 1</span></h4>
+
+<p>Multiplicar en el espacio es convolucionar en frecuencia. Una Gaussiana de anchura σ ocupa una banda de ancho ~1/σ; el
+coseno es un par de deltas en ±f. El producto <code>G·cos(fx)</code> es la Gaussiana espectral <b>duplicada y desplazada</b> a
+±f:</p>
+
+<div class="eq">
+f ≪ 1/σ &nbsp;→&nbsp; las dos copias se solapan → el resultado <b>es</b> otra Gaussiana (reescalada)<br>
+f ≫ 1/σ &nbsp;→&nbsp; las dos copias se separan → aparece estructura oscilatoria genuina
+<span class="lbl">Ec. (10) — el umbral está en f·σ ≈ 1, es decir σ ≈ λ/2π</span>
+</div>
+
+<p>«Degenera a Gaussiana» significa esto literalmente: <b>para un splat pequeño, la modulación es indistinguible de reescalar
+la Gaussiana</b>. No es que se parezca — es que no aporta ninguna forma nueva.</p>
+
+<h4>(c) Ejemplo de juguete, con números</h4>
+
+<p>Caso 1-D: <code>K(x) = exp(−x²/2σ²) · (b + ω·cos(f·x))</code> con ω=1, γ=0,3 → b=0,3, f=1 rad/px. Para cada σ ajusto
+<b>la mejor Gaussiana pura</b> <code>A·exp(−x²/2s²)</code> por mínimos cuadrados y mido cuánto de K queda sin explicar:</p>
+
+<table>
+<tr><th>σ (px)</th><th>f·σ</th><th>φ<sub>max</sub> = 2fσ</th><th>residuo vs la mejor Gaussiana</th><th>lectura</th></tr>
+<tr><td class="num">0,25</td><td class="num">0,25</td><td class="num">0,50 rad</td><td class="num">&lt; 0,2 %</td><td>la onda <b>no existe</b>: es una Gaussiana</td></tr>
+<tr><td class="num">0,50</td><td class="num">0,50</td><td class="num">1,00 rad</td><td class="num">0,32 %</td><td>idem</td></tr>
+<tr><td class="num">1,00</td><td class="num">1,00</td><td class="num">2,00 rad</td><td class="num">3,98 %</td><td><b>umbral</b>: empieza a despegar</td></tr>
+<tr><td class="num">2,00</td><td class="num">2,00</td><td class="num">4,00 rad</td><td class="num">23,7 %</td><td>estructura visible</td></tr>
+<tr><td class="num">5,00</td><td class="num">5,00</td><td class="num">10,0 rad</td><td class="num">67,2 %</td><td>Gabor genuino</td></tr>
+<tr><td class="num">10 – 50</td><td class="num">10 – 50</td><td class="num">20 – 100 rad</td><td class="num">92,1 % (satura)</td><td>ninguna Gaussiana se le parece</td></tr>
+</table>
+
+<figure>
+  <canvas id="t1" height="300"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#7ee787"></i> σ = 0,5 px → residuo 0,3 %</span>
+    <span><i class="sw" style="background:#ffb454"></i> σ = 2 px → 23,7 %</span>
+    <span><i class="sw" style="background:#ff7b72"></i> σ = 5 px → 67,2 %</span>
+    <span><i class="sw" style="background:#9aa3b2"></i> la mejor Gaussiana ajustada (discontinua)</span>
+  </div>
+  <figcaption><b>Figura 4 — el juguete, tres tamaños, misma onda.</b> Cada kernel está normalizado a su pico y dibujado sobre
+  su propio soporte (x/σ), para que se vean a la misma escala. El de σ=0,5 px es una campana lisa: su mejor Gaussiana (gris
+  discontinua) se le superpone. El de σ=5 px cruza el cero dos veces — ninguna Gaussiana puede hacer eso.</figcaption>
+</figure>
+
+<figure>
+  <canvas id="t2" height="330"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#7ee787"></i> forma nueva que aporta la onda (residuo)</span>
+    <span><i class="sw" style="background:#6ea8fe"></i> parte del gradiente ∂α/∂ω no explicable por ∂α/∂opacidad</span>
+    <span><i class="sw" style="background:#ff7b72"></i> nuestro kernel: 41,8 %, constante</span>
+  </div>
+  <figcaption><b>Figura 5 — el interruptor.</b> Eje x = f·σ (log). Ambas curvas cruzan cerca de f·σ = 1: por debajo, la onda
+  no aporta forma <i>ni</i> gradiente; por encima, aporta las dos cosas y satura. <b>La línea roja es nuestro kernel</b>: como
+  <code>r</code> está normalizado al soporte, el producto f·σ es constante por construcción y nunca entra en la zona apagada —
+  el mismo 41,8 % de forma irreducible para un splat de 3 px y para uno de 1600 px.</figcaption>
+</figure>
+
+<h4>(d) Por qué el optimizador lo «nota»: el gradiente de ω se apaga solo</h4>
+
+<p>Este es el mecanismo real del acoplamiento. Derivando la Ec. (2) respecto de ω y respecto de la opacidad:</p>
+
+<div class="eq">
+∂α/∂o = G(x)·S(x) &nbsp;&nbsp;&nbsp;&nbsp; ∂α/∂ω = o·G(x)·(1/N)·[cos(f·x) − (1−γ)]
+<span class="lbl">Ec. (11) — si cos(f·x) ≈ 1 en todo el soporte, el corchete es una constante → los dos gradientes son el mismo vector</span>
+</div>
+
+<p>Para un splat pequeño <code>cos(f·x) ≈ 1</code> en todo su soporte, así que el corchete vale ≈ γ: <b>subir ω hace exactamente
+lo mismo que subir la opacidad</b>. Los dos gradientes son colineales, ω es un parámetro redundante y el optimizador resuelve
+el ajuste por la vía barata. Medido sobre el juguete:</p>
+
+<table>
+<tr><th>σ (px)</th><th>f·σ</th><th>cos(ángulo) entre ∂α/∂ω y ∂α/∂o</th><th>parte de ∂α/∂ω que es <i>información nueva</i></th></tr>
+<tr><td class="num">0,25</td><td class="num">0,25</td><td class="num">+0,998</td><td class="num">5,9 %</td></tr>
+<tr><td class="num">0,50</td><td class="num">0,50</td><td class="num">+0,965</td><td class="num">26,4 %</td></tr>
+<tr><td class="num">1,00</td><td class="num">1,00</td><td class="num">+0,504</td><td class="num">86,4 %</td></tr>
+<tr><td class="num">2,00</td><td class="num">2,00</td><td class="num">+0,241</td><td class="num">97,1 %</td></tr>
+<tr><td class="num">≥ 5</td><td class="num">≥ 5</td><td class="num">≈ +0,38</td><td class="num">≈ 92,5 %</td></tr>
+</table>
+
+<div class="card">
+<h4>El resultado neto, y la respuesta a «cómo fija el tamaño»</h4>
+<p>Ninguna ecuación dice «σ ≥ algo». Lo que ocurre es un equilibrio en dos direcciones:</p>
+<ol>
+<li><b>Splats pequeños ⟹ el Gabor se apaga.</b> ω no tiene gradiente propio, se queda donde esté y el kernel es Gaussiano
+puro. Un splat sub-píxel <i>no puede</i> generar dianas aunque quiera: no hay artefacto posible.</li>
+<li><b>Textura fina ⟹ los splats no se dividen tanto.</b> Si una región necesita detalle de longitud de onda λ, la única forma
+de que un splat lo produzca es ser <b>lo bastante grande</b> (σ ≳ λ/2π). Así, en vez de fragmentarse en muchas primitivas
+diminutas —una por detalle, que es lo que hace 3DGS— un splat grande «paga» la textura con ω. Ahí está la ganancia de su
+método: <b>menos primitivas para la misma textura</b>.</li>
+</ol>
+<p>Es decir: la longitud de onda fija no fija el tamaño, <b>fija la escala a la que el kernel deja de ser Gaussiano</b>, y el
+tamaño de las primitivas se organiza alrededor de esa escala porque es donde el gradiente premia estar.</p>
+</div>
+
+<div class="verdict">
+<h3>Y en el nuestro este interruptor no existe</h3>
+<p>Nuestro argumento es <code>cos(πr)</code> con <code>r ∈ [0,1]</code> <b>normalizado al soporte</b>. El producto
+«frecuencia × tamaño» vale π <b>siempre</b>, por construcción: un splat de 3 px y uno de 1.600 px llevan exactamente el mismo
+número de oscilaciones. Nunca estamos en la zona apagada — <b>todos</b> nuestros splats están en régimen Gabor pleno.</p>
+<p>Medido: el kernel con los coeficientes medios de run4 tiene un <b>41,8 %</b> de forma que no se puede reproducir ajustando β
+en el tent. Es capacidad expresiva real, pero repartida por igual entre el splat de 3 px (donde apenas cabe medio píxel de
+detalle) y el splat de fondo de 1.600 px, <b>donde ese 41,8 % se convierte en un anillo de 400 px de radio en el césped</b>.
+Y como además la geometría es radial, no direccional, ese anillo no se parece a nada que exista en una escena real.</p>
+</div>
+
+<p>Con esto el cambio 2 (§6) deja de ser un capricho estético: es el interruptor que hoy nos falta. Y explica por qué
+el valor <code>f₁ = 1</code> de AdaGaR no se puede copiar tal cual — su umbral (σ ≈ 1 px) está calibrado a un vídeo, no a un
+fondo 360 cuyo p50 es 10 px.</p>
+
+<figure>
+  <div class="grid3">
+    <div><canvas id="h_norm10" width="240" height="240"></canvas><p class="meta" style="text-align:center">r = 3 px (splat pequeño)</p></div>
+    <div><canvas id="h_norm100" width="240" height="240"></canvas><p class="meta" style="text-align:center">r = 33 px (p90)</p></div>
+    <div><canvas id="h_norm400" width="240" height="240"></canvas><p class="meta" style="text-align:center">r = 400 px (fondo)</p></div>
+  </div>
+  <div class="grid3" style="margin-top:10px">
+    <div><canvas id="h_px10" width="240" height="240"></canvas><p class="meta" style="text-align:center">r = 3 px → liso</p></div>
+    <div><canvas id="h_px100" width="240" height="240"></canvas><p class="meta" style="text-align:center">r = 33 px → medio lóbulo</p></div>
+    <div><canvas id="h_px400" width="240" height="240"></canvas><p class="meta" style="text-align:center">r = 400 px → textura</p></div>
+  </div>
+  <figcaption><b>Figura 6 — frecuencia normalizada (arriba) vs frecuencia en píxeles (abajo).</b> Mismo splat con los
+  coeficientes medios de run4, renderizado a tres tamaños de pantalla; abajo con f₁ = 0,095 rad/px (§3.2). <b>Arriba</b>: los tres
+  son idénticos porque el patrón está atado al soporte — el splat de fondo de 400 px lleva sus anillos dibujados a todo lo
+  ancho, y eso es exactamente la diana que se ve en el césped. <b>Abajo</b>: el splat pequeño no completa medio periodo y queda
+  liso (degenera al tent); solo los grandes desarrollan estructura, y a la escala de la textura real de la imagen, no a la
+  escala del splat.</figcaption>
+</figure>
+
+<h3 id="compacta">3.2 · ¿Y si la envolvente es de soporte compacto (beta / tent)?</h3>
+
+<p>Es la pregunta correcta, porque nosotros no tenemos una Gaussiana: tenemos <code>(1−r)<sup>β</sup></code> con
+<code>r = √ρ ∈ [0,1)</code>. La respuesta tiene dos partes: <b>el mecanismo se traslada íntegro</b>, pero <b>el «tamaño» que
+actúa de interruptor no es el que parece</b>.</p>
+
+<h4>El mecanismo no depende de que la envolvente sea Gaussiana</h4>
+<p>Lo único que hace falta es la <b>asimetría de unidades</b>: la envolvente vive en coordenadas <i>normalizadas por la
+escala</i> (ρ, o r=√ρ) y la onda en unidades <i>absolutas</i> (píxeles, o unidades de mundo). Esa asimetría es la que crea el
+interruptor, y es indiferente a la forma concreta de la envolvente.</p>
+
+<div class="note danger-box">
+Corolario incómodo, y es exactamente nuestro problema actual: <b>si pones la onda en <code>r</code>, no hay interruptor</b>.
+<code>r</code> ya está normalizado por la escala, así que <code>cos(πr)</code> es adimensional y el splat de 3 px y el de
+1.600 px llevan lo mismo. Para que exista el interruptor hay que multiplicar <code>r</code> por una magnitud
+<b>dimensional</b> — el radio en píxeles R, o la escala en mundo s.
+</div>
+
+<h4>Pero el interruptor no lo dispara el radio: lo dispara la anchura efectiva</h4>
+<p>Repetí el juguete de §3.1 con envolvente compacta: <code>K(r) = (1−r)<sup>β</sup>·(b + ω·cos(f·R·r))</code>, ajustando el
+mejor tent <code>A·(1−r)<sup>β'</sup></code> y midiendo el residuo. Con el radio R como variable, <b>las curvas no colapsan</b>:</p>
+
+<table>
+<tr><th>R (px), f=1</th><th>β = 1</th><th>β = 3,21 (el nuestro)</th><th>β = 10</th></tr>
+<tr><td class="num">2</td><td class="num">4,4 %</td><td class="num">2,0 %</td><td class="num">0,5 %</td></tr>
+<tr><td class="num">5</td><td class="num">34,0 %</td><td class="num">12,7 %</td><td class="num">2,8 %</td></tr>
+<tr><td class="num">10</td><td class="num">63,9 %</td><td class="num">32,7 %</td><td class="num">9,9 %</td></tr>
+<tr><td class="num">50</td><td class="num">91,9 %</td><td class="num">82,9 %</td><td class="num">56,1 %</td></tr>
+</table>
+
+<p>El mismo splat de 10 px va de «Gabor pleno» (64 %) a «casi una tent» (9,9 %) solo cambiando β. La variable que <b>sí</b>
+colapsa las tres curvas en una es la <b>anchura efectiva de la envolvente</b>. Para <code>(1−r)<sup>β</sup></code>, vista como
+densidad en [0,1], es una Beta(1, β+1):</p>
+
+<div class="eq">
+σ<sub>env</sub> = √(β+1) / [(β+2)·√(β+3)] &nbsp;&nbsp;≈&nbsp;&nbsp; 1/β &nbsp;(β grande)<br>
+W = 2·R·σ<sub>env</sub> &nbsp;&nbsp;→&nbsp;&nbsp; <b>criterio universal del interruptor: f · W ≈ 1</b>
+<span class="lbl">Ec. (11b) — el mismo <code>f·σ ≈ 1</code> del caso Gaussiano, escrito con la anchura de la envolvente</span>
+</div>
+
+<table>
+<tr><th>β</th><th>σ<sub>env</sub></th><th>R* donde el residuo cruza el 5 %</th><th>f·R*</th><th>f·R*/β</th><th><b>f·W = f·2R*σ<sub>env</sub></b></th></tr>
+<tr><td class="num">0,5</td><td class="num">0,2619</td><td class="num">1,93</td><td class="num">1,93</td><td class="num">3,85</td><td class="num"><b class="hi">1,009</b></td></tr>
+<tr><td class="num">1</td><td class="num">0,2357</td><td class="num">2,10</td><td class="num">2,10</td><td class="num">2,10</td><td class="num"><b class="hi">0,990</b></td></tr>
+<tr><td class="num">3,21</td><td class="num">0,1580</td><td class="num">3,14</td><td class="num">3,14</td><td class="num">0,98</td><td class="num"><b class="hi">0,992</b></td></tr>
+<tr><td class="num">10</td><td class="num">0,0767</td><td class="num">6,77</td><td class="num">6,77</td><td class="num">0,68</td><td class="num"><b class="hi">1,039</b></td></tr>
+<tr><td class="num">20</td><td class="num">0,0434</td><td class="num">12,24</td><td class="num">12,24</td><td class="num">0,61</td><td class="num"><b class="hi">1,063</b></td></tr>
+</table>
+<p class="meta">β varía por un factor 40 y <code>f·W</code> se mantiene entre 0,99 y 1,06. Las columnas <code>f·R</code> y
+<code>f·R/β</code> no colapsan; la anchura efectiva sí.</p>
+
+<figure>
+  <canvas id="cp" height="330"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#7ee787"></i> β = 1</span>
+    <span><i class="sw" style="background:#ffb454"></i> β = 3,21 (el nuestro)</span>
+    <span><i class="sw" style="background:#ff7b72"></i> β = 10</span>
+    <span><i class="sw" style="background:#9aa3b2"></i> umbral 5 %</span>
+  </div>
+  <figcaption><b>Figura 7 — el mismo interruptor, con envolvente compacta.</b> <b>Izquierda</b>: en función de f·R las tres β
+  dan tres curvas distintas — el radio del soporte no predice nada por sí solo. <b>Derecha</b>: en función de f·W (anchura
+  efectiva) las tres colapsan en una sola. El interruptor existe igual que con la Gaussiana; solo hay que medir el tamaño
+  correcto.</figcaption>
+</figure>
+
+<h4>La consecuencia que hay que tener en cuenta: β es un <i>segundo</i> interruptor, y es aprendible</h4>
+
+<div class="card">
+<p>En AdaGaR la envolvente es una Gaussiana con un solo parámetro de forma (la escala), así que el interruptor tiene una sola
+llave. En nuestro kernel Beta hay <b>dos</b>: la escala <i>y</i> β. Y β lo aprende el modelo.</p>
+<ul>
+<li><b>Como oportunidad:</b> el propio splat puede decidir en qué régimen vive. Subir β concentra la masa cerca del centro y
+apaga la modulación; bajarlo la enciende. Es adaptación de frecuencia gratis, sin parámetros nuevos.</li>
+<li><b>Como riesgo:</b> es una <b>vía de escape para el optimizador</b>. Si la onda molesta, el camino barato es subir β y
+anularla — y entonces el experimento del Gabor «no hace nada» por una razón que no tiene que ver con la idea. Nuestro β medio
+ya es 3,21 y el techo del clamp está en 29,56 (= 4e²), así que hay margen de sobra para escaparse.</li>
+</ul>
+<p><b>Diagnóstico obligatorio si se hace el cambio 2:</b> loguear el histograma de <code>f·W</code> por splat, no solo el de β.
+Si la masa se va a <code>f·W &lt; 0,5</code>, el Gabor está apagado y la métrica no está midiendo lo que se cree.</p>
+</div>
+
+<h4>Y un matiz propio de 2DGS: ¿en qué unidad va la onda?</h4>
+<p>En 2DGS <code>r = √ρ</code> no vive en pantalla: vive <b>en el plano del surfel</b>, en unidades de sus escalas
+(s₁, s₂) — la intersección rayo-plano se hace en coordenadas locales, no con una cónica 2D. Así que al pasar a unidades
+absolutas hay dos opciones distintas, y no son equivalentes:</p>
+<table>
+<tr><th></th><th>onda en unidades de <b>mundo</b> (d = r·s)</th><th>onda en <b>píxeles</b> (d = r·R)</th></tr>
+<tr><td>qué mide el interruptor</td><td>el tamaño <b>físico</b> del surfel</td><td>el tamaño <b>aparente</b></td></tr>
+<tr><td>consistencia multivista</td><td><b class="hi">sí</b>, el kernel no depende de la cámara</td><td><b class="lo">no</b>, el mismo surfel cambia de forma según la vista</td></tr>
+<tr><td>coste en CUDA</td><td>trivial: s ya está en el struct</td><td>necesita el jacobiano de la proyección</td></tr>
+<tr><td>aliasing</td><td>hay que limitar la banda: de lejos λ<sub>pantalla</sub> puede bajar de 2 px</td><td>controlable por construcción</td></tr>
+</table>
+<p>Por el mismo argumento que el clamp de escala vive en mundo y no en pantalla, <b>recomiendo la columna de mundo</b>, y
+añadir un límite de banda (que la longitud de onda proyectada no baje de ~2 px) igual que 3DGS dilata las escalas.</p>
+
+<!-- ================================================================= -->
+<h2 id="queaproxima">4 · ¿Qué aproxima cada kernel? Las dos Fourier de este proyecto</h2>
+
+<p>Nuestra serie de cosenos nació con un objetivo declarado: <b>aproximar la <i>tent</i> 1−|x|</b>, el factor que vive dentro
+del kernel Beta de DBS. La de AdaGaR no aproxima ninguna función perfil — aproxima otra cosa, en otro nivel. Vale la pena
+ponerlo explícito porque de ahí sale el diagnóstico más limpio de todo el documento.</p>
+
+<h3>4.1 · Lo nuestro aproxima el PERFIL DEL KERNEL</h3>
+
+<p>La tent tiene desarrollo exacto en la base de cosenos impares:</p>
+<div class="eq">
+1 − |x| = ½ + Σ<sub>n impar</sub> (4/n²π²)·cos(nπx) &nbsp;&nbsp;&nbsp;⟹&nbsp;&nbsp;&nbsp; a<sub>tent</sub> = (0,4053 , 0,0450 , 0,0162)
+<span class="lbl">Ec. (12) — truncando a 3 términos: error máximo 0,0335 y f(0) = 0,9665 en vez de 1</span>
+</div>
+
+<p>El objeto aproximado es <b>una función de una variable</b>: el perfil radial del kernel. El error vive en el espacio de
+perfiles. Aprender los aₙ significa <i>moverse en un entorno de la tent</i>, y el sentido del ejercicio era: «si la tent es
+arbitraria, deja que el modelo elija su propio perfil».</p>
+
+<h3>4.2 · El de AdaGaR aproxima la SEÑAL</h3>
+
+<p>La función de Gabor no es una aproximación de nada concreto: es el <b>átomo elemental de una expansión tiempo–frecuencia</b>
+(Gabor, 1946). Su propiedad definitoria es que minimiza el producto de incertidumbres Δx·Δf, o sea que es la forma más compacta
+posible que está localizada <i>a la vez</i> en el espacio y en la frecuencia. En 2D es además el modelo clásico de los campos
+receptivos de la corteza visual (Daugman, 1985).</p>
+
+<p>Lo que se aproxima es <b>la imagen</b>. La suma compuesta de todas las primitivas debe reproducir la señal:</p>
+<div class="eq">
+I(x) ≈ Σ<sub>k</sub> T<sub>k</sub>·α<sub>k</sub>(x)·c<sub>k</sub> &nbsp;&nbsp; con &nbsp; α<sub>k</sub>(x) = o<sub>k</sub>·G<sub>k</sub>(x)·S<sub>k</sub>(x)
+<span class="lbl">Ec. (13) — el error se mide en el espacio de la imagen renderizada, no en el del kernel</span>
+</div>
+
+<p>Y de ahí sale su motivación práctica: una Gaussiana pura es un filtro paso-bajo — solo sabe sumar bultos suaves. Para
+representar una textura que oscila con periodo λ hacen falta <b>una primitiva por cresta</b>. Con un átomo de Gabor, <b>una sola
+primitiva lleva la frecuencia entera</b> del parche.</p>
+
+<h3>4.3 · Son dos aproximaciones en niveles distintos</h3>
+
+<table>
+<tr><th></th><th>nuestra serie de cosenos</th><th>el Gabor de AdaGaR</th></tr>
+<tr><td><b>qué aproxima</b></td><td>el perfil del kernel, (1−r)</td><td>la señal, I(x)</td></tr>
+<tr><td><b>dónde vive el error</b></td><td>espacio de funciones f: [0,1] → ℝ</td><td>espacio de la imagen renderizada</td></tr>
+<tr><td><b>la base</b></td><td>cos((2n−1)πr) sobre el radio</td><td>átomos G(x)·cos(f·x) sobre el plano</td></tr>
+<tr><td><b>qué significa el coeficiente</b></td><td>«cuánta forma-tent»</td><td>«cuánta frecuencia f»</td></tr>
+<tr><td><b>nivel</b></td><td><b>DENTRO</b> de una primitiva</td><td><b>ENTRE</b> primitivas</td></tr>
+</table>
+
+<div class="note ok-box">
+Nosotros metimos Fourier <i>dentro</i> de la primitiva, para describir su propia forma. Ellos meten Fourier <i>entre</i>
+primitivas, para describir la señal que componen. <b>No compiten: son ortogonales</b>, y se pueden tener las dos a la vez. Eso
+es exactamente lo que hace la Ec. (5).
+</div>
+
+<h3>4.4 · El diagnóstico: perdimos la envolvente</h3>
+
+<p>La forma canónica de un átomo de Gabor es un <b>producto de dos factores con papeles distintos</b>:</p>
+<div class="eq">
+átomo = <span style="color:var(--muted)">envolvente(x)</span> × <span style="color:var(--accent)">onda(x)</span>
+&nbsp;&nbsp;→&nbsp;&nbsp; la envolvente dice <i>dónde</i> está la energía; la onda dice <i>qué frecuencia</i> lleva
+<span class="lbl">Ec. (14) — con envolvente Gaussiana es el Gabor clásico; con envolvente (1−r)<sup>β</sup> es lo mismo con soporte compacto</span>
+</div>
+
+<p><b>Nuestro kernel no tiene envolvente.</b> El decaimiento y la oscilación salen del <i>mismo</i> <code>Σaₙcos</code>: si pongo
+los aₙ a cero, el kernel no decae — se queda plano (la caja de la §5). Es decir, los coeficientes tienen que hacer <b>dos
+trabajos incompatibles con un solo presupuesto</b>. Y el presupuesto se lo come el primero:</p>
+
+<figure>
+  <canvas id="bud" height="220"></canvas>
+  <figcaption><b>Figura 8 — el presupuesto de Σaₙ.</b> Reproducir la envolvente (la tent) cuesta Σa = 0,4665 de los 0,5
+  disponibles: el <b>93,3 %</b> del presupuesto se gasta solo en conseguir que el kernel <i>decaiga</i>, y queda un 6,7 % para
+  todo lo demás. Con el pedestal de la Ec. (5) la envolvente la da <code>(1−r)<sup>β</sup></code> gratis y el presupuesto entero
+  queda libre para lo que la base sabe hacer: frecuencia.</figcaption>
+</figure>
+
+<p>Esto explica de paso por qué la monotonía era tan difícil de conseguir: exige que a₁ domine sobre a₂ y a₃, lo que en el
+símplex <code>{aₙ≥0, Σaₙ≤½}</code> es una esquina estrecha. Medido por Monte Carlo sobre el conjunto factible (malla de
+4.097 puntos en r, convergido):</p>
+
+<table>
+<tr><th>parametrización</th><th>fracción del conjunto factible con kernel decreciente</th></tr>
+<tr><td>actual, <code>(f/f₀)<sup>β</sup></code></td><td class="num"><b class="lo">7,9 %</b> — la monotonía es una esquina rara</td></tr>
+<tr><td>con pedestal, <code>(1−r)<sup>β</sup>·S(r)</code></td><td class="num"><b class="hi">70,8 %</b> — la monotonía es el caso típico</td></tr>
+</table>
+<p class="meta">(El análisis previo daba 2,89 % para el caso actual con un criterio de monotonía más estricto; el orden de
+magnitud es el mismo — una esquina pequeña frente a la mayoría del conjunto.)</p>
+
+<figure>
+  <div class="grid2">
+    <div><canvas id="dec1" height="290"></canvas></div>
+    <div><canvas id="dec2" height="290"></canvas></div>
+  </div>
+  <figcaption><b>Figura 9 — con envolvente y sin ella.</b> <b>Izquierda:</b> la Ec. (5) factoriza — la envolvente gris marca
+  dónde hay energía, la onda azul marca la frecuencia, y su producto (verde) es un átomo de Gabor de soporte compacto.
+  <b>Derecha:</b> hoy los mismos coeficientes hacen los dos trabajos, así que hay que <i>elegir</i>: con
+  <code>a<sub>tent</sub></code> se consigue la envolvente pero casi nada de frecuencia (curva gris, prácticamente el tent), y
+  con los coeficientes que run4 aprendió se consigue frecuencia pero la envolvente se pierde por el camino (curva roja: los
+  anillos). No hay ningún punto del espacio que dé las dos cosas.</figcaption>
+</figure>
+
+<h3>4.5 · Lectura de run4 a esta luz</h3>
+
+<div class="card">
+<p>Los coeficientes que aprendió run4 son <code>a = (0,174 , 0,111 , 0,166)</code>: <b>a₃ &gt; a₂</b>, un espectro que
+<i>crece</i> con la frecuencia, exactamente lo contrario del 1/n² de la tent. Traducido: <b>el modelo dejó de aproximar el
+perfil y se puso a hacer frecuencia</b>. Intentó convertirse en un Gabor por su cuenta.</p>
+<p>Y lo hizo con las dos cosas mal:</p>
+<ul>
+<li><b>La geometría equivocada</b> — nuestra base es radial, así que su «frecuencia» son <b>anillos concéntricos</b>, no franjas.
+Ninguna escena real contiene anillos concéntricos (§7).</li>
+<li><b>Sin interruptor de escala</b> — como <code>r</code> está normalizado, esos anillos aparecen igual en un splat de 3 px que
+en uno de 1.600 px (§3.1).</li>
+<li><b>Y pagando con la envolvente</b> — para meter a₃ tuvo que quitar de a₁, así que el perfil dejó de decaer de forma
+monótona y aparecieron los valles al 4 % del pico.</li>
+</ul>
+<p><b>Conclusión:</b> el cambio 1 no es un arreglo de parametrización, es <b>restaurar la Ec. (14)</b>: separar envolvente y
+onda, que es lo que define un átomo de Gabor. Una vez separadas, el cambio 3 le da la geometría correcta (franjas) y el
+cambio 2 el interruptor de escala. Los tres son la misma idea vista desde tres ángulos.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2 id="c1">5 · Cambio 1 — pedestal adaptativo <span class="tag ok">prioridad 1</span></h2>
+
+<h3>El problema en una línea</h3>
+<p>Con <code>a = 0</code> nuestro kernel vale <code>f ≡ ½</code>, <code>f₀ = ½</code>, <code>g ≡ 1</code>,
+<code>kernel = 1<sup>β</sup> ≡ 1</code>: un <b>disco de opacidad uniforme</b>. El punto neutro de nuestro espacio de parámetros
+—el que el optimizador encuentra cuando el gradiente sobre <code>a</code> es pequeño, y que está <i>en la frontera</i>
+<code>aₙ ≥ 0</code>, a un paso de distancia— es el peor kernel posible.</p>
+
+<p>El tent de run67 no es el origen: es el punto interior concreto de los coeficientes de Fourier de 1−|x|,</p>
+<div class="eq">
+a<sub>tent</sub> = (4/π²)·(1, 1/9, 1/25) = (0,4053 , 0,0450 , 0,0162), &nbsp; Σ = 0,4665
+<span class="lbl">Ec. (4) — dónde vive el baseline dentro del espacio actual: decae como 1/n²</span>
+</div>
+<p>run4 aprendió <code>a = (0,174 , 0,111 , 0,166)</code>: <b>a₃ &gt; a₂</b>, espectro creciente en frecuencia — el lado
+opuesto de la tent.</p>
+
+<h3>La ecuación propuesta</h3>
+<div class="eq">
+S(r) = b + a₁·cos(πr) + a₂·cos(3πr) + a₃·cos(5πr) &nbsp;&nbsp; con &nbsp; b = γ + (1−γ)·(1 − Σaₙ)<br>
+kernel(r) = (1−r)<sup>β</sup> · S(r) &nbsp;&nbsp;&nbsp; y &nbsp;&nbsp;&nbsp; aₙ ≥ 0, &nbsp; Σaₙ ≤ 1/(2−γ)
+<span class="lbl">Ec. (5) — cambio 1: la modulación multiplica al tent en vez de sustituirlo; el pedestal sube cuando Σa baja</span>
+</div>
+
+<p>Propiedad clave, y es la razón de todo el cambio:</p>
+<div class="eq" style="color:var(--accent)">
+a → 0 &nbsp;⟹&nbsp; b → 1 &nbsp;⟹&nbsp; S ≡ 1 &nbsp;⟹&nbsp; kernel = (1−r)<sup>β</sup> = <b>run67 exacto</b>
+</div>
+
+<h3>Las dos propiedades que hay que decidir a mano</h3>
+<p>La Ec. (5) cambia dos garantías que hoy tenemos gratis, y conviene elegirlas a propósito:</p>
+<table>
+<tr><th>propiedad</th><th>hoy</th><th>con Ec. (5)</th><th>cómo se recupera</th></tr>
+<tr><td><b>pico</b> kernel(0)</td><td>= 1 exacto (normalizado por f₀)</td><td>= 1 + γ·Σaₙ &nbsp;→&nbsp; con los a medios de run4 y γ=0,3 sale <b>1,136</b></td><td>γ = 0 deja el pico clavado en 1; γ&gt;0 permite «brillar» por encima del tent, que es lo que hace AdaGaR</td></tr>
+<tr><td><b>positividad</b></td><td>garantizada por Σaₙ ≤ ½</td><td>S ≥ 1 − (2−γ)·Σaₙ → negativo si Σaₙ &gt; 1/(2−γ)</td><td>o se restringe <b>Σaₙ ≤ 1/(2−γ)</b> (= 0,588 con γ=0,3), o se deja el recorte a 0 como ellos</td></tr>
+</table>
+<p class="meta">Recomiendo arrancar con γ = 0,3 y <code>Σaₙ ≤ 1/(2−γ)</code>: mantiene la positividad estricta (nuestro régimen tiene
+Ec. 3 de por medio, ellos no) y deja el pico libre hasta 1,18, que es un grado de libertad nuevo y barato.</p>
+
+<figure>
+  <canvas id="g3" height="360"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#ff7b72"></i> actual con a=0 → caja</span>
+    <span><i class="sw" style="background:#7ee787"></i> propuesta con a=0 → tent = run67</span>
+    <span><i class="sw" style="background:#6ea8fe"></i> propuesta con a=(0,15;0,05;0,03)</span>
+    <span><i class="sw" style="background:#ffb454"></i> propuesta con a=(0,35;0,10;0,05)</span>
+  </div>
+  <figcaption><b>Figura 10 — el punto de degeneración.</b> β=3,21, γ=0,3. La curva roja es lo que hoy obtiene un splat cuyos
+  coeficientes se van a cero: opacidad plana hasta el borde y corte vertical. En la parametrización propuesta ese mismo splat
+  cae en el tent (verde). Las dos curvas restantes muestran que la modulación entra como una <i>ondulación sobre el tent</i>,
+  con el pedestal absorbiendo la energía — no como un perfil independiente.</figcaption>
+</figure>
+
+<figure>
+  <div class="grid3">
+    <div><canvas id="m_now" width="260" height="260"></canvas><p class="meta" style="text-align:center">hoy · a medio de run4</p></div>
+    <div><canvas id="m_new" width="260" height="260"></canvas><p class="meta" style="text-align:center">Ec. (5) · mismo a</p></div>
+    <div><canvas id="m_tent" width="260" height="260"></canvas><p class="meta" style="text-align:center">tent (run67)</p></div>
+  </div>
+  <figcaption><b>Figura 11 — el mismo splat, las tres parametrizaciones.</b> Con los coeficientes medios reales de run4. A la
+  izquierda las dianas que vemos en el render; en el centro, los mismos coeficientes bajo Ec. (5): la estructura sigue ahí pero
+  como modulación suave sobre un perfil que decae, sin anillos negros. A la derecha, el baseline.</figcaption>
+</figure>
+
+<h3>Qué se toca</h3>
+<pre><code>// forward.cu — sustituir el bloque 468-478
+const float PI_ = 3.14159265358979323846f;
+float r  = sqrtf(r2);
+float a1 = collected_a[3*j+0], a2 = collected_a[3*j+1], a3 = collected_a[3*j+2];
+float sa = a1 + a2 + a3;
+float b  = GAMMA_ + (1.0f - GAMMA_) * (1.0f - sa);          // pedestal
+float S  = b + a1*cosf(PI_*r) + a2*cosf(3.0f*PI_*r) + a3*cosf(5.0f*PI_*r);
+float base   = powf(fmaxf(1.0f - r, 0.0f), beta_j);         // tent = run67
+float kernel = fmaxf(base * S, 0.0f);                       // el guard 1/255 hace el resto</code></pre>
+<ul>
+<li><b>backward.cu</b>: la derivada cambia — <code>∂kernel/∂aₙ = base·(cos((2n−1)πr) − (1−γ))</code> y
+<code>∂kernel/∂r</code> sale de la regla del producto. Es más simple que la actual (desaparece la división por f₀).</li>
+<li><b>Python</b>: <code>project_a_()</code> pasa a proyectar sobre <code>{aₙ ≥ 0, Σaₙ ≤ 1/(2−γ)}</code> — el mismo algoritmo
+de siempre, solo cambia el radio de la bola — e <b>init a = 0</b> para que el run arranque exactamente en run67.</li>
+<li><b>γ</b> como env var (<code>GABOR_GAMMA</code>, default 0,3 = el suyo) para poder barrerlo.</li>
+</ul>
+
+<div class="note ok-box">
+<b>Por qué esperar ganancia:</b> hoy el espacio de parámetros no contiene el baseline como punto neutro y su origen es el peor
+kernel posible; «aprender la forma» arranca cuesta abajo. Con Ec. (5) el baseline es el origen, el run empieza <i>en</i> run67 y
+cualquier desviación que el optimizador aprenda solo puede sumar. Es la hipótesis que mejor explica el −0,51 dB.
+</div>
+
+<!-- ================================================================= -->
+<h2 id="c2">6 · Cambio 2 — frecuencia en píxeles <span class="tag warn">prioridad 2</span></h2>
+
+<p>Hoy <code>r</code> está normalizado al soporte del surfel, así que <code>cos(πr)</code> mete siempre medio periodo dentro del
+splat, y <code>cos(5πr)</code> siempre dos y medio. Propuesta: usar la distancia en píxeles.</p>
+
+<div class="eq">
+d = r · R<sub>pantalla</sub> &nbsp;[px] &nbsp;&nbsp;→&nbsp;&nbsp; S(d) = b + Σₙ aₙ·cos(fₙ·d), &nbsp; fₙ ∈ {f₁, 3f₁, 5f₁} rad/px
+<span class="lbl">Ec. (6) — cambio 2. f₁ = 1 rad/px es el valor de AdaGaR (λ ≈ 6,3 px); para nuestra escena hay que calibrarlo — ver Fig. 12</span>
+</div>
+
+<p>Efecto sobre el número de lóbulos dentro del soporte, que es lo que decide si se ve textura o se ve diana:</p>
+
+<figure>
+  <canvas id="g6" height="320"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#ff7b72"></i> actual (normalizada): ½ periodo <b>siempre</b></span>
+    <span><i class="sw" style="background:#7ee787"></i> f₁ = 1 rad/px (el valor de AdaGaR)</span>
+    <span><i class="sw" style="background:#6ea8fe"></i> f₁ = 0,095 rad/px (calibrado a nuestro p90 con β=3,21)</span>
+    <span><i class="sw" style="background:#9aa3b2"></i> percentiles medidos del radio 2D de run2</span>
+  </div>
+  <figcaption><b>Figura 12 — periodos del armónico fundamental dentro del soporte, frente al radio en pantalla</b> (ambos ejes
+  log). Las verticales grises son percentiles reales de run2 medidos con <code>scripts/medir_radii_sin_clamp.py</code>:
+  p50=10 px, p90=33, p99=100, max=1600. La curva roja es plana: hoy el splat de 1600 px y el de 10 px llevan
+  <i>exactamente</i> la misma estructura. Las diagonales muestran que la frecuencia en píxeles convierte el tamaño en un
+  <b>dial de detalle</b>. Ojo con la calibración: con el f₁=1 de AdaGaR el umbral de «liso» cae en ~3 px, así que en nuestra
+  escena casi todos los splats desarrollarían franjas — su vídeo trabaja con splats mucho más pequeños que nuestro fondo 360.
+  Para que solo el 10 % más grande (&gt;33 px) desarrolle estructura hay que bajar a f₁ ≈ 0,095 rad/px — que sale de <code>f·W = 1</code> con W = 2·33·σ<sub>env</sub>(β=3,21) = 10,4 px (§3.2), <b>no</b> de 2π/33: el radio del soporte sobreestima el tamaño efectivo por un factor ≈2 con nuestro β.</figcaption>
+</figure>
+
+<div class="note warn-box">
+<b>Cuidado con esto:</b> ata el kernel al espacio de pantalla, así que el mismo splat visto desde dos cámaras a distinta
+distancia tendrá <i>distinta forma</i>. En AdaGaR eso no importa (cámara ortográfica única). En una escena 360 rompe
+consistencia multivista, y es exactamente el argumento por el que el clamp de escala vive en mundo y no en pantalla. <b>Alternativa
+segura</b>: normalizar por la escala en <i>mundo</i> del surfel (<code>fₙ ∝ 1/s</code>), que conserva la propiedad
+«splat pequeño → liso» sin depender de la cámara. Recomiendo esta variante.
+</div>
+
+<!-- ================================================================= -->
+<h2 id="c3">7 · Cambio 3 — modulación direccional <span class="tag warn">prioridad 3</span></h2>
+
+<p>Su modulación es 1-D a lo largo del eje mayor de la elipse (<code>θ = ½·atan2(2b, a−c)</code>,
+<code>alpha_blending_gabor.cu:101-107</code>). En 2DGS tenemos los dos ejes tangenciales del surfel ya explícitos, así que sale
+gratis:</p>
+
+<div class="eq">
+S(u,v) = b + Σₙ aₙ·cos((2n−1)π·u) &nbsp;&nbsp; con (u,v) las coordenadas locales del surfel, u = eje mayor
+<span class="lbl">Ec. (7) — cambio 3: los lóbulos pasan de anillos a franjas orientadas con la geometría</span>
+</div>
+
+<figure>
+  <div class="grid2">
+    <div><canvas id="d_rad" width="300" height="300"></canvas><p class="meta" style="text-align:center">radial (hoy) → dianas</p></div>
+    <div><canvas id="d_dir" width="300" height="300"></canvas><p class="meta" style="text-align:center">direccional (Ec. 7) → franjas</p></div>
+  </div>
+  <figcaption><b>Figura 13 — misma energía de modulación, dos geometrías.</b> Coeficientes medios de run4 y pedestal de la
+  Ec. (5) en ambos. La diana es un artefacto que ninguna escena real contiene; la franja orientada es un primitivo de textura
+  legítimo (hierba, corteza, tejido) y además puede alinearse con el gradiente de la imagen mediante la rotación del surfel,
+  que ya es un parámetro aprendible.</figcaption>
+</figure>
+
+<!-- ================================================================= -->
+<h2 id="c4">8 · Cambio 4 — dial de contraste κ <span class="tag ok">barato</span></h2>
+
+<p>Si no se quiere tocar CUDA, hay un experimento de una línea que ataca el mecanismo medido en la §1. El contraste peor caso
+del kernel actual es:</p>
+
+<div class="eq">
+contraste = f<sub>min</sub>/f<sub>max</sub> = (½ − Σaₙ) / (½ + Σaₙ) &nbsp;&nbsp;→&nbsp;&nbsp; imponiendo Σaₙ ≤ κ·½ &nbsp;⟹&nbsp; contraste ≥ (1−κ)/(1+κ)
+<span class="lbl">Ec. (8) — cambio 4: acotar el contraste es acotar el radio de la proyección en <code>project_a_()</code></span>
+</div>
+
+<figure>
+  <canvas id="g4" height="340"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#6ea8fe"></i> cota teórica del contraste</span>
+    <span><i class="sw" style="background:#ff7b72"></i> contraste medido en run4 (mediana por bin de Σa)</span>
+  </div>
+  <figcaption><b>Figura 14 — contraste valle/pico frente a Σaₙ.</b> La curva azul es la cota de la Ec. (8); los puntos rojos son
+  la mediana medida sobre el ply de run4 agrupando por Σa — caen sobre la cota, es decir los splats <i>saturan</i> el contraste
+  que les permitimos. Con κ=1 (hoy) el valle puede llegar a 0; con κ=0,5 no baja del 33 % del pico; con κ=0,25, del 60 %.
+  Es un dial con una curva medible en 3 runs.</figcaption>
+</figure>
+
+<p>Coste: cambiar el radio de la bola en <code>project_a_()</code>. No recompila CUDA, no cambia el backward. Sirve como
+control del mecanismo aunque el cambio 1 lo sustituya después.</p>
+
+<!-- ================================================================= -->
+<h2 id="mono">9 · Cambio 5 — monotonía, y por qué ya no va la primera</h2>
+
+<p>El plan anterior era discretizar <code>f'(r) ≤ 0</code> en ~64 puntos y proyectar con Dykstra dentro de
+<code>project_a_()</code>. Sigue siendo correcto, pero el análisis de este documento lo <b>degrada de prioridad</b> por un motivo
+concreto:</p>
+
+<div class="verdict">
+<h3>Forzar monotonía no saca del pozo</h3>
+<p>El conjunto de coeficientes monótonos <b>contiene a = 0</b> — el kernel constante es monótono (no estrictamente). O sea:
+proyectar sobre monotonía deja disponible exactamente el peor punto del espacio, la caja, y además lo deja en la frontera del
+conjunto. Si el problema es la parametrización (§5), la proyección de monotonía la hereda intacta.</p>
+<p>Además el A/B ya medido apuntaba a esto: forzar monotonía sobre el modelo de run2 hacía desaparecer las dianas <b>y</b>
+bajaba el PSNR a 19,24. El kernel había comprado métricas con los anillos porque no tenía otra forma de gastar la capacidad.</p>
+</div>
+
+<p><b>Orden correcto:</b> cambio 1 primero (mueve el origen del espacio al baseline), y <i>después</i> monotonía si aún hacen
+falta anillos. Bajo la Ec. (5) la condición de monotonía además es más fácil de escribir, porque el pedestal la desacopla del
+pico: basta con <code>Σₙ (2n−1)·aₙ ≤ b/π</code> como condición suficiente lineal (derivada acotada por la del tent).</p>
+
+<!-- ================================================================= -->
+<h2 id="plan">10 · Resumen y plan de medida</h2>
+
+<table>
+<tr><th>#</th><th>cambio</th><th>dónde</th><th>recompila CUDA</th><th>riesgo</th><th>qué probaría</th></tr>
+<tr><td>1</td><td><b>Pedestal adaptativo</b>, Ec. (5)</td><td><code>forward.cu</code>, <code>backward.cu</code>, <code>project_a_</code>, init</td><td>sí</td><td>medio</td><td>si el −0,51 dB era la parametrización (a=0 → caja)</td></tr>
+<tr><td>2</td><td><b>Frecuencia por escala</b>, Ec. (6)</td><td><code>forward.cu</code> + pasar <code>s</code> al kernel</td><td>sí</td><td>medio</td><td>si las dianas son un problema de escala, no de forma</td></tr>
+<tr><td>3</td><td><b>Direccional</b>, Ec. (7)</td><td><code>forward.cu</code> (u,v locales ya disponibles)</td><td>sí</td><td>bajo</td><td>si los lóbulos son útiles cuando no son anillos</td></tr>
+<tr><td>4</td><td><b>Dial κ</b>, Ec. (8)</td><td><code>project_a_()</code>, 1 línea</td><td><b>no</b></td><td>muy bajo</td><td>cuánto PSNR compra el contraste extremo</td></tr>
+<tr><td>5</td><td>Monotonía (Dykstra)</td><td><code>project_a_()</code></td><td>no</td><td>bajo</td><td>tras el cambio 1</td></tr>
+</table>
+
+<h3>Orden propuesto</h3>
+<ol>
+<li><b>κ = 0,5 y κ = 0,25</b> (cambio 4) — dos runs, sin recompilar, dan la curva contraste↔PSNR y validan o tumban el mecanismo
+de la §1 antes de invertir en CUDA.</li>
+<li><b>Cambio 1</b> con init <code>a=0</code> y γ=0,3. El control es inmediato: si el kernel arranca en run67, el eval in-train
+de las primeras 2.500 iteraciones debe pisar el de run67, no el de run2.</li>
+<li><b>Cambio 3</b> sobre el 1 (barato una vez tocado el forward).</li>
+<li>Cambio 2 en su variante por escala de mundo, y monotonía al final si sigue haciendo falta.</li>
+</ol>
+
+<div class="note">
+<b>Diagnóstico que hay que añadir al log en cualquier caso:</b> percentil del <i>contraste valle/pico</i> y % de splats no
+monótonos (ambos calculables en el <code>[A]</code> que ya se imprime). Son las dos cifras que hoy solo tenemos post-mortem
+leyendo el ply, y son las que dicen si un cambio ha movido la forma o solo los números.
+</div>
+
+<p class="meta" style="margin-top:40px">Documento generado a partir de: medición directa de los <code>.ply</code> de run2 y run4
+(<code>scripts/medir_kernel_gabor.py</code>), lectura del rasterizador propio (<code>forward.cu:440-499</code>) y del repo
+<code>Adaptive_Gabor_Video_Representation</code> (paper + CUDA + modelo). Todas las curvas de este documento se calculan en el
+navegador con las mismas ecuaciones del texto; los datos marcados como «medido» vienen embebidos del ply.</p>
+
+</div>
+
+<script>
+// ===================== datos medidos (embebidos) =====================
+const RUN4 = {
+  r: [0,0.031,0.062,0.094,0.125,0.156,0.188,0.219,0.25,0.281,0.312,0.344,0.375,0.406,0.438,0.469,0.5,0.531,0.562,0.594,0.625,0.656,0.688,0.719,0.75,0.781,0.812,0.844,0.875,0.906,0.938,0.969,1.0],
+  kern: [1,0.9187,0.728,0.5267,0.3727,0.2729,0.2136,0.1818,0.1708,0.1815,0.2213,0.2902,0.3585,0.3735,0.3173,0.2317,0.166,0.135,0.1305,0.1417,0.161,0.184,0.2119,0.251,0.298,0.3225,0.2865,0.1979,0.1084,0.0534,0.0303,0.0229,0.0213],
+  histSumA: [2243,1128,1164,1205,1179,1276,1404,1435,1609,1777,1930,2183,2357,2603,2898,3217,3645,3932,4531,4971,5245,5721,6385,6847,7338,7869,8255,8827,9397,10075,10671,11259,11880,12508,13144,14118,14613,15542,16511,17624,18477,19993,21920,24500,28135,35654,53921,103355,217203,507009],
+  aMean: [0.17438,0.11139,0.16605], betaMean: 3.2141
+};
+const CURVAS_COMPACTAS = {"1":[[0.3,0.516],[0.3425,0.659],[0.391,0.845],[0.4464,1.088],[0.5096,0.804],[0.5818,0.447],[0.6642,0.358],[0.7582,0.948],[0.8656,0.653],[0.9882,1.112],[1.1282,1.051],[1.288,1.402],[1.4704,2.057],[1.6786,2.735],[1.9164,3.864],[2.1878,5.619],[2.4977,8.212],[2.8514,11.821],[3.2553,16.458],[3.7163,21.904],[4.2426,27.577],[4.8435,32.852],[5.5295,37.572],[6.3127,42.492],[7.2067,48.578],[8.2274,55.326],[9.3927,61.419],[10.723,66.514],[12.2417,70.684],[13.9755,74.338],[15.9549,77.694],[18.2146,80.561],[20.7943,83.025],[23.7395,85.21],[27.1017,87.084],[30.9402,88.73],[35.3222,90.159],[40.325,91.402],[46.0362,91.917],[52.5564,91.948],[60.0,91.97]],"3.21":[[0.3,0.351],[0.3425,0.396],[0.391,0.449],[0.4464,0.38],[0.5096,0.296],[0.5818,0.211],[0.6642,0.201],[0.7582,0.35],[0.8656,0.502],[0.9882,0.447],[1.1282,0.713],[1.288,0.793],[1.4704,1.017],[1.6786,1.359],[1.9164,1.759],[2.1878,2.324],[2.4977,3.099],[2.8514,4.082],[3.2553,5.41],[3.7163,7.128],[4.2426,9.314],[4.8435,12.001],[5.5295,15.156],[6.3127,18.684],[7.2067,22.465],[8.2274,26.431],[9.3927,30.632],[10.723,35.166],[12.2417,40.063],[13.9755,45.215],[15.9549,50.427],[18.2146,55.509],[20.7943,60.33],[23.7395,64.81],[27.1017,68.905],[30.9402,72.605],[35.3222,75.915],[40.325,78.859],[46.0362,81.462],[52.5564,83.756],[60.0,85.773]],"10":[[0.3,0.104],[0.3425,0.112],[0.391,0.123],[0.4464,0.136],[0.5096,0.154],[0.5818,0.148],[0.6642,0.124],[0.7582,0.101],[0.8656,0.09],[0.9882,0.118],[1.1282,0.19],[1.288,0.209],[1.4704,0.254],[1.6786,0.332],[1.9164,0.447],[2.1878,0.57],[2.4977,0.717],[2.8514,0.94],[3.2553,1.214],[3.7163,1.575],[4.2426,2.037],[4.8435,2.64],[5.5295,3.408],[6.3127,4.382],[7.2067,5.604],[8.2274,7.115],[9.3927,8.943],[10.723,11.104],[12.2417,13.592],[13.9755,16.385],[15.9549,19.455],[18.2146,22.785],[20.7943,26.381],[23.7395,30.262],[27.1017,34.438],[30.9402,38.889],[35.3222,43.548],[40.325,48.315],[46.0362,53.073],[52.5564,57.707],[60.0,62.124]]};
+const RUN2 = {
+  r: [0,0.031,0.062,0.094,0.125,0.156,0.188,0.219,0.25,0.281,0.312,0.344,0.375,0.406,0.438,0.469,0.5,0.531,0.562,0.594,0.625,0.656,0.688,0.719,0.75,0.781,0.812,0.844,0.875,0.906,0.938,0.969,1.0],
+  kern: [1,0.9172,0.7232,0.5185,0.3626,0.2623,0.2031,0.1715,0.1605,0.1712,0.2112,0.2807,0.3497,0.365,0.3085,0.2226,0.1568,0.1263,0.1224,0.1339,0.1532,0.176,0.2036,0.2426,0.2897,0.3141,0.2777,0.1888,0.0995,0.0455,0.0235,0.0169,0.0155],
+  aMean: [0.17536,0.11377,0.16831], betaMean: 3.2412
+};
+// contraste valle/pico: mediana MEDIDA sobre el ply de run4, agrupando por Σa
+// [Σa medio del bin, mediana del contraste, nº de splats del bin]
+const CONTR_MEDIDO = [[0.0213,0.9217,1807],[0.0766,0.7388,1916],[0.1274,0.6010,2998],[0.1774,0.4860,5054],
+  [0.2267,0.3885,7882],[0.2766,0.3020,11115],[0.3260,0.2272,14955],[0.3761,0.1603,19676],[0.4212,0.1065,21309],
+  [0.4574,0.0666,29662],[0.4824,0.0396,79948],[0.4955,0.0277,100588],[0.5000,0.0260,93578]];
+
+// ===================== utilidades de dibujo =====================
+const CSS = getComputedStyle(document.documentElement);
+const C = {ink:'#e6e8ee',mut:'#9aa3b2',line:'#2a2f3c',acc:'#6ea8fe',acc2:'#7ee787',warn:'#ffb454',dang:'#ff7b72',bg:'#0b0d13'};
+function fit(cv){const p=cv.parentElement;const w=cv.getAttribute('width')?+cv.getAttribute('width'):p.clientWidth-28;
+  const h=+cv.getAttribute('height')||300;const dpr=window.devicePixelRatio||1;
+  cv.width=w*dpr;cv.height=h*dpr;cv.style.width=w+'px';cv.style.height=h+'px';
+  const g=cv.getContext('2d');g.scale(dpr,dpr);return {g,w,h};}
+
+function axes(g,w,h,o){
+  const m=o.m||{l:52,r:14,t:14,b:38};
+  const X=v=>m.l+(o.xlog?(Math.log10(v)-Math.log10(o.x0))/(Math.log10(o.x1)-Math.log10(o.x0)):(v-o.x0)/(o.x1-o.x0))*(w-m.l-m.r);
+  const Y=v=>h-m.b-(o.ylog?(Math.log10(Math.max(v,o.y0))-Math.log10(o.y0))/(Math.log10(o.y1)-Math.log10(o.y0)):(v-o.y0)/(o.y1-o.y0))*(h-m.t-m.b);
+  g.fillStyle=C.bg;g.fillRect(0,0,w,h);
+  g.strokeStyle=C.line;g.lineWidth=1;g.font='11px ui-monospace,monospace';g.fillStyle=C.mut;
+  const ytv=o.yticksArr||null;
+  if(ytv){ytv.forEach(v=>{const y=Y(v);g.strokeStyle=C.line;g.beginPath();g.moveTo(m.l,y);g.lineTo(w-m.r,y);g.stroke();
+    g.fillStyle=C.mut;g.textAlign='right';g.textBaseline='middle';g.fillText(o.yfmt?o.yfmt(v):String(v),m.l-8,y);});}
+  else{const yt=o.yticks||5;
+  for(let i=0;i<=yt;i++){const v=o.y0+(o.y1-o.y0)*i/yt;const y=Y(v);
+    g.strokeStyle=C.line;g.beginPath();g.moveTo(m.l,y);g.lineTo(w-m.r,y);g.stroke();
+    g.fillStyle=C.mut;g.textAlign='right';g.textBaseline='middle';g.fillText(o.yfmt?o.yfmt(v):v.toFixed(2),m.l-8,y);}}
+  const xt=o.xticksArr||null;
+  if(xt){xt.forEach(v=>{const x=X(v);g.strokeStyle=C.line;g.beginPath();g.moveTo(x,m.t);g.lineTo(x,h-m.b);g.stroke();
+    g.fillStyle=C.mut;g.textAlign='center';g.textBaseline='top';g.fillText(o.xfmt?o.xfmt(v):String(v),x,h-m.b+6);});}
+  else{const n=o.xticks||5;for(let i=0;i<=n;i++){const v=o.x0+(o.x1-o.x0)*i/n;const x=X(v);
+    g.strokeStyle=C.line;g.beginPath();g.moveTo(x,m.t);g.lineTo(x,h-m.b);g.stroke();
+    g.fillStyle=C.mut;g.textAlign='center';g.textBaseline='top';g.fillText(o.xfmt?o.xfmt(v):v.toFixed(2),x,h-m.b+6);}}
+  if(o.xlabel){g.fillStyle=C.mut;g.textAlign='center';g.textBaseline='bottom';g.fillText(o.xlabel,(m.l+w-m.r)/2,h-4);}
+  if(o.ylabel){g.save();g.translate(12,(m.t+h-m.b)/2);g.rotate(-Math.PI/2);g.textAlign='center';g.textBaseline='top';g.fillText(o.ylabel,0,0);g.restore();}
+  return {X,Y,m};
+}
+function line(g,X,Y,xs,ys,col,wid,dash){g.strokeStyle=col;g.lineWidth=wid||2;g.setLineDash(dash||[]);g.beginPath();
+  for(let i=0;i<xs.length;i++){const x=X(xs[i]),y=Y(ys[i]);i?g.lineTo(x,y):g.moveTo(x,y);}g.stroke();g.setLineDash([]);}
+function label(g,x,y,t,col){g.fillStyle=col;g.font='11px ui-monospace,monospace';g.textAlign='left';g.textBaseline='middle';g.fillText(t,x,y);}
+
+// ===================== ecuaciones =====================
+const PI=Math.PI;
+function fAct(r,a){return 0.5+a[0]*Math.cos(PI*r)+a[1]*Math.cos(3*PI*r)+a[2]*Math.cos(5*PI*r);}
+function kernelActual(r,a,beta){const f=Math.max(fAct(r,a),1e-6),f0=Math.max(0.5+a[0]+a[1]+a[2],1e-6);
+  return Math.pow(Math.max(f/f0,1e-6),beta);}
+function pedestal(a,gam){const s=a[0]+a[1]+a[2];return gam+(1-gam)*(1-s);}
+function kernelNuevo(r,a,beta,gam){if(r>=1)return 0;const S=pedestal(a,gam)+a[0]*Math.cos(PI*r)+a[1]*Math.cos(3*PI*r)+a[2]*Math.cos(5*PI*r);
+  return Math.max(Math.pow(1-r,beta)*S,0);}
+function kernelTent(r,beta){return r>=1?0:Math.pow(1-r,beta);}
+
+// ===================== FIG 1 =====================
+(function(){const {g,w,h}=fit(document.getElementById('g1'));
+  const ax=axes(g,w,h,{x0:0,x1:1,y0:0,y1:1.05,xlabel:'r  (distancia normalizada al soporte del surfel)',ylabel:'kernel(r)'});
+  const rs=[];for(let i=0;i<=200;i++)rs.push(i/200);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>kernelTent(r,3.21)),C.acc2,2.4);
+  if(RUN2) line(g,ax.X,ax.Y,RUN2.r,RUN2.kern,C.acc,2);
+  line(g,ax.X,ax.Y,RUN4.r,RUN4.kern,C.dang,2.6);
+  // anotaciones de los lóbulos
+  const pts=[[0.25,0.1708,'mín 0,17'],[0.406,0.3735,'rebote 0,37'],[0.562,0.1305,'mín 0,13'],[0.781,0.3225,'rebote 0,32']];
+  g.setLineDash([3,3]);g.strokeStyle='#5a4';
+  pts.forEach(p=>{const x=ax.X(p[0]),y=ax.Y(p[1]);g.fillStyle=C.warn;g.beginPath();g.arc(x,y,3.2,0,7);g.fill();
+    label(g,x+7,y-9,p[2],C.warn);});
+  g.setLineDash([]);
+})();
+
+// ===================== FIG 2 (histograma Σa) =====================
+(function(){const {g,w,h}=fit(document.getElementById('g5'));
+  const H=RUN4.histSumA,n=H.length,mx=Math.max(...H);
+  const ax=axes(g,w,h,{x0:0,x1:0.5,y0:0,y1:mx*1.06,xlabel:'Σaₙ',ylabel:'splats por bin',
+    yfmt:v=>v>=1000?(v/1000).toFixed(0)+'k':v.toFixed(0)});
+  for(let i=0;i<n;i++){const x0=ax.X(i*0.5/n),x1=ax.X((i+1)*0.5/n),y=ax.Y(H[i]),y0=ax.Y(0);
+    const t=i/(n-1);g.fillStyle=`rgb(${Math.round(110+145*t)},${Math.round(168-45*t)},${Math.round(254-140*t)})`;
+    g.fillRect(x0+0.5,y,Math.max(x1-x0-1,1),y0-y);}
+  g.strokeStyle=C.dang;g.setLineDash([4,4]);g.lineWidth=1.5;
+  const xf=ax.X(0.5);g.beginPath();g.moveTo(xf,ax.Y(0));g.lineTo(xf,ax.Y(mx*1.05));g.stroke();g.setLineDash([]);
+  label(g,ax.X(0.30),ax.Y(mx*0.82),'32 % del modelo en el último bin →',C.dang);
+  label(g,ax.X(0.02),ax.Y(mx*0.5),'frontera Σa = ½ : 24,0 % exacto',C.mut);
+})();
+
+// ===================== FIG 3 (rango de S en AdaGaR) =====================
+(function(){const {g,w,h}=fit(document.getElementById('g8'));
+  const gam=0.3;const ax=axes(g,w,h,{x0:0,x1:1,y0:-1,y1:1.5,xlabel:'ω̄  (peso medio de las ondas)',ylabel:'S'});
+  const xs=[];for(let i=0;i<=100;i++)xs.push(i/100);
+  // zona S<0
+  const y0=ax.Y(0),yb=ax.Y(-1);g.fillStyle='rgba(255,123,114,.12)';
+  const xn=ax.X(1/(2-gam));g.fillRect(xn,y0,ax.X(1)-xn,yb-y0);
+  line(g,ax.X,ax.Y,xs,xs.map(o=>1+gam*o),C.acc2,2.2);
+  line(g,ax.X,ax.Y,xs,xs.map(o=>1-(2-gam)*o),C.dang,2.2);
+  line(g,ax.X,ax.Y,xs,xs.map(o=>gam+(1-gam)*(1-o)),C.acc,2,[5,4]);
+  g.strokeStyle=C.line;g.lineWidth=1;g.beginPath();g.moveTo(ax.X(0),y0);g.lineTo(ax.X(1),y0);g.stroke();
+  label(g,ax.X(0.62),ax.Y(-0.55),'α < 0 → descartado por el guard 1/255',C.dang);
+  label(g,ax.X(0.03),ax.Y(1.32),'lóbulo POR ENCIMA del centro (nosotros lo prohibimos)',C.acc2);
+  label(g,ax.X(0.03),ax.Y(0.12),'ω̄=0 → S≡1 → Gaussiana exacta',C.mut);
+})();
+
+// ===================== FIG 5 (punto de degeneración) =====================
+(function(){const {g,w,h}=fit(document.getElementById('g3'));
+  const ax=axes(g,w,h,{x0:0,x1:1,y0:0,y1:1.15,xlabel:'r',ylabel:'kernel(r)'});
+  const rs=[];for(let i=0;i<=300;i++)rs.push(i/300);
+  const B=3.21,G=0.3;
+  line(g,ax.X,ax.Y,rs,rs.map(r=>r<1?1:0),C.dang,2.6);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>kernelNuevo(r,[0,0,0],B,G)),C.acc2,2.6);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>kernelNuevo(r,[0.15,0.05,0.03],B,G)),C.acc,2);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>kernelNuevo(r,[0.35,0.10,0.05],B,G)),C.warn,2);
+  label(g,ax.X(0.30),ax.Y(1.06),'a = 0 hoy → disco de opacidad uniforme',C.dang);
+  label(g,ax.X(0.36),ax.Y(0.42),'a = 0 con Ec. (5) → tent = run67',C.acc2);
+})();
+
+// ===================== FIG 4 — el juguete 1-D =====================
+// K(x) = exp(-x^2/2s^2) * (b + w cos(f x)),  w=1, gamma=0.3 -> b=0.3, f=1 rad/px
+const GAM_T=0.3, W_T=1.0, F_T=1.0, B_T=GAM_T+(1-GAM_T)*(1-W_T);
+function toyK(x,s){return Math.exp(-x*x/(2*s*s))*(B_T+W_T*Math.cos(F_T*x));}
+function bestGauss(s){ // devuelve [A, s2, residuoRelativo] del mejor ajuste gaussiano
+  const n=2001, L=4*s; const xs=[],K=[];
+  for(let i=0;i<n;i++){const x=-L+2*L*i/(n-1);xs.push(x);K.push(toyK(x,s));}
+  let best=1e9,bA=1,bS=s;
+  for(let j=0;j<300;j++){const s2=0.2*s+(3.0*s-0.2*s)*j/299;
+    let num=0,den=0;for(let i=0;i<n;i++){const g=Math.exp(-xs[i]*xs[i]/(2*s2*s2));num+=K[i]*g;den+=g*g;}
+    const A=num/den;let e=0,k2=0;
+    for(let i=0;i<n;i++){const g=A*Math.exp(-xs[i]*xs[i]/(2*s2*s2));e+=(K[i]-g)**2;k2+=K[i]**2;}
+    const r=Math.sqrt(e/k2);if(r<best){best=r;bA=A;bS=s2;}}
+  return [bA,bS,best];
+}
+(function(){const {g,w,h}=fit(document.getElementById('t1'));
+  const ax=axes(g,w,h,{x0:-3,x1:3,y0:-0.5,y1:1.1,xlabel:'x / σ   (misma escala relativa para los tres)',ylabel:'kernel normalizado al pico'});
+  g.strokeStyle=C.line;g.beginPath();g.moveTo(ax.X(-3),ax.Y(0));g.lineTo(ax.X(3),ax.Y(0));g.stroke();
+  const cases=[[0.5,C.acc2],[2,C.warn],[5,C.dang]];
+  cases.forEach(([s,col])=>{
+    const xs=[],ys=[],yg=[];const [A,s2]=bestGauss(s);const pk=toyK(0,s);
+    for(let i=0;i<=400;i++){const t=-3+6*i/400;const x=t*s;xs.push(t);ys.push(toyK(x,s)/pk);
+      yg.push(A*Math.exp(-x*x/(2*s2*s2))/pk);}
+    line(g,ax.X,ax.Y,xs,yg,C.mut,1.4,[5,4]);
+    line(g,ax.X,ax.Y,xs,ys,col,2.4);
+  });
+  label(g,ax.X(-2.9),ax.Y(-0.30),'σ=5px cruza el cero: ninguna Gaussiana hace eso',C.dang);
+  label(g,ax.X(-2.9),ax.Y(0.95),'σ=0,5px: la Gaussiana ajustada se le superpone',C.acc2);
+})();
+
+// ===================== FIG 5 — el interruptor =====================
+(function(){const {g,w,h}=fit(document.getElementById('t2'));
+  const ax=axes(g,w,h,{x0:0.1,x1:50,y0:0,y1:100,xlog:true,xticksArr:[0.1,0.25,0.5,1,2,5,10,50],
+    xfmt:v=>String(v),yfmt:v=>v.toFixed(0)+'%',xlabel:'f · σ   (frecuencia × tamaño del splat, log)',
+    ylabel:'% no explicable'});
+  // residuo de forma (calculado en vivo con bestGauss)
+  const xs=[],ys=[];
+  for(let i=0;i<=44;i++){const fs=0.1*Math.pow(500,i/44);xs.push(fs);ys.push(100*bestGauss(fs)[2]);}
+  // parte del gradiente de omega no explicable por el de opacidad
+  const yg=xs.map(s=>{
+    const n=1201,L=4*s;let doo=[],dw=[];
+    for(let i=0;i<n;i++){const x=-L+2*L*i/(n-1);const G=Math.exp(-x*x/(2*s*s));
+      doo.push(G*(B_T+W_T*Math.cos(F_T*x)));dw.push(G*(Math.cos(F_T*x)-(1-GAM_T)));}
+    let num=0,den=0,e=0,d2=0;
+    for(let i=0;i<n;i++){num+=doo[i]*dw[i];den+=doo[i]*doo[i];}
+    const pr=num/den;
+    for(let i=0;i<n;i++){e+=(dw[i]-pr*doo[i])**2;d2+=dw[i]*dw[i];}
+    return 100*Math.sqrt(e/d2);});
+  // banda de transición
+  g.fillStyle='rgba(255,180,84,.10)';g.fillRect(ax.X(0.7),ax.Y(100),ax.X(2)-ax.X(0.7),ax.Y(0)-ax.Y(100));
+  line(g,ax.X,ax.Y,xs,ys,C.acc2,2.6);
+  line(g,ax.X,ax.Y,xs,yg,C.acc,2.2,[6,4]);
+  const xr=[];for(let i=0;i<=40;i++)xr.push(0.1*Math.pow(500,i/40));
+  line(g,ax.X,ax.Y,xr,xr.map(_=>41.8),C.dang,2,[3,3]);
+  label(g,ax.X(0.11),ax.Y(46),'nuestro kernel: 41,8 % — el mismo para 3 px y para 1600 px',C.dang);
+  label(g,ax.X(0.75),ax.Y(93),'transición f·σ ≈ 1',C.warn);
+  label(g,ax.X(0.11),ax.Y(8),'ZONA APAGADA: el Gabor es una Gaussiana',C.mut);
+  label(g,ax.X(6),ax.Y(72),'ZONA ENCENDIDA',C.mut);
+})();
+
+// ===================== FIG 7 — interruptor con envolvente compacta =====================
+// K(r) = (1-r)^beta * (b + w cos(f R r)) ; residuo vs el mejor tent A*(1-r)^beta'
+const sigEnv=b=>Math.sqrt(b+1)/((b+2)*Math.sqrt(b+3));
+(function(){const cv=document.getElementById('cp');const {g,w,h}=fit(cv);
+  g.fillStyle=C.bg;g.fillRect(0,0,w,h);
+  const BETAS=[[1,C.acc2],[3.21,C.warn],[10,C.dang]];
+  const halfW=w/2;
+  function panel(x0,pw,xlab,xmap,x0v,x1v,ticks){
+    g.save();g.translate(x0,0);
+    const m={l:52,r:14,t:26,b:38};
+    const X=v=>m.l+(Math.log10(v)-Math.log10(x0v))/(Math.log10(x1v)-Math.log10(x0v))*(pw-m.l-m.r);
+    const Y=v=>h-m.b-(v/100)*(h-m.t-m.b);
+    g.lineWidth=1;g.font='11px ui-monospace,monospace';
+    for(let i=0;i<=5;i++){const v=20*i,y=Y(v);g.strokeStyle=C.line;g.beginPath();g.moveTo(m.l,y);g.lineTo(pw-m.r,y);g.stroke();
+      g.fillStyle=C.mut;g.textAlign='right';g.textBaseline='middle';g.fillText(v+'%',m.l-8,y);}
+    ticks.forEach(v=>{const x=X(v);g.strokeStyle=C.line;g.beginPath();g.moveTo(x,m.t);g.lineTo(x,h-m.b);g.stroke();
+      g.fillStyle=C.mut;g.textAlign='center';g.textBaseline='top';g.fillText(String(v),x,h-m.b+6);});
+    g.fillStyle=C.mut;g.textAlign='center';g.textBaseline='bottom';g.fillText(xlab,pw/2,h-4);
+    g.strokeStyle=C.mut;g.setLineDash([3,3]);g.beginPath();g.moveTo(m.l,Y(5));g.lineTo(pw-m.r,Y(5));g.stroke();g.setLineDash([]);
+    BETAS.forEach(([bt,col])=>{
+      const pts=CURVAS_COMPACTAS[String(bt)];
+      g.strokeStyle=col;g.lineWidth=2.4;g.beginPath();let started=false;
+      pts.forEach(([R,res])=>{const xv=xmap(R,bt);
+        if(xv<x0v||xv>x1v){started=false;return;}
+        const x=X(xv),y=Y(res);started?g.lineTo(x,y):g.moveTo(x,y);started=true;});
+      g.stroke();});
+    g.restore();
+  }
+  panel(0,halfW,'f · R   (radio del soporte, log)',(R,b)=>R,0.3,60,[0.3,1,3,10,60]);
+  panel(halfW,halfW,'f · W   (anchura efectiva, log)',(R,b)=>R*2*sigEnv(b),0.05,12,[0.05,0.2,1,4,12]);
+  g.fillStyle=C.dang;g.font='bold 12px ui-monospace,monospace';g.textAlign='left';g.textBaseline='top';
+  g.fillText('no colapsa',62,6);
+  g.fillStyle=C.acc2;g.fillText('colapsa en una sola curva',halfW+62,6);
+})();
+
+// ===================== FIG 8 — el presupuesto de Σa =====================
+(function(){const cv=document.getElementById('bud');const {g,w,h}=fit(cv);
+  g.fillStyle=C.bg;g.fillRect(0,0,w,h);
+  const A_TENT=[4/(Math.PI*Math.PI),4/(9*Math.PI*Math.PI),4/(25*Math.PI*Math.PI)];
+  const sTent=A_TENT.reduce((a,b)=>a+b,0);           // 0,46653
+  const L=150,R=w-24,BW=R-L;
+  function bar(y,label,frac,colA,colB,txtA,txtB){
+    g.fillStyle=C.mut;g.font='12px ui-monospace,monospace';g.textAlign='right';g.textBaseline='middle';
+    g.fillText(label,L-12,y+16);
+    g.fillStyle=colA;g.fillRect(L,y,BW*frac,32);
+    g.fillStyle=colB;g.fillRect(L+BW*frac,y,BW*(1-frac),32);
+    g.fillStyle='#0b0d13';g.font='bold 12px ui-monospace,monospace';g.textAlign='left';
+    if(frac>0.12)g.fillText(txtA,L+8,y+16);
+    g.fillStyle=(1-frac)>0.12?'#0b0d13':C.mut;g.textAlign=(1-frac)>0.12?'left':'left';
+    g.fillText(txtB,(1-frac)>0.12?L+BW*frac+8:L+BW+8,y+16);
+  }
+  g.fillStyle=C.mut;g.font='11px ui-monospace,monospace';g.textAlign='left';g.textBaseline='top';
+  g.fillText('presupuesto total de Σaₙ  →',L,10);
+  bar(34,'HOY',sTent/0.5,'#6b7280',C.acc2,'envolvente (tent): 93,3 %','libre: 6,7 %');
+  bar(96,'con pedestal',0.0,'#6b7280',C.acc2,'','todo el presupuesto libre para frecuencia: 100 %');
+  g.fillStyle=C.mut;g.font='11px ui-monospace,monospace';g.textAlign='left';g.textBaseline='top';
+  g.fillText('gris = gastado en hacer que el kernel decaiga   ·   verde = disponible para textura',L,146);
+  g.fillText('la envolvente (1−r)^β la da la Ec. (5) gratis',L,164);
+})();
+
+// ===================== FIG 8 — con envolvente y sin ella =====================
+(function(){const {g,w,h}=fit(document.getElementById('dec1'));
+  const ax=axes(g,w,h,{x0:0,x1:1,y0:-0.1,y1:1.45,xlabel:'r',ylabel:'',m:{l:44,r:12,t:26,b:38}});
+  const a=[0.35,0.10,0.05],B=3.21,gam=0.3,b=pedestal(a,gam);
+  const rs=[];for(let i=0;i<=300;i++)rs.push(i/300);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>Math.pow(1-r,B)),'#6b7280',2,[5,4]);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>b+a[0]*Math.cos(PI*r)+a[1]*Math.cos(3*PI*r)+a[2]*Math.cos(5*PI*r)),C.acc,2);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>kernelNuevo(r,a,B,gam)),C.acc2,2.8);
+  g.fillStyle=C.acc2;g.font='bold 12px ui-monospace,monospace';g.textAlign='left';g.textBaseline='top';
+  g.fillText('Ec. (5): envolvente × onda',48,6);
+  label(g,ax.X(0.42),ax.Y(0.28),'envolvente (1−r)^β',C.mut);
+  label(g,ax.X(0.24),ax.Y(1.22),'onda S(r)',C.acc);
+  label(g,ax.X(0.30),ax.Y(0.62),'producto',C.acc2);
+})();
+(function(){const {g,w,h}=fit(document.getElementById('dec2'));
+  const ax=axes(g,w,h,{x0:0,x1:1,y0:-0.1,y1:1.45,xlabel:'r',ylabel:'',m:{l:44,r:12,t:26,b:38}});
+  const B=3.21;const aT=[4/(PI*PI),4/(9*PI*PI),4/(25*PI*PI)];
+  const rs=[];for(let i=0;i<=300;i++)rs.push(i/300);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>kernelActual(r,aT,B)),'#9aa3b2',2.4);
+  line(g,ax.X,ax.Y,rs,rs.map(r=>kernelActual(r,A4,B)),C.dang,2.8);
+  g.fillStyle=C.dang;g.font='bold 12px ui-monospace,monospace';g.textAlign='left';g.textBaseline='top';
+  g.fillText('hoy: un solo factor para las dos cosas',48,6);
+  label(g,ax.X(0.30),ax.Y(0.52),'a = a_tent → envolvente, sin frecuencia',C.mut);
+  label(g,ax.X(0.30),ax.Y(1.18),'a de run4 → frecuencia, sin envolvente',C.dang);
+})();
+
+// ===================== mapas 2D =====================
+function heat(id,fn,opts){
+  const cv=document.getElementById(id);if(!cv)return;
+  const dpr=window.devicePixelRatio||1;const W=+cv.getAttribute('width'),H=+cv.getAttribute('height');
+  cv.width=W*dpr;cv.height=H*dpr;cv.style.width=W+'px';cv.style.height=H+'px';
+  const g=cv.getContext('2d');g.scale(dpr,dpr);
+  const img=g.createImageData(W*dpr,H*dpr);const d=img.data;const N=W*dpr;
+  for(let py=0;py<H*dpr;py++)for(let px=0;px<N;px++){
+    const u=(px/(N-1))*2-1, v=(py/(H*dpr-1))*2-1;
+    let val=fn(u,v);val=Math.max(0,Math.min(1,val));
+    // colormap: negro -> ámbar -> blanco
+    const r=Math.round(255*Math.min(1,val*1.6)), gg=Math.round(255*Math.pow(val,1.25)), b=Math.round(255*Math.pow(val,2.4));
+    const o=(py*N+px)*4;d[o]=r;d[o+1]=gg;d[o+2]=b;d[o+3]=255;}
+  g.putImageData(img,0,0);
+  if(opts&&opts.title){g.fillStyle='rgba(0,0,0,.55)';g.fillRect(0,0,W,18);g.fillStyle=C.ink;g.font='11px ui-monospace,monospace';
+    g.textAlign='left';g.textBaseline='middle';g.fillText(opts.title,6,9);}
+}
+const A4=RUN4.aMean, B4=RUN4.betaMean, G=0.3;
+heat('m_now',(u,v)=>{const r=Math.hypot(u,v);return r>=1?0:kernelActual(r,A4,B4);},{title:'kernel = (f/f₀)^β'});
+heat('m_new',(u,v)=>{const r=Math.hypot(u,v);return r>=1?0:kernelNuevo(r,A4,B4,G);},{title:'kernel = (1−r)^β · S(r)'});
+heat('m_tent',(u,v)=>{const r=Math.hypot(u,v);return kernelTent(r,B4);},{title:'kernel = (1−r)^β'});
+heat('d_rad',(u,v)=>{const r=Math.hypot(u,v);return r>=1?0:kernelNuevo(r,A4,B4,G);},{title:'radial'});
+heat('d_dir',(u,v)=>{const r=Math.hypot(u,v);if(r>=1)return 0;
+  const S=pedestal(A4,G)+A4[0]*Math.cos(PI*u)+A4[1]*Math.cos(3*PI*u)+A4[2]*Math.cos(5*PI*u);
+  return Math.max(Math.pow(1-r,B4)*S,0);},{title:'direccional (eje u)'});
+
+// frecuencia normalizada vs en píxeles, a tres tamaños de pantalla
+const F1 = 0.095; // rad/px: f*W=1 con W = 2*33*sigma_env(beta=3.21) = 10.4 px  (ver 3.2)
+[['h_norm10',3],['h_norm100',33],['h_norm400',400]].forEach(([id,rad])=>{
+  heat(id,(u,v)=>{const r=Math.hypot(u,v);return r>=1?0:kernelActual(r,A4,B4);},{title:'normalizada · r='+rad+'px'});});
+[['h_px10',3],['h_px100',33],['h_px400',400]].forEach(([id,rad])=>{
+  heat(id,(u,v)=>{const r=Math.hypot(u,v);if(r>=1)return 0;const d=r*rad; // distancia real en px
+    const S=pedestal(A4,G)+A4[0]*Math.cos(F1*d)+A4[1]*Math.cos(3*F1*d)+A4[2]*Math.cos(5*F1*d);
+    return Math.max(Math.pow(1-r,B4)*S,0);},{title:'f₁=0,095 rad/px · r='+rad+'px'});});
+
+// ===================== FIG 7 (lóbulos vs radio) =====================
+(function(){const {g,w,h}=fit(document.getElementById('g6'));
+  // nº de periodos del armónico fundamental dentro del soporte: N = f1*sigma/(2*pi)
+  const ax=axes(g,w,h,{x0:2,x1:1600,y0:0.02,y1:60,xlog:true,ylog:true,xticksArr:[2,10,33,100,320,1600],
+    yticksArr:[0.02,0.1,0.5,2,10,60],xfmt:v=>v+'px',yfmt:v=>String(v),
+    xlabel:'radio del splat en pantalla (log)',ylabel:'periodos dentro del soporte (log)'});
+  const xs=[];for(let i=0;i<=240;i++)xs.push(2*Math.pow(800,i/240));
+  line(g,ax.X,ax.Y,xs,xs.map(_=>0.5),C.dang,2.4);                       // actual: cos(pi r) = medio periodo, SIEMPRE
+  line(g,ax.X,ax.Y,xs,xs.map(s=>s/(2*Math.PI)),C.acc2,2.4);             // f1 = 1 rad/px (AdaGaR)
+  line(g,ax.X,ax.Y,xs,xs.map(s=>0.095*s/(2*Math.PI)),C.acc,2.2,[6,4]);   // f1 = 0,095 rad/px (f*W=1 en el p90)
+  [[10,'p50'],[33,'p90'],[100,'p99'],[1600,'max']].forEach(([v,t])=>{
+    const x=ax.X(v);g.strokeStyle=C.mut;g.setLineDash([2,4]);g.lineWidth=1;
+    g.beginPath();g.moveTo(x,ax.Y(0.02));g.lineTo(x,ax.Y(60));g.stroke();g.setLineDash([]);
+    label(g,x+4,ax.Y(45),t,C.mut);});
+  g.strokeStyle=C.warn;g.setLineDash([4,4]);g.lineWidth=1.4;
+  g.beginPath();g.moveTo(ax.X(2),ax.Y(0.5));g.lineTo(ax.X(1600),ax.Y(0.5));g.stroke();g.setLineDash([]);
+  label(g,ax.X(2.4),ax.Y(0.36),'½ periodo = un solo lóbulo = liso',C.warn);
+})();
+
+// ===================== FIG 9 (contraste vs Σa) =====================
+(function(){const {g,w,h}=fit(document.getElementById('g4'));
+  const ax=axes(g,w,h,{x0:0,x1:0.5,y0:0,y1:1.02,xlabel:'Σaₙ',ylabel:'contraste valle / pico'});
+  const xs=[];for(let i=0;i<=200;i++)xs.push(0.5*i/200);
+  line(g,ax.X,ax.Y,xs,xs.map(s=>(0.5-s)/(0.5+s)),C.acc,2.4);
+  // puntos medidos: mediana del contraste por bin de Σa (ply de run4, submuestreo x16)
+  CONTR_MEDIDO.forEach(p=>{const x=ax.X(p[0]),y=ax.Y(p[1]);
+    const rad=3+2.5*Math.min(1,p[2]/60000);
+    g.fillStyle=C.dang;g.beginPath();g.arc(x,y,rad,0,7);g.fill();});
+  [[1,'κ=1 (hoy)'],[0.5,'κ=0,5'],[0.25,'κ=0,25']].forEach(([k,t],i)=>{
+    const s=k*0.5,c=(1-k)/(1+k);const x=ax.X(s),y=ax.Y(c);
+    g.strokeStyle=C.warn;g.setLineDash([3,3]);g.lineWidth=1.2;
+    g.beginPath();g.moveTo(ax.X(0),y);g.lineTo(x,y);g.lineTo(x,ax.Y(0));g.stroke();g.setLineDash([]);
+    label(g,ax.X(0.01),y-10,t+' → contraste ≥ '+c.toFixed(2),C.warn);});
+  label(g,ax.X(0.20),ax.Y(0.76),'los puntos medidos caen sobre la cota:',C.dang);
+  label(g,ax.X(0.20),ax.Y(0.70),'los splats gastan casi todo el contraste permitido',C.dang);
+  label(g,ax.X(0.055),ax.Y(0.94),'radio del punto ∝ nº de splats del bin',C.mut);
+})();
+</script>
+</body>
+</html>
