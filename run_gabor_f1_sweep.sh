@@ -9,9 +9,18 @@ export DEBUG_DENSIFY=1
 #  USO:   ./run_gabor_f1_sweep.sh 2   -> run6, f1 = 2× el autocalibrado (93.2494)
 #         ./run_gabor_f1_sweep.sh 4   -> run7, f1 = 4× el autocalibrado (186.4988)
 #
-#  ESTADO: run6 (2×) MEDIDO -> 20.5999/0.5763/0.3716, plano contra run5. run7 (4×)
-#  SIN LANZAR. El multiplicador es obligatorio a propósito: sin él, un descuido
-#  relanzaría un brazo ya medido.
+#  ESTADO: SWEEP COMPLETO Y CERRADO (2026-07-31). Los dos brazos MEDIDOS y los dos
+#  PLANOS contra run5 (20.6898):
+#      run6 (2×) -> 20.5999/0.5763/0.3716   (-0,090 dB)
+#      run7 (4×) -> 20.7167/0.5758/0.3720   (+0,027 dB)
+#  Los tres puntos caben en 0,12 dB. El dial mordió las dos veces (f·W p50 ×2,04 y
+#  ×4,00; apagados 93,40% -> 83,82% -> 64,12%) y la onda acabó usándose MÁS que nunca
+#  también por amplitud (Σa 0,2909 -> 0,3103 -> 0,3429; casi planos 21,4% -> 12,9%).
+#  => LA ONDA NO COMPRA NADA EN FLOWERS. Todo el +0,53 dB del átomo sobre el legacy
+#  venía de la ENVOLVENTE. NO RELANZAR NINGÚN BRAZO NI AÑADIR 8×: la línea de f1 está
+#  cerrada. Lo que queda: recalibrar f1 DURANTE el run (ataca la deriva, no el nivel),
+#  atacar el espectro creciente (a₃>a₁ a 30k), o probar el átomo en otra escena.
+#  El multiplicador sigue siendo obligatorio a propósito.
 # ═══════════════════════════════════════════════════════════════════════════
 #
 #  = run5_gabor_atomo.sh EXACTO + UN SOLO DELTA: GABOR_F1.
