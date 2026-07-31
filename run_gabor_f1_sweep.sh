@@ -4,10 +4,14 @@ export DEBUG_MEM=1000
 export DEBUG_DENSIFY=1
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  run6 / run7 — SWEEP DE GABOR_F1 sobre el kernel ÁTOMO
+#  SWEEP DE GABOR_F1 sobre el kernel ÁTOMO — un script, los dos brazos
 #
-#  USO:   ./run6_gabor_f1.sh 2      -> run6, f1 = 2× el autocalibrado (93.2494)
-#         ./run6_gabor_f1.sh 4      -> run7, f1 = 4× el autocalibrado (186.4988)
+#  USO:   ./run_gabor_f1_sweep.sh 2   -> run6, f1 = 2× el autocalibrado (93.2494)
+#         ./run_gabor_f1_sweep.sh 4   -> run7, f1 = 4× el autocalibrado (186.4988)
+#
+#  ESTADO: run6 (2×) MEDIDO -> 20.5999/0.5763/0.3716, plano contra run5. run7 (4×)
+#  SIN LANZAR. El multiplicador es obligatorio a propósito: sin él, un descuido
+#  relanzaría un brazo ya medido.
 # ═══════════════════════════════════════════════════════════════════════════
 #
 #  = run5_gabor_atomo.sh EXACTO + UN SOLO DELTA: GABOR_F1.
@@ -53,11 +57,18 @@ export DEBUG_DENSIFY=1
 #    run36 (MCMC, techo global)       21.1600 / 0.5926 / 0.3555
 # ───────────────────────────────────────────────────────────────────────────
 
-MULT=${1:-2}
+MULT=${1:-}
 case "$MULT" in
   2) RUN=6; export GABOR_F1=93.2494  ;;   # 2 × 46.6247
   4) RUN=7; export GABOR_F1=186.4988 ;;   # 4 × 46.6247
-  *) echo "Uso: $0 [2|4]   (multiplicador de f1 sobre el autocalibrado 46.6247)"; exit 1 ;;
+  *)
+    echo "Uso: $0 <2|4>   (multiplicador de f1 sobre el autocalibrado 46.6247)"
+    echo
+    echo "  2  -> run6, GABOR_F1=93.2494    [YA MEDIDO: 20.5999/0.5763/0.3716]"
+    echo "  4  -> run7, GABOR_F1=186.4988   [sin lanzar]"
+    echo
+    echo "El argumento es obligatorio: sin él se relanzaría un brazo ya medido."
+    exit 1 ;;
 esac
 echo "════ run${RUN}: GABOR_F1=${GABOR_F1} (${MULT}× el autocalibrado de run5) ════"
 
