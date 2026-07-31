@@ -1,0 +1,956 @@
+% ============================================================================
+%  El kernel Gabor como atomo: envolvente x onda
+%  Documento tecnico optimizado para lectura en Kindle Scribe (10.2", e-ink).
+%
+%  Compilar:  pdflatex docs/kernel_gabor_atomo.tex   (dos veces, por el indice)
+%
+%  DECISIONES DE FORMATO PARA E-INK (no tocar sin motivo):
+%   - papersize 6.1x8.15 in = la relacion 3:4 del Scribe -> el PDF llena la
+%     pantalla sin zoom ni scroll horizontal, que es lo que arruina la lectura.
+%   - margenes 0.32 in: en un lector no hay que sujetar el papel con el pulgar.
+%   - cuerpo 12pt sobre pagina pequena = tipo grande en pantalla.
+%   - XCharter: serif de trazo grueso, pensada para tinta; en e-ink las
+%     modernas de trazo fino (Computer Modern) se ven lavadas.
+%   - sin color: el Scribe es escala de grises. Los enlaces van en negro.
+% ============================================================================
+\documentclass[12pt]{extarticle}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish,es-noquoting]{babel}
+\usepackage{XCharter}
+\usepackage[scaled=0.96]{helvet}
+\usepackage{inconsolata}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[
+  paperwidth=6.1in, paperheight=8.15in,
+  top=0.40in, bottom=0.46in, left=0.32in, right=0.32in,
+  footskip=0.24in
+]{geometry}
+\usepackage[hidelinks]{hyperref}
+
+% --- Espaciado pensado para pantalla: sin sangria, aire entre parrafos -------
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\linespread{1.06}
+\setlist{leftmargin=1.15em, itemsep=0.20em, topsep=0.30em, parsep=0pt}
+
+\sloppy
+\emergencystretch=2.2em
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  breakindent=0pt,
+  frame=leftline,
+  framesep=5pt,
+  xleftmargin=7pt,
+  rulecolor=,
+  aboveskip=0.7em, belowskip=0.7em,
+  showstringspaces=false,
+}
+
+% Notacion
+\newcommand{\ssum}{\Sigma a}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\bfseries El kernel Gabor como átomo\\[0.25em]
+\large envolvente $\times$ onda: qué es, y qué le hace\\ a cada fase de la optimización}
+\author{\normalsize Proyecto 2DGS $\rightarrow$ Beta / Gabor Splatting}
+\date{\normalsize 31 de julio de 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+{\small
+Este documento describe el kernel implementado en la rama
+\code{gabor-atomo-envolvente-onda} (commit \code{54274f5} y posteriores) y sigue
+su rastro por todas las fases del entrenamiento: preprocesado, forward,
+backward, proyección en Python, densificación y serialización. Cada fórmula
+corresponde a una línea concreta del código, citada como
+\code{archivo:línea}. Las cifras experimentales son las de los runs
+5, 6 y 7 sobre \emph{flowers}.
+}
+
+\tableofcontents
+\clearpage
+
+% ===========================================================================
+\section{El problema que resuelve}
+
+\subsection{El kernel anterior y su punto de degeneración}
+
+Hasta el run\,4 el kernel de opacidad era una serie de cosenos elevada a
+$\beta$:
+\[
+K_{\text{legacy}}(r)=\Bigl(\frac{f(r)}{f(0)}\Bigr)^{\beta},\qquad
+f(r)=\tfrac12+\sum_{n=1}^{3} a_n\cos\bigl((2n-1)\pi r\bigr),
+\]
+con $r=\sqrt{\rho}$ la distancia normalizada al centro del surfel y
+$a_n\ge 0$, $\sum a_n\le\frac12$ impuesto por proyección.
+
+Tiene un defecto estructural que no se ve mirando la fórmula, sino
+preguntándose \emph{qué kernel sale cuando el modelo no aprende nada}. Con
+$a=0$ queda $f\equiv\frac12$, es decir
+\[
+K_{\text{legacy}}\big|_{a=0}\equiv 1 \quad\text{en todo el soporte},
+\]
+un \textbf{disco plano de opacidad uniforme}: el peor kernel posible. Y ese
+punto no está en un rincón cualquiera del espacio de parámetros: está
+\emph{en la frontera} $a_n\ge 0$, justo donde el optimizador empuja cuando
+quiere apagar la modulación.
+
+Peor aún: el kernel de referencia, la \emph{tent} $(1-r)^\beta$ del run\,67,
+se obtiene con $a=(4/\pi^2)(1,\tfrac19,\tfrac1{25})$ renormalizado, lo que
+consume $\ssum=0{,}4665$, el \textbf{93{,}3\,\%} del presupuesto disponible
+$\ssum\le\frac12$. Dicho de otro modo: en el kernel legacy, \emph{limitarse a
+reproducir la envolvente ya agota casi todo el presupuesto}, y lo que queda
+para modular la forma es una miseria.
+
+\subsection{La observación de fondo}
+
+Un átomo de Gabor es, por definición, un producto de dos factores
+independientes: una \textbf{envolvente} que decide hasta dónde llega el
+soporte, y una \textbf{onda} que decide cómo oscila dentro de él. El kernel
+legacy no tiene esa separación: el decaimiento y la oscilación salen los dos
+del mismo $\sum a_n\cos(\cdot)$, así que los tres coeficientes hacen dos
+trabajos con un solo presupuesto.
+
+La medida que lo confirma: solo el \textbf{7{,}9\,\%} del conjunto factible
+$\{a_n\ge0,\ \ssum\le\frac12\}$ da un perfil decreciente. El otro 92\,\% son
+kernels con lóbulos secundarios --- los anillos concéntricos que se veían en
+el césped.
+
+\subsection{La solución: factorizar}
+
+\begin{equation}
+\boxed{\;K(r,t) \;=\; \underbrace{(1-r)^{\beta}}_{\text{envolvente }E}
+\;\cdot\; \underbrace{S(\varphi t)}_{\text{onda}}\;}
+\label{eq:kernel}
+\end{equation}
+\begin{equation}
+S(x) \;=\; b \;+\; \sum_{n=1}^{3} a_n\cos\bigl((2n-1)\,x\bigr),
+\label{eq:onda}
+\end{equation}
+\begin{equation}
+b \;=\; \gamma + (1-\gamma)\,\bigl(1-\ssum\bigr),\qquad \ssum=\sum_n a_n .
+\label{eq:pedestal}
+\end{equation}
+
+El término $b$ es el \textbf{pedestal}, tomado de AdaGaR. Es la pieza que lo
+cambia todo, porque hace que
+\[
+a=0 \;\Longrightarrow\; b=1 \;\Longrightarrow\; S\equiv 1
+\;\Longrightarrow\; K=(1-r)^{\beta},
+\]
+\emph{la tent del run\,67 exactamente}. Y el modelo se inicializa ahí
+(\code{gaussian\_model.py:298}, \code{a\_init\_row}). Las consecuencias no son
+cosméticas:
+
+\begin{itemize}
+\item El \textbf{baseline es el punto neutro} del espacio de parámetros, no una
+      esquina. Aprender la forma solo puede sumar; si no encuentra nada, se
+      queda donde estaba.
+\item La envolvente es \textbf{gratis}: ya no se paga con el presupuesto de
+      $a$. Los tres coeficientes quedan libres para lo único que deben hacer.
+\item La fracción de kernels decrecientes dentro del conjunto factible sube de
+      7,9\,\% a \textbf{70,8\,\%} (Monte Carlo convergido).
+\item El control experimental es exacto: las primeras iteraciones deben
+      reproducir el run\,67 dígito a dígito.
+\end{itemize}
+
+% ===========================================================================
+\section{Definición formal}
+
+\subsection{Los tres modos}
+
+El modo lo fija la variable de entorno \code{GABOR\_KERNEL} y viaja a CUDA
+como el entero \code{gabor\_mode} (\code{gabor\_kernel.h:47--49}):
+
+\begin{center}\small
+\begin{tabular}{@{}llp{2.5cm}@{}}
+\toprule
+\textbf{modo} & \textbf{id} & \textbf{kernel} \\
+\midrule
+\code{legacy} & 0 & $(f/f_0)^\beta$ \\
+\code{radial} & 1 & $(1-r)^\beta\,S(\varphi r)$ \\
+\code{dir}    & 2 & $(1-r)^\beta\,S(\varphi u)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+La diferencia entre \code{radial} y \code{dir} es el argumento de la onda:
+
+\begin{itemize}
+\item \textbf{radial}: $t=r$, la modulación es concéntrica. Produce
+      \emph{anillos}.
+\item \textbf{dir}: $t=u$, la primera coordenada local del surfel. La
+      modulación son \emph{franjas paralelas} en una dirección, que es lo que
+      un átomo de Gabor es de verdad. La orientación de las franjas la hereda
+      de la rotación del surfel, así que \textbf{ya es aprendible} sin añadir
+      ningún parámetro.
+\end{itemize}
+
+Los runs 5, 6 y 7 usan \code{dir}, que en el A/B local ganó con \emph{la mitad
+de splats} que \code{radial} (287\,k contra 597\,k): más expresividad por
+primitiva, que es la promesa del átomo.
+
+\subsection{La frecuencia: el modo \code{world} y por qué importa}
+
+$\varphi$ es adimensional dentro de CUDA, pero se construye en Python
+(\code{gaussian\_model.py:360--371}) de dos formas:
+
+\begin{align}
+\text{\code{norm}:}\quad & \varphi=\pi \\[0.2em]
+\text{\code{world}:}\quad & \varphi=\frac{f_1}{\text{extent}}\; s_u
+\label{eq:phi}
+\end{align}
+
+donde $s_u$ es la escala del eje $u$ en unidades de mundo y \emph{extent} es
+\code{spatial\_lr\_scale}.
+
+La consecuencia de \eqref{eq:phi} merece detenerse. La coordenada $u$ que
+recibe CUDA está \emph{normalizada por la escala del splat} (por eso el
+soporte es $\rho<1$), o sea $u = x_{\text{mundo}}/s_u$. Al multiplicar:
+\[
+\varphi\,u \;=\; \frac{f_1 s_u}{\text{extent}}\cdot\frac{x_{\text{mundo}}}{s_u}
+\;=\; \frac{f_1}{\text{extent}}\;x_{\text{mundo}} .
+\]
+Las escalas \textbf{se cancelan}. La longitud de onda en el mundo es
+\[
+\lambda = \frac{2\pi\,\text{extent}}{f_1},
+\]
+\emph{la misma para todos los splats}. El modo \code{world} impone una rejilla
+de frecuencia fija en la escena, y cada surfel muestra tantos ciclos como le
+quepan según su tamaño. Un splat grande desarrolla textura; uno pequeño no
+llega ni a medio ciclo y degenera al tent.
+
+En modo \code{norm} pasa lo contrario: $\varphi=\pi$ significa medio periodo
+dentro del soporte \emph{sea cual sea el tamaño}, es decir la frecuencia va
+atada al splat y no a la escena.
+
+\subsection{La cota del presupuesto}
+
+El requisito es $S\ge 0$: la onda no debe volverse negativa dentro del
+soporte, o el kernel pintaría opacidad negativa (que el forward recorta, pero
+recortar es perder gradiente). El peor caso de \eqref{eq:onda} es que los tres
+cosenos valgan $-1$ a la vez, así que
+\[
+S_{\min} = b - \ssum \;=\; \gamma+(1-\gamma)(1-\ssum)-\ssum
+\;=\; 1-(2-\gamma)\,\ssum ,
+\]
+y por tanto
+\begin{equation}
+\boxed{\;\ssum \;\le\; \frac{1}{2-\gamma}\;}
+\label{eq:cota}
+\end{equation}
+Con $\gamma=0{,}3$ salen $0{,}5882$ (\code{gaussian\_model.py:309--320}). Nótese
+que la cota es \emph{más generosa} que el $\frac12$ del legacy: es el mismo
+razonamiento, pero teniendo en cuenta que el pedestal sube automáticamente
+cuando $\ssum$ baja.
+
+El dial $\kappa$ (\code{GABOR\_KAPPA}) multiplica la cota. Con $\kappa<1$ se
+acota además el contraste valle/pico a $(1-\kappa)/(1+\kappa)$. Se dejó en
+$1{,}0$ en todos los runs.
+
+\subsection{Cómo se lee el papel de $\gamma$}
+
+$\gamma$ es el suelo del pedestal. Fija cuánta modulación puede llegar a
+haber como máximo:
+\[
+b\in[\gamma,\,1],\qquad b=1 \text{ si } \ssum=0,\qquad
+b=\gamma \text{ si } \ssum=1 .
+\]
+Con $\gamma=0$ el pedestal podría anularse del todo y la envolvente volvería a
+depender de $a$; con $\gamma=1$ el pedestal sería constante y la cota
+\eqref{eq:cota} se quedaría en $1$. El $0{,}3$ es el valor de AdaGaR.
+
+% ===========================================================================
+\section{El reparto Python / CUDA}
+
+Esta es la decisión de ingeniería con más consecuencias prácticas del
+rediseño, y no se ve en las ecuaciones.
+
+\subsection{El tensor de cinco columnas}
+
+El rasterizer recibe, por Gaussiana, un bloque de \textbf{5 floats}
+(\code{gabor\_kernel.h:45}, \code{GABOR\_STRIDE 5}):
+\[
+\bigl[\,a_1,\;a_2,\;a_3,\;\varphi,\;b\,\bigr]
+\]
+$\varphi$ y $b$ \textbf{no son parámetros entrenables}. Son funciones
+diferenciables de $a$ y de las escalas, calculadas en Python
+(\code{get\_gabor}, \code{gaussian\_model.py:352--374}). CUDA las trata como
+entradas independientes, devuelve $\partial L/\partial\varphi$ y
+$\partial L/\partial b$, y es \textbf{autograd} quien compone la cadena hacia
+\code{\_a} y \code{\_scaling}.
+
+Las tres razones, en orden de importancia:
+
+\begin{enumerate}
+\item \textbf{$\gamma$ y $f_1$ no viven en CUDA.} Barrerlos no recompila nada.
+      Todo el sweep de \code{GABOR\_F1} (runs 6 y 7) se hizo con una variable
+      de entorno.
+\item \textbf{El gradiente ``crece y ganarás textura'' llega solo.} Como
+      $\varphi$ depende de $s_u$ por \eqref{eq:phi}, autograd propaga
+      $\partial L/\partial\varphi \to \partial L/\partial s_u$
+      automáticamente. Ese camino \emph{no existe} en el rasterizer: es puro
+      Python.
+\item \textbf{Una sola fórmula.} El pedestal se escribe una vez.
+\end{enumerate}
+
+El coste: cambiar $a$ de $(N,3)$ a $(N,5)$ \textbf{obliga a recompilar el
+rasterizer}. Es el único cambio del rediseño que lo exige.
+
+\subsection{Dónde vive cada símbolo}
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{símbolo} & \textbf{qué es} & \textbf{dónde} \\
+\midrule
+$a_1,a_2,a_3$ & entrenable & Python + CUDA \\
+$\beta$       & entrenable & Python + CUDA \\
+$s_u,s_v$     & entrenable & Python + CUDA \\
+$\varphi$     & derivado   & Python \\
+$b$           & derivado   & Python \\
+$\gamma$      & constante  & Python \\
+$f_1$         & constante  & Python \\
+$\kappa$      & constante  & Python \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Solo tres familias de parámetros del kernel se entrenan: $a$, $\beta$ y, por
+la vía indirecta de $\varphi$, las escalas.
+
+% ===========================================================================
+\section{Fase 1 --- Preprocess}
+
+El kernel \code{preprocessCUDA} corre \textbf{una vez por Gaussiana} (no por
+píxel) y hace: culling de frustum, matriz de transformación, radio en pantalla,
+tiles tocados, color desde armónicos esféricos.
+
+Del bloque Gabor solo hace una cosa (\code{forward.cu:193--196}):
+
+\begin{lstlisting}[language=C]
+#pragma unroll
+for (int _k = 0; _k < GABOR_STRIDE; _k++)
+    a_out[GABOR_STRIDE*idx + _k] = a_in[GABOR_STRIDE*idx + _k];
+\end{lstlisting}
+
+Copiarlo al buffer de geometría, igual que $\beta$. Y esto tiene una
+consecuencia que conviene tener presente:
+
+\begin{quote}
+\textbf{El binning no sabe nada del kernel.} El radio en pantalla, la caja
+envolvente y el conjunto de tiles se calculan \emph{solo} con la geometría
+($\mu$, escalas, rotación). La onda no ensancha ni estrecha la huella.
+\end{quote}
+
+Es correcto, porque el soporte lo fija la envolvente $(1-r)^\beta$, que se
+anula en $r=1$ pase lo que pase con $S$. Pero significa que el coste de
+memoria del rediseño está aquí: el buffer de geometría pasa de $3$ a $5$ floats
+por splat. Con $4{,}9$ M splats son $\sim 39$ MB extra, despreciable frente a
+lo que ocupa el modelo.
+
+% ===========================================================================
+\section{Fase 2 --- Forward}
+
+Aquí es donde se evalúa el kernel: \textbf{una vez por pareja (píxel, splat)},
+que es el bucle más caliente de todo el sistema.
+
+\subsection{Antes del kernel: la geometría}
+
+Cada hilo intersecta el rayo del píxel con el plano del surfel y obtiene las
+coordenadas locales $s=(u,v)$ (\code{forward.cu:418--434}):
+\begin{align}
+\rho_{3d} &= u^2+v^2 && \text{geometría real} \\
+\rho_{2d} &= \text{FilterInvSquare}\,\|\,\mathbf{d}\,\|^2 && \text{filtro paso-bajo} \\
+\rho      &= \min(\rho_{3d},\rho_{2d}), \qquad r=\sqrt{\rho}
+\end{align}
+El \code{min} es del 2DGS original: cuando el splat se hace sub-píxel, quien
+manda es el filtro de pantalla, no la geometría. Y hay un guard,
+\code{if (r2 >= 1.0f) continue}, que garantiza $r<1$ en todo lo que sigue ---
+un dato del que dependen varias fórmulas del backward.
+
+\subsection{El interruptor de escala}
+
+\begin{lstlisting}[language=C]
+const bool modulate = (rho3d <= rho2d);
+const float t = (gabor_mode == GABOR_MODE_DIR) ? s.x : r;
+const float S = modulate
+              ? gabor_wave(a1,a2,a3,b,phi,t,dS_dt,dS_dphi)
+              : 1.0f;
+\end{lstlisting}
+
+\textbf{La onda solo se aplica donde manda la geometría real.} Si el splat es
+sub-píxel, $S$ se fuerza a $1$ y el kernel es tent puro. El razonamiento:
+
+\begin{itemize}
+\item Un splat sub-píxel \emph{no puede mostrar textura}. Modularlo sería
+      pintar detalle por debajo de la frecuencia de Nyquist de la pantalla:
+      aliasing, no señal.
+\item Mantiene intacto el gradiente de la rama $\rho_{2d}$, que es puramente
+      geométrico. Sin el interruptor aparecerían términos cruzados entre la
+      onda y el filtro paso-bajo.
+\end{itemize}
+
+Este interruptor es también el origen del diagnóstico \code{[GABOR-W]}: es la
+frontera entre ``la onda está encendida'' y ``este splat es un tent''.
+
+\subsection{La evaluación}
+
+\begin{lstlisting}[language=C]
+float dE_dr;
+const float E = gabor_envelope(r, beta_j, dE_dr);
+kernel = fmaxf(E * S, 0.0f);   // S<0 -> el lobulo negativo no pinta
+float alpha = min(0.99f, opa * kernel);
+if (alpha < 1.0f/255.0f) continue;
+\end{lstlisting}
+
+Con la envolvente (\code{gabor\_kernel.h:70--76}):
+\[
+E=\bigl(\max(1-r,\,10^{-6})\bigr)^{\beta},\qquad
+\frac{\partial E}{\partial r}=-\beta\,(1-r)^{\beta-1}
+\]
+El piso $10^{-6}$ evita $\mathrm{pow}(0,\beta)$ con $\beta<1$ en el borde.
+
+Y la onda (\code{gabor\_kernel.h:55--65}), que calcula de una vez el valor y
+las dos derivadas que hará falta más tarde:
+\[
+S=b+\sum_n a_n\cos(w_n t),\qquad w_n=(2n-1)\varphi
+\]
+\[
+\frac{\partial S}{\partial t}=-\sum_n a_n w_n\sin(w_n t),\qquad
+\frac{\partial S}{\partial \varphi}=-t\sum_n a_n(2n-1)\sin(w_n t)
+\]
+
+Tres observaciones sobre el \code{fmaxf(E*S, 0)}:
+
+\begin{enumerate}
+\item La cota \eqref{eq:cota} ya garantiza $S\ge0$, así que \emph{en teoría} el
+      \code{fmaxf} es código muerto. Está por lo mismo que los demás pisos del
+      rasterizer: un \code{.ply} de un run viejo, o un epsilon de float32,
+      no deben poder producir opacidad negativa.
+\item A diferencia del legacy, aquí \textbf{no hay división}. El legacy dividía
+      por $f_0$, y esa división fue la singularidad que reventó el run\,1
+      (52,6\,M splats y NaN en la iteración 4.100).
+\item $K\le 1$ no está garantizado por construcción, pero sí en la práctica:
+      $E\le1$ y $S\le b+\ssum\le 1$ cuando $\ssum\le 1/(2-\gamma)$ y
+      $\gamma\le1$. El \code{min(0.99f, ...)} de $\alpha$ es un guard aparte,
+      heredado del 3DGS.
+\end{enumerate}
+
+\subsection{Coste}
+
+Por pareja píxel--splat modulada: \textbf{3 senos y 3 cosenos} más un
+\code{powf}. El tent solo pagaba el \code{powf}. En unidades de la SFU de la
+GPU eso es del orden de $6\times$ más trabajo trascendente en el punto más
+caliente del pipeline.
+
+Dos atenuantes medidos: (a) el interruptor de escala deja fuera a los splats
+sub-píxel, que en estas escenas son mayoría; (b) los senos y cosenos se evalúan
+en \code{sinf}/\code{cosf} (precisión simple, hardware), no en las versiones
+de doble precisión.
+
+Hay una optimización pendiente que \emph{no} es del kernel pero le afecta: el
+\code{cutoff} sigue en $3{,}0$ (valor gaussiano) cuando el soporte es compacto
+en $r=1$, así que se están evaluando del orden de $9\times$ más píxeles de los
+necesarios. Ver el punto 3 de la lista de pendientes del proyecto.
+
+% ===========================================================================
+\section{Fase 3 --- Backward}
+
+El backward recorre las mismas parejas píxel--splat en orden inverso,
+reconstruyendo la transmitancia $T$ hacia atrás.
+
+\subsection{Regla número uno: recomputar, no recordar}
+
+El backward \textbf{vuelve a evaluar el kernel entero} en vez de guardarlo. Es
+lo correcto en memoria (guardar $K$ por pareja píxel--splat sería un buffer
+prohibitivo) pero implica que las dos fórmulas tienen que coincidir
+exactamente. Este proyecto ya pagó una vez ese precio: en los runs 60 y 62 el
+clamp de $\alpha$ del backward no coincidía con el del forward y los gradientes
+se inflaban en todo el frente del píxel.
+
+De ahí que la definición viva en \textbf{un único header},
+\code{gabor\_kernel.h}, que incluyen los dos ficheros. Y de ahí la línea
+explícita (\code{backward.cu:368}):
+
+\begin{lstlisting}[language=C]
+float alpha = min(0.99f, opa * kernel);   // el MISMO clamp que el forward
+const float G = kernel;                   // sin clampar: dalpha/dopa
+\end{lstlisting}
+
+\subsection{El punto de partida: $\partial L/\partial\alpha$}
+
+Antes de tocar el kernel, el backward acumula en \code{dL\_dalpha} todo lo que
+depende de $\alpha$: color, profundidad, normales, mapa de acumulación y
+distorsión (\code{backward.cu:382--436}). Al final multiplica por $T$.
+
+Desde ahí salen \textbf{cinco} gradientes nuevos, más los que ya existían.
+
+\subsection{Los cinco gradientes del bloque Gabor}
+
+Todos salen de derivar \eqref{eq:kernel} directamente, sin división:
+
+\begin{align}
+\frac{\partial\alpha}{\partial\beta}   &= \text{opa}\cdot E\cdot S\cdot\ln(1-r) \label{eq:gbeta}\\
+\frac{\partial\alpha}{\partial a_n}    &= \text{opa}\cdot E\cdot\cos(w_n t) \label{eq:ga}\\
+\frac{\partial\alpha}{\partial b}      &= \text{opa}\cdot E \label{eq:gb}\\
+\frac{\partial\alpha}{\partial \varphi}&= \text{opa}\cdot E\cdot\frac{\partial S}{\partial\varphi} \label{eq:gphi}
+\end{align}
+
+Compárese con el legacy, cuyo gradiente de $a_n$ era
+\[
+\frac{\partial\alpha}{\partial a_n}
+=\frac{\text{opa}\cdot\beta}{f_0}\,g^{\beta-1}\,(c_n-g),
+\]
+con un $f_0$ en el denominador, un $g^{\beta-1}$ que hay que apuntalar cuando
+$\beta<1$, y una resta $(c_n-g)$ que acopla los tres coeficientes entre sí.
+El del átomo, \eqref{eq:ga}, es un coseno multiplicado por dos factores
+positivos. \textbf{La simplificación del backward es, en sí misma, un
+resultado del rediseño}: menos casos singulares que apuntalar.
+
+La implementación (\code{backward.cu:466--490}):
+
+\begin{lstlisting}[language=C]
+const float opaE = opa * E_env;
+if (beta_j >= 0.1f) {
+    float grad_beta = dL_dalpha * opaE * S_mod
+                    * logf(fmaxf(1.0f - r, 1e-6f));
+    grad_beta = fminf(fmaxf(grad_beta, -1e-3f), 1e-3f);
+    atomicAdd(&dL_dbeta[global_id], grad_beta);
+}
+if (modulate) {
+    const float base = dL_dalpha * opaE;
+    ga1 = clamp(base * cosf(w1*t_mod), -50, 50);
+    ...
+    gph = clamp(base * dS_dphi, -50, 50);
+    gb  = clamp(base,           -50, 50);
+    atomicAdd(&dL_da[global_id*GABOR_STRIDE + k], g_k);
+}
+\end{lstlisting}
+
+\subsection{Por qué los clamps son distintos}
+
+$\pm10^{-3}$ para $\beta$ y $\pm50$ para el resto. No es arbitrario:
+
+\begin{itemize}
+\item El de $\beta$ es un \textbf{limitador de señal} heredado del kernel beta
+      original, donde $\ln g$ podía explotar. En el átomo el logaritmo es
+      $\ln(1-r)$, \emph{finito en toda la huella} porque el guard $r<1$ lo
+      garantiza --- ya no haría falta, y se mantiene por prudencia.
+\item El de $a$, $\varphi$ y $b$ es un \textbf{backstop de NaN}, no un
+      limitador: esos gradientes son $O(1)$ y $\pm50$ no los toca nunca. Es
+      importante no confundirlos: clampar $a$ a $10^{-3}$ aplastaría la señal
+      y el kernel no aprendería nada.
+\end{itemize}
+
+\subsection{El gate $\beta\ge0{,}1$ ya no cubre todo}
+
+En el legacy, los splats con $\beta<0{,}1$ se saltaban el gradiente de $\beta$
+para evitar NaN. En el átomo ese gate sigue aplicándose \emph{solo a $\beta$};
+$a$, $\varphi$ y $b$ quedan siempre vivos, porque \eqref{eq:ga}--\eqref{eq:gphi}
+no tienen ninguna singularidad. Un splat con $\beta$ minúsculo puede seguir
+aprendiendo forma.
+
+\subsection{La bifurcación radial / direccional en la cadena de $\rho$}
+
+Esta es la parte del backward donde es más fácil equivocarse. La derivada
+respecto de la geometría (\code{backward.cu:551--564}):
+
+\begin{lstlisting}[language=C]
+float dalpha_dr = opa * dE_dr * S_mod;
+if (modulate && gabor_mode == GABOR_MODE_RADIAL)
+    dalpha_dr += opa * E_env * dS_dt;
+d_alpha_d_rho = dalpha_dr / (2.0f * r_safe);
+if (modulate && gabor_mode == GABOR_MODE_DIR)
+    dalpha_dsx_extra = opa * E_env * dS_dt;
+\end{lstlisting}
+
+El razonamiento:
+
+\begin{itemize}
+\item En \textbf{radial} la onda depende de $r$, así que su contribución entra
+      entera por la regla de la cadena de $\rho$:
+      $\partial\alpha/\partial r = \text{opa}\,(E'S+ES')$, y luego
+      $\partial r/\partial\rho = 1/(2r)$.
+\item En \textbf{dir} la onda depende de $u=s_x$, que \emph{no pasa por
+      $\rho$}. Su término se lleva aparte y se inyecta directamente en la
+      componente $x$ del gradiente respecto de las coordenadas locales
+      (\code{backward.cu:593--596}):
+      \[
+      \text{dL\_ds}.x = \underbrace{\text{dL\_d\_rho}\cdot 2 s_x}_{\text{geometría}}
+      + \underbrace{\text{dL\_dalpha}\cdot\text{dalpha\_dsx\_extra}}_{\text{onda}}
+      + \text{dL\_dz}\cdot T_{w,x}
+      \]
+\end{itemize}
+
+Si se olvidara ese término, la onda direccional sería invisible para la
+geometría: el modelo no podría mover ni rotar el surfel para alinear las
+franjas con la textura de la escena, que es justamente lo que se le pide.
+Nótese la asimetría: la componente $y$ no lleva término de onda, porque en modo
+\code{dir} la onda no depende de $v$.
+
+\subsection{El guard $r_{\text{safe}}$}
+
+$\partial r/\partial\rho = 1/(2r)$ diverge en $r\to0$. El código usa
+$r_{\text{safe}}=\max(r,10^{-6})$. La divergencia no es real: en el centro
+$\partial\alpha/\partial r\to0$ (tanto $E'$ como $S'$ contienen factores que se
+anulan), así que el cociente tiene límite finito; el guard solo evita el
+$0/0$ numérico.
+
+\subsection{Una asimetría real que conviene conocer}
+
+El término de fondo se suma a \code{dL\_dalpha} \emph{después} de que se hayan
+escrito los gradientes de $a$, $\varphi$, $b$ y $\beta$
+(\code{backward.cu:568--571}):
+\[
+\text{dL\_dalpha} \mathrel{+}= \Bigl(\frac{-T_{\text{final}}}{1-\alpha}\Bigr)
+\sum_c \text{bg}_c\cdot \frac{\partial L}{\partial \text{pix}_c}
+\]
+mientras que \code{dL\_d\_rho} sí lo incluye (es el ``FIX \#3'' documentado en
+el código). Es decir: los gradientes del kernel omiten la contribución del
+color de fondo.
+
+\textbf{En los runs de este proyecto el término es exactamente cero}, porque
+\code{white\_background} está en \code{False} y el fondo es negro
+(\code{train.py:79}), así que $\text{bg}\cdot\partial L/\partial\text{pix}=0$.
+Pero deja de serlo si alguna vez se entrena con \code{--white\_background}
+(por ejemplo, en los datasets sintéticos tipo Blender): ahí $\partial
+L/\partial a_n$ quedaría sesgado respecto de la derivada exacta, mientras que
+$\partial L/\partial\rho$ no. Es una trampa latente, no un bug activo.
+
+% ===========================================================================
+\section{Fase 4 --- Python: restricciones y paso del optimizador}
+
+Cada iteración, después de \code{optimizer.step()}, se aplican tres
+correcciones en este orden (\code{train.py:403--456}):
+
+\begin{enumerate}
+\item \textbf{Clamp de $\beta$} a $[-4,\,2]$ en el parámetro crudo. El techo
+      vive en una sola constante, \code{BETA\_RAW\_MIN/MAX}, desde que un print
+      desincronizado anunció durante varios runs un experimento que no se
+      estaba corriendo.
+\item \textbf{Clamp de la escala} sobre el parámetro crudo, no sobre la
+      activación. Mata el ``trinquete'': con \code{torch.clamp} el gradiente no
+      pasa por encima del máximo, así que un splat que cruce el techo se
+      congelaría para siempre.
+\item \textbf{Proyección de $a$} sobre el conjunto factible.
+\end{enumerate}
+
+\subsection{La proyección: gradiente proyectado exacto}
+
+\code{project\_a\_} (\code{gaussian\_model.py:404--437}) implementa la
+proyección euclídea \emph{exacta} sobre
+\[
+\mathcal{A}=\{a\in\mathbb{R}^3:\ a_n\ge0,\ \ssum\le S_{\max}\},
+\]
+que es convexo (una caja intersecada con un semiespacio):
+
+\begin{enumerate}
+\item $w=\max(a,0)$ proyecta sobre la caja. Si $\sum w\le S_{\max}$, listo:
+      por ser óptimo sobre un conjunto \emph{mayor} que $\mathcal{A}$, también
+      es la proyección sobre $\mathcal{A}$.
+\item Si no, la restricción de suma está activa y la proyección es la del
+      símplex $\{a\ge0,\ \ssum=S_{\max}\}$: ordenar descendente, encontrar el
+      mayor $\rho$ con $u_\rho-(\text{cumsum}_\rho-S_{\max})/\rho>0$, restar el
+      umbral $\theta$ a todos (Duchi et al., 2008).
+\end{enumerate}
+
+Esto no es un clamp heurístico: es \textbf{descenso por gradiente
+proyectado}, con las garantías que eso conlleva. En tres dimensiones el
+\code{sort} es trivial.
+
+Detalle no cosmético: la tolerancia \code{\_A\_SUM\_TOL} $=10^{-6}$. Sin ella,
+como la propia proyección deja $\ssum$ exactamente en la frontera, en float32
+una fracción de las filas queda un epsilon por encima y se lanzaría el
+\code{sort} sobre millones de filas cada iteración sin cambiar nada.
+
+\subsection{La doble imposición de $a_n\ge0$}
+
+$a_n\ge0$ se impone en \emph{dos} sitios: en \code{project\_a\_} (sobre el
+parámetro) y en \code{get\_a} con un \code{clamp(min=0)} (sobre el forward).
+El segundo existe porque \code{render.py}, \code{metrics.py} y el visor
+\textbf{no pasan por el bucle de entrenamiento}. Los dos tienen que moverse
+juntos o aparece inconsistencia train$\leftrightarrow$render. La cota de la
+suma, en cambio, no se repite en el forward: como la proyección escribe sobre
+el parámetro, lo que se guarda en el \code{.ply} ya es factible.
+
+\subsection{La autocalibración de $f_1$}
+
+Con \code{GABOR\_F1} sin definir, $f_1$ se elige una sola vez en
+\code{create\_from\_pcd} para que el interruptor $f\!\cdot\!W=1$ caiga en el
+percentil 90 de las escalas iniciales: el 10\,\% de surfels más grandes
+desarrolla textura y el resto degenera al tent
+(\code{gaussian\_model.py:376--402}).
+
+La anchura efectiva no es el radio del soporte, sino
+\begin{equation}
+W = 2\,s\,\sigma_{\text{env}}(\beta),\qquad
+\sigma_{\text{env}}(\beta)=\frac{\sqrt{\beta+1}}{(\beta+2)\sqrt{\beta+3}}
+\label{eq:sigma}
+\end{equation}
+que es la desviación típica de la distribución $\mathrm{Beta}(1,\beta+1)$, cuya
+densidad es proporcional a $(1-x)^\beta$ --- es decir, exactamente el perfil de
+la envolvente leído como distribución de probabilidad. Con el $\beta\approx
+2{,}24$ medido en los runs sale $\sigma_{\text{env}}\approx0{,}186$, o sea
+$W\approx0{,}37\,s$: \textbf{el radio sobreestima el tamaño útil unas tres
+veces}. Usar el radio en vez de \eqref{eq:sigma} daría un $f_1$ demasiado bajo
+y la onda nacería apagada.
+
+De ahí:
+\[
+f_1 = \frac{\text{extent}}{2\,s_{p90}\,\sigma_{\text{env}}}
+\]
+En \emph{flowers} salieron $46{,}6247$ rad/extent.
+
+\begin{quote}
+\textbf{Trampa operativa.} \code{render.py} llama a \code{load\_ply}, no a
+\code{create\_from\_pcd}, así que \textbf{la autocalibración no corre en el
+render} y $f_1$ se queda en $0$. Hay que pasarle el valor por variable de
+entorno. El primer render del run\,5 se hizo sin ella: el modelo se evaluó con
+\code{legacy/norm/f1=0} y con una cota $\ssum$ más estrecha que la del
+entrenamiento, así que \code{load\_ply} \emph{reproyectó el 29,2\,\% de los
+splats y mutó el modelo}. Resultado: $-5{,}07$ dB y dianas en el césped, con el
+modelo intacto. Hoy \code{render\_server.sh} lee la configuración del log del
+train y la verifica.
+\end{quote}
+
+\subsection{Tasa de aprendizaje}
+
+$a$ se optimiza con \code{lr = 0.001} (\code{gaussian\_model.py:511}), tres
+órdenes por debajo de la de posición. No se ha barrido.
+
+% ===========================================================================
+\section{Fase 5 --- Densificación y ciclo de vida}
+
+\subsection{Herencia en clone y split}
+
+$a$ se hereda \textbf{tal cual} en las dos rutas de creación
+(\code{gaussian\_model.py:900} y \code{:926}):
+
+\begin{lstlisting}[language=Python]
+new_a = self._a[selected_pts_mask].repeat(N, 1)   # split
+new_a = self._a[selected_pts_mask]                # clone
+\end{lstlisting}
+
+El criterio es el mismo que arregló el trinquete de $\beta$: la escala y la
+opacidad son magnitudes \textbf{extensivas} y se reparten entre los hijos
+($/0{,}8N$ y $/N$); $a$ y $\beta$ son parámetros de \textbf{forma},
+adimensionales, y no se reparten. Repartir $\beta$ entre hijos era exactamente
+el bug que degradaba el kernel a caja tras seis generaciones de split.
+
+\subsection{Pero la frecuencia sí se hereda mal (y esto es un hallazgo)}
+
+Aquí hay una interacción que no está escrita en ningún sitio del código y que
+explica la principal patología medida. En el split:
+\[
+s^{\text{hijo}} = \frac{s^{\text{padre}}}{0{,}8N},
+\qquad\text{y por \eqref{eq:phi}}\qquad
+\varphi^{\text{hijo}} = \frac{\varphi^{\text{padre}}}{0{,}8N}
+\]
+Como $a$ se hereda intacto pero $\varphi$ cae con la escala, \textbf{cada
+split apaga un poco más la onda}. El hijo conserva la \emph{amplitud} de la
+modulación del padre pero pierde su \emph{frecuencia efectiva}: ya no le cabe
+ni medio ciclo dentro de la huella, y $S\to b\approx$ constante, o sea tent.
+
+Esto es exactamente la deriva medida en los tres runs:
+
+\begin{center}\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+apagados ($f\!\cdot\!W<0{,}5$) & run5 & run6 & run7 \\
+\midrule
+@2500  & 88,6\,\% & 73,1\,\% & 43,3\,\% \\
+@7000  & 94,3\,\% & 86,0\,\% & 61,0\,\% \\
+@30000 & 93,4\,\% & 83,8\,\% & 64,1\,\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+El salto empeora siempre entre 2500 y 7000, que es la ventana de densificación
+más intensa. Y explica por qué subir $f_1$ desplaza la curva entera pero no
+elimina la pendiente: $f_1$ es una constante fijada con las escalas
+\emph{iniciales}, y la densificación mueve el blanco. La única variante viva de
+esa línea es \textbf{recalibrar $f_1$ durante el run}.
+
+\subsection{Serialización}
+
+$a$ se guarda en el \code{.ply} como \code{a\_0}, \code{a\_1}, \code{a\_2}
+(solo los tres entrenables: $\varphi$ y $b$ se recalculan). Al cargar
+(\code{gaussian\_model.py:653--680}) hay dos salvaguardas: si el \code{.ply} es
+antiguo y no tiene campos \code{a\_*}, se cae al init del modo; y siempre se
+llama a \code{project\_a\_}, avisando \emph{solo} si la violación es de
+magnitud real, para no dar falsos positivos por el redondeo del roundtrip.
+
+Ese aviso, \code{[A] load\_ply: ... PROYECTADOS}, es el que delata el problema
+de configuración descrito antes.
+
+% ===========================================================================
+\section{Verificación}
+
+\code{scripts/test\_gabor\_atomo.py} comprueba tres cosas contra el
+rasterizador \emph{real}, no contra una reimplementación:
+
+\begin{enumerate}
+\item \textbf{El punto neutro.} Con $a=0$, los modos \code{radial} y \code{dir}
+      dan la misma imagen y coinciden con $(1-r)^\beta$ bit a bit.
+\item \textbf{Los gradientes} de $a_n$, $\varphi$, $b$, $\beta$ y las escalas,
+      contra diferencias finitas: medianas de error del 0,2 al
+      2,9\,\%.
+\item \textbf{No regresión}: el modo legacy sigue dando lo de antes, con
+      2,5\,\% en \code{scaling} como control.
+\end{enumerate}
+
+Los porcentajes parecen altos para una comprobación de gradientes, pero son los
+esperables en float32 con un rasterizador con early-outs discontinuos
+(\code{alpha < 1/255}, \code{T < 1e-4}): un perturbación finita puede cruzar un
+umbral y cambiar el conjunto de splats que contribuyen.
+
+% ===========================================================================
+\section{Qué se midió}
+
+\subsection{El rediseño funciona; la onda no compra}
+
+\begin{center}\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{run} & \textbf{PSNR} & \textbf{SSIM} & \textbf{LPIPS} \\
+\midrule
+run2 legacy      & 20,1602 & 0,5537 & 0,3900 \\
+run67 tent       & 20,6684 & 0,5811 & 0,3675 \\
+\midrule
+run5 átomo $1\times$ & 20,6898 & 0,5759 & 0,3724 \\
+run6 átomo $2\times$ & 20,5999 & 0,5763 & 0,3716 \\
+run7 átomo $4\times$ & 20,7167 & 0,5758 & 0,3720 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Dos lecturas, las dos importantes:
+
+\begin{itemize}
+\item Contra el \textbf{legacy}, el átomo gana en las tres métricas
+      ($+0{,}53$ dB). El rediseño hace lo que prometía: \emph{aprender la forma
+      ya no resta}.
+\item Contra el \textbf{tent}, empate dentro del ruido. Y el sweep de $f_1$
+      demostró que no es porque la onda esté apagada: con $f_1$ a $4\times$ se
+      encendieron $5{,}9$ veces más splats, con más amplitud
+      ($\ssum$ medio $0{,}2909\to0{,}3429$) y menos kernels planos
+      ($21{,}4 \to 12{,}9$\,\%), y las métricas no se movieron.
+\end{itemize}
+
+Conclusión: en \emph{flowers}, \textbf{todo el beneficio del átomo viene de la
+envolvente} (el pedestal que hace del tent el punto neutro), no de la
+oscilación. Lo cual tiene sentido: el césped y el follaje son textura
+estocástica de alta frecuencia sin estructura oscilatoria coherente, y un
+armónico aprendido no tiene ahí nada que encajar. Está pendiente comprobarlo en
+escenas con estructura (bonsai, kitchen).
+
+\subsection{La firma que sí se repite}
+
+En los cuatro runs del átomo, sin excepción: $a_1$ baja y $a_3$ sube durante el
+entrenamiento, hasta que en el run\,7 se cruzan ($a_3=0{,}1237 > a_1=0{,}1153$).
+El kernel gasta el presupuesto en el armónico más alto --- espectro creciente,
+justo lo contrario de una envolvente. Es la señal con más contenido que queda
+sin explicar, y la que apunta a la siguiente palanca: forzar $a_1>a_2>a_3$.
+
+% ===========================================================================
+\section{Invariantes}
+
+Lo que no se puede romper sin romper el kernel:
+
+\begin{enumerate}
+\item \textbf{Una sola definición.} $K$ y sus derivadas viven en
+      \code{gabor\_kernel.h}. Forward y backward lo incluyen los dos.
+\item \textbf{$a=0$ debe dar la tent exacta.} Es el control experimental. Si
+      un cambio lo rompe, el baseline deja de ser comparable.
+\item \textbf{El clamp de $\alpha$ es el mismo en los dos pases.}
+\item \textbf{Las variables de entorno del render deben coincidir con las del
+      train}, $f_1$ incluido. \code{render\_server.sh} lo verifica solo.
+\item \textbf{Cambiar el layout del bloque $a$ obliga a recompilar} el
+      rasterizer. Cambiar $\gamma$, $f_1$ o $\kappa$ no.
+\item \textbf{Los diagnósticos se leen por histograma}, nunca por el máximo.
+      El proyecto tiene ya varios casos de un dial que parecía activo y era un
+      no-op.
+\end{enumerate}
+
+% ===========================================================================
+\appendix
+\section{Símbolos}
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+$r$ & distancia normalizada, $r=\sqrt{\rho}$, $r<1$ \\
+$u,v$ & coordenadas locales del surfel \\
+$\rho_{3d}$ & $u^2+v^2$, geometría real \\
+$\rho_{2d}$ & filtro paso-bajo de pantalla \\
+$E$ & envolvente $(1-r)^\beta$ \\
+$S$ & onda, ecuación \eqref{eq:onda} \\
+$b$ & pedestal, ecuación \eqref{eq:pedestal} \\
+$\varphi$ & frecuencia base efectiva \\
+$w_n$ & $(2n-1)\varphi$ \\
+$t$ & argumento de la onda: $r$ o $u$ \\
+$\gamma$ & suelo del pedestal (0,3) \\
+$f_1$ & frecuencia en rad por unidad de extent \\
+$\kappa$ & dial de contraste (1,0) \\
+$\beta$ & exponente de la envolvente \\
+$W$ & anchura efectiva, ecuación \eqref{eq:sigma} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Mapa del código}
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+kernel y derivadas & \code{gabor\_kernel.h} \\
+copia por-Gaussiana & \code{forward.cu:193} \\
+evaluación & \code{forward.cu:474--503} \\
+recomputación & \code{backward.cu:333--369} \\
+5 gradientes & \code{backward.cu:466--490} \\
+cadena de $\rho$ & \code{backward.cu:551--564} \\
+$\varphi$ y $b$ & \code{gaussian\_model.py:352} \\
+autocalibración & \code{gaussian\_model.py:376} \\
+proyección & \code{gaussian\_model.py:404} \\
+init & \code{gaussian\_model.py:298} \\
+herencia & \code{gaussian\_model.py:900,926} \\
+paso del optimizador & \code{train.py:403--456} \\
+diagnósticos & \code{train.py:542--600} \\
+verificación & \code{scripts/test\_gabor\_atomo.py} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Documentos relacionados}
+
+\begin{itemize}
+\item \code{docs/rediseno\_kernel\_gabor\_adagar.html} --- el rediseño con
+      las 14 figuras y los Monte Carlo del conjunto factible.
+\item \code{docs/analisis\_run2\_y\_codigo\_completo.html} --- el diagnóstico
+      del kernel legacy.
+\item \code{docs/render\_y\_env\_vars.html} --- el pipeline de render y la
+      tabla de variables de entorno.
+\item \code{CLAUDE.md} --- estado actual, baselines y palancas abiertas.
+\end{itemize}
+
+\end{document}
