@@ -33,7 +33,33 @@
   top=0.40in, bottom=0.46in, left=0.32in, right=0.32in,
   footskip=0.24in
 ]{geometry}
+\usepackage{float}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.16}
 \usepackage[hidelinks]{hyperref}
+
+% --- Estilo unico para TODAS las figuras (e-ink: sin color, se distingue por
+%     trazo y grosor, nunca por tono) -----------------------------------------
+\pgfplotsset{
+  eink/.style={
+    width=12.4cm, height=5.3cm,
+    scale only axis,
+    axis lines=left,
+    tick align=outside,
+    tick style={black, thin},
+    every axis label/.append style={font=\small},
+    tick label style={font=\footnotesize},
+    legend style={font=\footnotesize, draw=none, fill=none,
+                  at={(0.5,-0.26)}, anchor=north, legend columns=2,
+                  cells={anchor=west}, inner sep=1.5pt,
+                  /tikz/every even column/.append style={column sep=0.45cm}},
+    label style={font=\small},
+    line width=0.9pt,
+    samples=180,
+  },
+  /pgf/number format/use comma,
+}
+\newcommand{\figcap}[1]{\caption{\small #1}}
 
 % --- Espaciado pensado para pantalla: sin sangria, aire entre parrafos -------
 \setlength{\parindent}{0pt}
@@ -280,6 +306,221 @@ depender de $a$; con $\gamma=1$ el pedestal sería constante y la cota
 \eqref{eq:cota} se quedaría en $1$. El $0{,}3$ es el valor de AdaGaR.
 
 % ===========================================================================
+\section{Atlas del kernel}
+
+Todas las curvas de esta sección son las funciones \emph{reales} del código,
+evaluadas con los parámetros medidos en los runs: $\gamma=0{,}3$,
+$\beta=2{,}236$ (media del run\,7 a 30\,k) y, cuando se indica, los
+coeficientes medios $a=(0{,}1153,\;0{,}1039,\;0{,}1237)$ del run\,7, que dan
+$\ssum=0{,}3429$ y $b=0{,}760$.
+
+\subsection{El punto neutro: caja contra tent}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, xlabel={$r$}, ylabel={$K(r)$},
+  xmin=0, xmax=1, ymin=0, ymax=1.15]
+\addplot[black, dashed, domain=0:1] {1};
+\addlegendentry{legacy con $a=0$: caja}
+\addplot[black!45, line width=2.4pt, domain=0:1] {pow(1-x,2.236)};
+\addlegendentry{tent del run\,67}
+\addplot[black, dotted, line width=1.1pt, domain=0:1] {pow(1-x,2.236)};
+\addlegendentry{átomo con $a=0$}
+\end{axis}
+\end{tikzpicture}
+\figcap{La figura que resume el rediseño. Cuando el modelo no aprende nada, el
+kernel legacy degenera en un \emph{disco plano} y el átomo cae exactamente
+sobre la tent: la curva punteada se apoya sobre la gruesa porque son la misma
+función. El baseline pasa de ser una esquina del espacio de parámetros a ser su
+punto neutro.}
+\end{figure}
+
+\subsection{La envolvente y el papel de $\beta$}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, xlabel={$r$}, ylabel={$E(r)=(1-r)^{\beta}$}, legend columns=3,
+  xmin=0, xmax=1, ymin=0, ymax=1.02]
+\addplot[black, dotted,   domain=0:1] {pow(1-x,0.5)};   \addlegendentry{$\beta=0{,}5$}
+\addplot[black, dashed,   domain=0:1] {pow(1-x,1)};     \addlegendentry{$\beta=1$}
+\addplot[black, line width=1.6pt, domain=0:1] {pow(1-x,2.236)}; \addlegendentry{$\beta=2{,}24$ (media medida)}
+\addplot[black!60, dashdotted, domain=0:1] {pow(1-x,5)};  \addlegendentry{$\beta=5$}
+\addplot[black!60, solid, domain=0:1] {pow(1-x,15)};      \addlegendentry{$\beta=15$}
+\end{axis}
+\end{tikzpicture}
+\figcap{$\beta$ es el único parámetro de la envolvente y controla cuánta masa
+queda cerca del centro. El soporte es compacto para todo $\beta$: se anula en
+$r=1$, que es lo que permite el guard \code{r2>=1 continue} del rasterizer y
+lo que hace finito el $\ln(1-r)$ del gradiente. El rango medido en los runs va
+de $0{,}096$ a $14$, con media $2{,}24$.}
+\end{figure}
+
+\subsection{La onda: dos formas de gastar el mismo presupuesto}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, xlabel={$x=\varphi t$ (rad)}, ylabel={$S(x)$},
+  xmin=0, xmax=12.566, ymin=0.3, ymax=1.2,
+  xtick={0,3.1416,6.2832,9.4248,12.566},
+  xticklabels={$0$,$\pi$,$2\pi$,$3\pi$,$4\pi$}]
+\addplot[black, line width=1.4pt, domain=0:12.566]
+  {0.76 + 0.2400*cos(deg(x)) + 0.0700*cos(deg(3*x)) + 0.0329*cos(deg(5*x))};
+\addlegendentry{espectro decreciente}
+\addplot[black, dashed, domain=0:12.566]
+  {0.76 + 0.1153*cos(deg(x)) + 0.1039*cos(deg(3*x)) + 0.1237*cos(deg(5*x))};
+\addlegendentry{run\,7 medido ($a_3>a_1$)}
+\addplot[black!50, dotted, line width=1pt, domain=0:12.566] {0.76};
+\addlegendentry{pedestal $b$}
+\end{axis}
+\end{tikzpicture}
+\figcap{Las dos curvas tienen \emph{exactamente} el mismo presupuesto
+($\ssum=0{,}343$) y el mismo pedestal, y son kernels completamente distintos.
+Arriba, el reparto decreciente da una oscilación limpia de un solo armónico
+dominante. Abajo, el reparto que el optimizador eligió de verdad en el run\,7
+--- con $a_3>a_1$ --- da una onda dentada, con la energía en el armónico más
+alto. Ambas oscilan alrededor de $b$ y ninguna baja de
+$S_{\min}=1-(2-\gamma)\ssum=0{,}417$.}
+\end{figure}
+
+\subsection{El interruptor: qué significa ``la onda está apagada''}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, xlabel={$u$ (coordenada local, soporte $|u|\le1$)},
+  ylabel={$S(\varphi u)$},
+  xmin=-1, xmax=1, ymin=0.3, ymax=1.2]
+\addplot[black, line width=1.4pt, domain=-1:1]
+  {0.76 + 0.1153*cos(deg(0.154*x)) + 0.1039*cos(deg(3*0.154*x)) + 0.1237*cos(deg(5*0.154*x))};
+\addlegendentry{$\varphi=0{,}15$ (p10: apagado)}
+\addplot[black, dashed, domain=-1:1]
+  {0.76 + 0.1153*cos(deg(0.884*x)) + 0.1039*cos(deg(3*0.884*x)) + 0.1237*cos(deg(5*0.884*x))};
+\addlegendentry{$\varphi=0{,}88$ (p50: apagado)}
+\addplot[black, dotted, line width=1.1pt, domain=-1:1]
+  {0.76 + 0.1153*cos(deg(4.214*x)) + 0.1039*cos(deg(3*4.214*x)) + 0.1237*cos(deg(5*4.214*x))};
+\addlegendentry{$\varphi=4{,}21$ (p90: encendido)}
+\end{axis}
+\end{tikzpicture}
+\figcap{Las tres curvas usan los \emph{mismos} coeficientes del run\,7 y solo
+cambia $\varphi$, tomado de los percentiles 10, 50 y 90 medidos
+($f\!\cdot\!W = 0{,}057$, $0{,}328$ y $1{,}564$, con
+$\varphi = f\!\cdot\!W/2\sigma_{\text{env}}$). En la mediana la onda no
+completa ni un tercio de ciclo dentro del soporte: es una constante ligeramente
+inclinada, o sea \emph{un tent}. Esto es lo que cuenta el
+diagnóstico \code{[GABOR-W]} cuando dice ``64\,\% apagados'': no que los
+coeficientes sean cero, sino que la frecuencia no da para oscilar.}
+\end{figure}
+
+\subsection{El kernel completo}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, xlabel={$u$ (corte por $v=0$)}, ylabel={$K=E\cdot S$},
+  xmin=-1, xmax=1, ymin=0, ymax=1.2]
+\addplot[black!45, line width=2.2pt, domain=-1:1] {pow(1-abs(x),2.236)};
+\addlegendentry{tent ($a=0$)}
+\addplot[black, dashed, domain=-1:1]
+  {pow(1-abs(x),2.236)*(0.76 + 0.1153*cos(deg(0.884*x)) + 0.1039*cos(deg(3*0.884*x)) + 0.1237*cos(deg(5*0.884*x)))};
+\addlegendentry{run\,7, $\varphi=0{,}88$ (p50)}
+\addplot[black, solid, domain=-1:1]
+  {pow(1-abs(x),2.236)*(0.76 + 0.1153*cos(deg(4.214*x)) + 0.1039*cos(deg(3*4.214*x)) + 0.1237*cos(deg(5*4.214*x)))};
+\addlegendentry{run\,7, $\varphi=4{,}21$ (p90)}
+\end{axis}
+\end{tikzpicture}
+\figcap{El producto de las dos figuras anteriores, en modo \code{dir} y a lo
+largo del eje de modulación. La envolvente impone el soporte compacto y la
+onda esculpe franjas dentro de él. Obsérvese el pico central: vale
+$1+\gamma\ssum=1{,}103$, \emph{por encima} de la tent, porque los tres cosenos
+entran en fase en $u=0$. Y obsérvese la curva de la mediana: sigue siendo un
+tent, solo que un 10\,\% más opaco en el centro y algo más apuntado --- la
+campana de la figura anterior no añade estructura, reajusta la forma de la
+envolvente. Para el 64\,\% de la nube, eso es todo lo que el kernel aprendido
+llega a ser.}
+\end{figure}
+
+\subsection{El presupuesto y de dónde sale la cota}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, xlabel={$\ssum$}, ylabel={},
+  xmin=0, xmax=0.70, ymin=-0.2, ymax=1.25,
+  xtick={0,0.1,0.2,0.3,0.4,0.5,0.5882,0.7},
+  xticklabels={0,{0,1},{0,2},{0,3},{0,4},{0,5},{0,59},{0,7}},
+  legend columns=2]
+\addplot[black, line width=1.4pt, domain=0:0.70] {0.3+0.7*(1-x)};
+\addlegendentry{pedestal $b$}
+\addplot[black, dashed, domain=0:0.70] {1-1.7*x};
+\addlegendentry{$S_{\min}=1-(2-\gamma)\ssum$}
+\addplot[black, dotted, line width=1.1pt, domain=0:0.70] {1+0.3*x};
+\addlegendentry{$S_{\max}=1+\gamma\ssum$}
+\addplot[black!55, line width=1pt, dashdotted] coordinates {(0.5882,-0.2) (0.5882,1.25)};
+\addlegendentry{cota $1/(2-\gamma)$}
+\addplot[black!55, thin] coordinates {(0,0) (0.70,0)};
+\end{axis}
+\end{tikzpicture}
+\figcap{La cota \eqref{eq:cota} no es un número elegido a mano: es
+\emph{exactamente} el punto donde $S_{\min}$ toca cero, o sea donde la onda
+empezaría a pintar opacidad negativa. A la izquierda de la línea vertical todo
+es válido. Nótese que $S_{\max}$ crece con $\ssum$ mientras $b$ decrece: el
+pedestal cede terreno para dejar sitio a la modulación, y por eso la envolvente
+sale gratis. Los valores medios medidos ($\ssum\approx0{,}34$) están a poco más
+de la mitad del presupuesto.}
+\end{figure}
+
+\subsection{La anchura efectiva, o por qué el radio engaña}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, xlabel={$\beta$}, ylabel={$\sigma_{\text{env}}(\beta)$},
+  xmin=0, xmax=15, ymin=0, ymax=0.42]
+\addplot[black, line width=1.4pt, domain=0.05:15, samples=200]
+  {sqrt(x+1)/((x+2)*sqrt(x+3))};
+\addlegendentry{$\sigma_{\text{env}}=\dfrac{\sqrt{\beta+1}}{(\beta+2)\sqrt{\beta+3}}$}
+\addplot[only marks, mark=*, mark size=2pt, black] coordinates {(2.236,0.1856)};
+\addlegendentry{media medida: $0{,}186$}
+\end{axis}
+\end{tikzpicture}
+\figcap{La anchura efectiva de la envolvente es la desviación típica de una
+$\mathrm{Beta}(1,\beta+1)$, que es el perfil $(1-r)^\beta$ leído como
+distribución de probabilidad. Con el $\beta$ medio de los runs sale $0{,}186$,
+es decir $W=2s\sigma_{\text{env}}\approx 0{,}37\,s$ frente a un radio de
+soporte $s$: \textbf{el radio sobreestima el tamaño útil casi tres veces}. Ese
+factor es exactamente el que separa un $f_1$ autocalibrado que funciona de uno
+que nace apagado.}
+\end{figure}
+
+\subsection{Qué forma eligió el optimizador}
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, height=5.2cm, xlabel={iteración}, ylabel={coeficiente medio},
+  xmin=0, xmax=31000, ymin=0, ymax=0.15,
+  scaled x ticks=false, scaled y ticks=false,
+  ytick={0,0.05,0.1,0.15}, yticklabels={0,{0,05},{0,10},{0,15}},
+  xtick={2500,7000,15000,20000,25000,30000},
+  xticklabels={{2,5k},7k,15k,20k,25k,30k}]
+\addplot[black, line width=1.5pt, mark=*, mark size=1.6pt] coordinates {
+  (2500,0.1047) (7000,0.1304) (15000,0.1254) (20000,0.1204) (25000,0.1173) (30000,0.1153)};
+\addlegendentry{$a_1$}
+\addplot[black, dashed, mark=square*, mark size=1.6pt] coordinates {
+  (2500,0.0442) (7000,0.0785) (15000,0.1009) (20000,0.1046) (25000,0.1050) (30000,0.1039)};
+\addlegendentry{$a_2$}
+\addplot[black, dotted, line width=1.1pt, mark=triangle*, mark size=2pt] coordinates {
+  (2500,0.0371) (7000,0.0672) (15000,0.1017) (20000,0.1139) (25000,0.1204) (30000,0.1237)};
+\addlegendentry{$a_3$}
+\end{axis}
+\end{tikzpicture}
+\figcap{Los coeficientes medios del run\,7 a lo largo del entrenamiento.
+$a_1$ sube, se da la vuelta hacia la iteración 7.000 y baja; $a_3$ sube sin
+parar y \textbf{cruza a $a_1$} entre las iteraciones 20.000 y 25.000. El
+resultado es un espectro \emph{creciente}: lo contrario de lo que produce una
+envolvente, y la firma que aparece en los cuatro runs del átomo sin excepción
+(en el run\,5, con la cuarta parte de frecuencia, $a_1$ pasó de $0{,}1598$ a
+$0{,}1243$ y $a_3$ de $0{,}0549$ a $0{,}0874$: el mismo movimiento, sin llegar
+a cruzarse). Es la señal sin explicar que queda, y la que sugiere la siguiente
+palanca: forzar $a_1>a_2>a_3$.}
+\end{figure}
+
+% ===========================================================================
 \section{El reparto Python / CUDA}
 
 Esta es la decisión de ingeniería con más consecuencias prácticas del
@@ -450,10 +691,19 @@ Tres observaciones sobre el \code{fmaxf(E*S, 0)}:
 \item A diferencia del legacy, aquí \textbf{no hay división}. El legacy dividía
       por $f_0$, y esa división fue la singularidad que reventó el run\,1
       (52,6\,M splats y NaN en la iteración 4.100).
-\item $K\le 1$ no está garantizado por construcción, pero sí en la práctica:
-      $E\le1$ y $S\le b+\ssum\le 1$ cuando $\ssum\le 1/(2-\gamma)$ y
-      $\gamma\le1$. El \code{min(0.99f, ...)} de $\alpha$ es un guard aparte,
-      heredado del 3DGS.
+\item \textbf{$K$ no está acotado por 1}, y conviene saberlo. El máximo de $S$
+      está en $t=0$ (los tres cosenos en fase) y vale
+      \[
+      S(0)=b+\ssum=1+\gamma\,\ssum ,
+      \]
+      así que $K(0)=1+\gamma\ssum>1$: con los coeficientes medios del run\,7
+      son $1{,}103$. El pico del kernel \emph{supera} a la tent en un
+      10\,\%. No rompe nada --- el \code{min(0.99f, ...)} de $\alpha$ es el
+      guard, heredado del 3DGS --- pero significa que
+      \textbf{$\ssum$ y la opacidad están acoplados}: subir la amplitud de la
+      onda sube también la opacidad del centro, así que parte del gradiente
+      que recibe $a$ es ``quiero más opacidad'', no ``quiero más textura''.
+      Es una interacción que sale de las ecuaciones y no está medida.
 \end{enumerate}
 
 \subsection{Coste}
