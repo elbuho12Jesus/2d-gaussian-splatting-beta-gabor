@@ -9,7 +9,26 @@ export DEBUG_DENSIFY=1
 #  USO:   ./run_gabor_escenas.sh bonsai    -> run8, output/m360/bonsai_beta_run8
 #         ./run_gabor_escenas.sh kitchen   -> run9, output/m360/kitchen_beta_run9
 #
-#  ESTADO: los dos SIN LANZAR (creados el 2026-07-31).
+#  ESTADO: LOS DOS MEDIDOS (2026-08-01). Resultado PARTIDO, y muy informativo:
+#
+#      bonsai  run8  31.1348/0.9391/0.1852  vs tent run76 30.8194/0.9303/0.1971
+#                    -> +0,315 / +0,0088 / -0,0119 = GANA EN LAS TRES, con un 10% MENOS
+#                       de splats. PRIMERA VICTORIA DEL ATOMO SOBRE EL TENT, y nuevo
+#                       mejor propio en bonsai (bate a run44 en PSNR).
+#      kitchen run9  29.9916/0.9248/0.1259  vs tent run78 30.2876/0.9266/0.1255
+#                    -> -0,296 / -0,0018 / +0,0004 = pierde PSNR, empata las otras dos.
+#
+#  POR QUE bonsai gana: NO aparece la firma del espectro creciente. a1 SUBE (0,0465 ->
+#  0,1030) y se mantiene a1 > a2 > a3 en TODAS las iteraciones, al reves que en los cuatro
+#  runs de flowers. Donde el espectro se queda decreciente, el kernel suma.
+#  POR QUE kitchen pierde: f1 SE PASO. El autocalibrado dio 932,6 (20x el de flowers,
+#  porque los surfels nacen diminutos) y el p90 de f*W acaba en 7,224 = el 10% de los
+#  splats con MAS DE SIETE anchuras de onda dentro de su huella. Es el fallo que este
+#  mismo script anticipaba. NO es el kernel: el espectro sale decreciente tambien aqui.
+#
+#  SIGUIENTE: sweep de f1 A LA BAJA en kitchen (/2 = 466,3; /4 = 233,2). Si recupera,
+#  el techo del atomo era la CALIBRACION de f1, no el kernel.
+#  NO relanzar bonsai ni kitchen tal cual: los dos brazos estan medidos.
 # ═══════════════════════════════════════════════════════════════════════════
 #
 #  = run5_gabor EXACTO (kernel átomo, dir+world, γ=0.3, κ=1.0) + UN SOLO DELTA:
