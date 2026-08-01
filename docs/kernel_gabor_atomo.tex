@@ -118,6 +118,56 @@ corresponde a una línea concreta del código, citada como
 % ===========================================================================
 \section{El problema que resuelve}
 
+\subsection{Dos palabras que se repiten en todo el documento}
+
+\textbf{Tent.} Del inglés \emph{tienda de campaña}. Es el nombre corto del
+perfil
+\[
+E(r)=(1-r)^{\beta},
+\]
+que vale $1$ en el centro del surfel y baja hasta $0$ en el borde. El nombre
+viene del caso $\beta=1$, donde el perfil es literalmente un triángulo --- en
+2D, un cono, o sea una tienda de campaña. Con otros $\beta$ ya no es recto
+(se comba hacia dentro o hacia fuera, figura~\ref{fig:envolvente}), pero el
+nombre se ha quedado.
+
+Importa por dos motivos que van más allá de la geometría:
+
+\begin{itemize}
+\item Es el \textbf{kernel de referencia} del proyecto. El run\,67 --- el mejor
+      resultado del camino clásico, $20{,}6684$ de PSNR --- usa exactamente
+      este perfil, fijo, sin nada que aprender. Es contra él contra quien hay
+      que ganar, no contra el 2DGS oficial.
+\item Es el \textbf{punto neutro} del kernel nuevo: con los coeficientes a
+      cero, el átomo \emph{es} la tent. Por eso, cuando en el documento se lee
+      ``ese splat es un tent'', significa que su parte aprendida no está
+      haciendo nada.
+\end{itemize}
+
+\textbf{Percentil.} El percentil $p_{XX}$ de un conjunto de valores es el valor
+que deja por debajo al $XX$\,\% de ellos. El $p_{50}$ es la mediana: la mitad
+de los splats está por debajo y la mitad por encima. El $p_{90}$ deja debajo al
+90\,\%, así que solo uno de cada diez lo supera.
+
+En este proyecto los diagnósticos se leen \textbf{siempre} en percentiles
+($p_{10}$, $p_{50}$, $p_{90}$) y nunca en media o máximo, y es una regla
+aprendida a base de errores:
+
+\begin{itemize}
+\item El \textbf{máximo} de una nube de $4{,}9$ millones de splats es un solo
+      splat. Puede ser enorme y no significar nada. Varias veces se dio por
+      activo un mecanismo mirando su valor máximo cuando en realidad estaba
+      apagado para el 99\,\% del modelo.
+\item La \textbf{media} la arrastra la cola. En distribuciones tan asimétricas
+      como estas puede quedar por encima del 90\,\% de los datos.
+\item El \textbf{histograma} responde a la pregunta que de verdad importa:
+      ¿a cuánta nube le está pasando esto? Cuando se lee ``$p_{50}$ de
+      $f\!\cdot\!W$ vale $0{,}328$'' hay que entender: \emph{la mitad de los
+      splats tiene la onda por debajo de un tercio de lo necesario para
+      oscilar}. Eso es un diagnóstico; el máximo no lo habría sido.
+\end{itemize}
+
+
 \subsection{El kernel anterior y su punto de degeneración}
 
 Hasta el run\,4 el kernel de opacidad era una serie de cosenos elevada a
@@ -269,6 +319,94 @@ En modo \code{norm} pasa lo contrario: $\varphi=\pi$ significa medio periodo
 dentro del soporte \emph{sea cual sea el tamaño}, es decir la frecuencia va
 atada al splat y no a la escena.
 
+La figura \ref{fig:worldnorm} enseña la diferencia mejor que las fórmulas.
+Toma dos surfels de tamaños muy distintos ($s=0{,}35$ y $s=0{,}10$) y dibuja el
+kernel que produce cada modo \emph{en coordenadas de mundo}: no normalizado al
+splat, sino como lo vería un píxel de la imagen.
+
+\begin{figure}[H]\centering
+\begin{tikzpicture}
+\begin{axis}[eink, height=3.9cm,
+  title={(a) modo \code{norm}: $\varphi=\pi$},
+  title style={font=\small, yshift=-2pt},
+  xlabel={}, ylabel={$K$},
+  xmin=-0.85, xmax=0.5, ymin=0, ymax=1.2,
+  xtick={-0.75,-0.5,-0.25,0,0.25,0.5},
+  xticklabels={},
+  legend to name=leyendaWN]
+\addplot[black!20, thin, forget plot] coordinates {(-0.6283,0) (-0.6283,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(-0.4189,0) (-0.4189,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(-0.2094,0) (-0.2094,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(0,0) (0,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(0.2094,0) (0.2094,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(0.4189,0) (0.4189,1.2)};
+\addplot[black, line width=1.1pt, domain=-0.75:-0.05, samples=400]
+ {pow(1-abs((x+0.40)/0.35),2.236)*(0.741
+  +0.30*cos(deg(8.9760*(x+0.40)))
+  +0.05*cos(deg(26.928*(x+0.40)))
+  +0.02*cos(deg(44.880*(x+0.40))))};
+\addlegendentry{surfel grande ($s=0{,}35$)}
+\addplot[black, dashed, domain=0.15:0.35, samples=400]
+ {pow(1-abs((x-0.25)/0.10),2.236)*(0.741
+  +0.30*cos(deg(31.416*(x-0.25)))
+  +0.05*cos(deg(94.248*(x-0.25)))
+  +0.02*cos(deg(157.08*(x-0.25))))};
+\addlegendentry{surfel pequeño ($s=0{,}10$)}
+\end{axis}
+\end{tikzpicture}
+
+\begin{tikzpicture}
+\begin{axis}[eink, height=3.9cm,
+  title={(b) modo \code{world}: $\varphi=f_1 s_u/\text{extent}$},
+  title style={font=\small, yshift=-2pt},
+  xlabel={posición en el mundo}, ylabel={$K$},
+  xmin=-0.85, xmax=0.5, ymin=0, ymax=1.2,
+  xtick={-0.75,-0.5,-0.25,0,0.25,0.5},
+  xticklabels={{-0,75},{-0,5},{-0,25},0,{0,25},{0,5}},
+  legend style={at={(0.5,-0.42)}, anchor=north, legend columns=2}]
+\addplot[black!20, thin, forget plot] coordinates {(-0.6283,0) (-0.6283,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(-0.4189,0) (-0.4189,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(-0.2094,0) (-0.2094,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(0,0) (0,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(0.2094,0) (0.2094,1.2)};
+\addplot[black!20, thin, forget plot] coordinates {(0.4189,0) (0.4189,1.2)};
+\addplot[black, line width=1.1pt, domain=-0.75:-0.05, samples=400]
+ {pow(1-abs((x+0.40)/0.35),2.236)*(0.741
+  +0.30*cos(deg(30*(x+0.40)))
+  +0.05*cos(deg(90*(x+0.40)))
+  +0.02*cos(deg(150*(x+0.40))))};
+\addlegendentry{surfel grande ($s=0{,}35$)}
+\addplot[black, dashed, domain=0.15:0.35, samples=400]
+ {pow(1-abs((x-0.25)/0.10),2.236)*(0.741
+  +0.30*cos(deg(30*(x-0.25)))
+  +0.05*cos(deg(90*(x-0.25)))
+  +0.02*cos(deg(150*(x-0.25))))};
+\addlegendentry{surfel pequeño ($s=0{,}10$)}
+\end{axis}
+\end{tikzpicture}
+\figcap{Los mismos dos surfels y los mismos coeficientes, dibujados en
+coordenadas de mundo. Las líneas grises son una \emph{regla} de paso
+$\lambda=2\pi\,\text{extent}/f_1$, idéntica en los dos paneles.
+\textbf{(a)~\code{norm}} produce un kernel \emph{autosemejante}: como
+$\varphi=\pi$ es medio ciclo del centro al borde \emph{sea cual sea el tamaño},
+la onda no llega nunca a oscilar --- queda en una campana, y lo único que
+cambia entre los dos surfels es lo ancha que es. Un kernel así no puede
+representar una frecuencia \emph{de la escena}, porque su frecuencia la fija el
+propio splat: los dos pintan detalle de distinto tamaño aunque estén sobre la
+misma pared.
+\textbf{(b)~\code{world}} fija $\lambda$ y deja que varíe lo que tiene sentido
+que varíe: cuántos ciclos caben. En el grande caben $3{,}3$ y aparecen franjas;
+en el pequeño cabe $0{,}95$ y vuelve a ser una campana, es decir, poco más que
+un tent. Lo compartido es la longitud de onda, no la fase: cada surfel ancla la
+suya en su propio centro.}
+\label{fig:worldnorm}
+\end{figure}
+
+Y aquí está el germen de la patología que se describe más adelante: en
+\code{world}, \textbf{encoger un surfel lo acerca al tent}. La densificación
+encoge surfels a miles, así que el modo que hace físicamente correcta la
+frecuencia es también el que la apaga cuando el modelo crece.
+
 \subsection{La cota del presupuesto}
 
 El requisito es $S\ge 0$: la onda no debe volverse negativa dentro del
@@ -353,6 +491,7 @@ queda cerca del centro. El soporte es compacto para todo $\beta$: se anula en
 $r=1$, que es lo que permite el guard \code{r2>=1 continue} del rasterizer y
 lo que hace finito el $\ln(1-r)$ del gradiente. El rango medido en los runs va
 de $0{,}096$ a $14$, con media $2{,}24$.}
+\label{fig:envolvente}
 \end{figure}
 
 \subsection{La onda: dos formas de gastar el mismo presupuesto}
