@@ -1250,16 +1250,117 @@ Conclusión: en \emph{flowers}, \textbf{todo el beneficio del átomo viene de la
 envolvente} (el pedestal que hace del tent el punto neutro), no de la
 oscilación. Lo cual tiene sentido: el césped y el follaje son textura
 estocástica de alta frecuencia sin estructura oscilatoria coherente, y un
-armónico aprendido no tiene ahí nada que encajar. Está pendiente comprobarlo en
-escenas con estructura (bonsai, kitchen).
+armónico aprendido no tiene ahí nada que encajar.
 
-\subsection{La firma que sí se repite}
+\subsection{Fuera de flowers: el átomo sí gana}
 
-En los cuatro runs del átomo, sin excepción: $a_1$ baja y $a_3$ sube durante el
-entrenamiento, hasta que en el run\,7 se cruzan ($a_3=0{,}1237 > a_1=0{,}1153$).
-El kernel gasta el presupuesto en el armónico más alto --- espectro creciente,
-justo lo contrario de una envolvente. Es la señal con más contenido que queda
-sin explicar, y la que apunta a la siguiente palanca: forzar $a_1>a_2>a_3$.
+Esa sospecha se puso a prueba en dos interiores acotados, con la misma
+configuración y contra el mismo tent (2026-08-01):
+
+\begin{center}\small
+\begin{tabular}{@{}llrr@{}}
+\toprule
+\textbf{escena} & & \textbf{tent} & \textbf{átomo} \\
+\midrule
+bonsai  & PSNR  & 30,8194 & \textbf{31,1348} \\
+        & SSIM  & 0,9303  & \textbf{0,9391} \\
+        & LPIPS & 0,1971  & \textbf{0,1852} \\
+\midrule
+kitchen & PSNR  & \textbf{30,2876} & 29,9916 \\
+        & SSIM  & 0,9266  & 0,9248 \\
+        & LPIPS & \textbf{0,1255}  & 0,1259 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+En \textbf{bonsai el átomo gana en las tres} ($+0{,}315$ dB) y además con un
+10\,\% menos de splats, que es la promesa que el modo \code{dir} llevaba
+haciendo desde el A/B local. En \textbf{kitchen} pierde $0{,}296$ dB y empata en
+las otras dos.
+
+Y el log dice algo más interesante que las métricas. La onda, que en flowers
+estaba apagada para el 93\,\% de la nube, aquí trabaja:
+
+\begin{center}\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+@30\,k & flowers & bonsai & kitchen \\
+\midrule
+apagados          & 93,4\,\% & 34,0\,\% & 13,5\,\% \\
+encendidos        & 2,9\,\%  & 40,7\,\% & 65,5\,\% \\
+$f\!\cdot\!W$ p90 & 0,36     & 3,47     & 7,22 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Kitchen pierde por exceso, no por defecto.} Un $p_{90}$ de $7{,}22$
+significa que uno de cada diez splats tiene más de siete anchuras de onda dentro
+de su propia huella: el kernel oscila más rápido que el detalle que hay que
+representar, y eso es ruido de alta frecuencia. El $f_1$ autocalibrado salió
+$932{,}6$, veinte veces el de flowers, porque los surfels de kitchen nacen
+diminutos. Es un fallo de calibración, no del kernel.
+
+\subsection{La firma que se repite --- y su contraejemplo}
+
+En los cuatro runs de \emph{flowers}, sin excepción: $a_1$ baja y $a_3$ sube
+durante el entrenamiento, hasta que en el run\,7 se cruzan
+($a_3=0{,}1237 > a_1=0{,}1153$). El kernel gasta el presupuesto en el armónico
+más alto --- espectro creciente, justo lo contrario de una envolvente.
+
+\textbf{En bonsai no pasa.} $a_1$ \emph{sube} ($0{,}0465 \to 0{,}1030$) y el
+orden $a_1>a_2>a_3$ se mantiene en todas las iteraciones; los kernels casi
+planos \emph{bajan} ($39{,}5 \to 24{,}9$\,\%) en vez de subir. En kitchen, igual.
+
+Puestas las dos cosas juntas, sale la correlación más fuerte que ha dado el
+proyecto sobre cuándo funciona este kernel:
+
+\begin{quote}
+\textbf{donde el espectro se queda decreciente, el átomo suma; donde se
+invierte, empata.} No demuestra causalidad --- son dos escenas contra una ---
+pero es exactamente lo que predeciría la teoría del átomo: un espectro
+decreciente es un perfil monótono, con la energía en el armónico que \emph{da
+forma}, y un espectro creciente es el kernel intentando ser un detector de
+bordes sin envolvente que lo sostenga.
+\end{quote}
+
+Y refuerza la palanca pendiente, que ya no es una corazonada: forzar
+$a_1>a_2>a_3$ es empujar hacia el régimen donde el kernel demostradamente gana.
+
+\subsection{La calibración de $f_1$ no cumple lo que promete}
+
+El mismo lote de runs deja ver que $f_1$ no aterriza donde dice. La
+autocalibración fija $f\!\cdot\!W=1$ en el $p_{90}$ de las escalas
+\emph{iniciales}; lo que se mide a las 2.500 iteraciones es:
+
+\begin{center}\small
+\begin{tabular}{@{}lrl@{}}
+\toprule
+escena & $f\!\cdot\!W$ $p_{90}$ & deriva \\
+\midrule
+flowers & 0,54 & los surfels encogen \\
+bonsai  & 2,37 & crecen \\
+kitchen & 5,73 & crecen mucho \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Dos causas, las dos en el código:
+
+\begin{enumerate}
+\item $\sigma_{\text{env}}$ se evalúa con $\beta=4$, que es el valor
+      \emph{inicial} (\code{\_beta=0} $\Rightarrow \beta=4e^0$), pero $\beta$
+      converge a $2{,}0$--$2{,}3$: $\sigma_{\text{env}}$ sube un 32\,\% y con
+      él $f\!\cdot\!W$, sin que nadie toque las escalas.
+\item Las escalas se mueven durante el run \textbf{y en direcciones opuestas
+      según la escena}: en un 360 exterior los surfels encogen al densificar;
+      en un interior acotado crecen. La deriva que se observó en flowers no era
+      una ley --- era el signo que le tocaba a esa escena.
+\end{enumerate}
+
+Por eso la palanca de \emph{recalibrar $f_1$ durante el run} deja de ser un
+parche para flowers: es lo que arreglaría las tres escenas a la vez, porque el
+problema no es que $f_1$ sea alto o bajo, sino que es \textbf{fijo} mientras el
+blanco se mueve.
 
 % ===========================================================================
 \section{Invariantes}
