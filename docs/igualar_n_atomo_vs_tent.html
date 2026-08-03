@@ -202,6 +202,14 @@ que llevamos midiendo todo el proyecto.</li>
 
 <h2 id="mecanismo">3 · El mecanismo: qué decide N en el código</h2>
 
+<div class="note danger-box">
+<b>Leer esta sección con el §9 al lado.</b> El código que viene a continuación es correcto y sigue
+siéndolo, pero la <b>lectura</b> que se hace de él aquí y en el §4 —«el átomo ajusta mejor, luego
+tiene menos gradiente, luego densifica menos»— quedó <b>refutada el 2026-08-03</b> al comparar los
+cuatro brazos: el átomo tiene el gradiente <b>más alto</b> que el tent en el 93 % de las
+densificaciones. Ver <a href="#limites">§9</a>.
+</div>
+
 <p>El juguete de arriba tenía K fijo. En el proyecto N sale de la densificación, y el criterio es este,
 literal:</p>
 
@@ -484,40 +492,102 @@ tent en N está gastando más primitivas para llegar al mismo sitio; lo que se d
 <b>por primitiva</b> no es peor — una afirmación distinta, y más modesta, que «es mejor».</p>
 
 <div class="card ok-box">
-<p style="margin-top:0"><b class="hi">Antes de gastar ningún run: hay una comprobación que no cuesta
-nada</b>, y resulta que el log ya imprime justo lo que hace falta. Cada densificación deja una línea
-así (144 por run):</p>
+<p style="margin-top:0"><b class="hi">La comprobación que no cuesta nada</b>, y resulta que el log ya
+imprime justo lo que hace falta. Cada densificación deja una línea así (144 por run):</p>
 <pre style="margin:10px 0 8px"><code>[DENSIFY iter=7500] N=1726757 vistos=... grad_pos(thr=2.0e-04): mean=2.15e-05 med=... p90=6.79e-05 ...</code></pre>
 <p style="margin-bottom:0">Es <b>el histograma del gradiente que decide la densificación, contra su
-propio umbral</b>. O sea que el mecanismo del §3-4 no hay que inferirlo: se lee. Esto es lo que ya
-está medido en los dos brazos átomo que tenemos aquí:</p>
+propio umbral</b>. O sea que el mecanismo del §3-4 no hay que inferirlo: se lee.</p>
+</div>
+
+<div class="card danger-box">
+<p style="margin-top:0"><b class="hi">HECHA EL 2026-08-03, Y EL MECANISMO DEL §3-4 QUEDA
+REFUTADO.</b> La hipótesis era: <i>el átomo ajusta mejor → menos residuo → menos <code>grad_pos</code>
+→ menos splats cruzan τ → −10 % de N</i>. Eso exige <code>p90(tent) &gt; p90(átomo)</code>. Lo medido
+es lo contrario:</p>
+<p style="margin-bottom:0"><b>el átomo lleva el gradiente de posición POR ENCIMA del tent en el 93 %
+de las densificaciones</b> — 132/144 en bonsai y 134/144 en kitchen — <b>y aun así termina con un
+10 % menos de splats</b>. Es justo al revés de la intuición sobre la que está construido este
+documento.</p>
 </div>
 
 <figure>
   <canvas id="c_real" height="330"></canvas>
   <div class="legend">
-    <span><i class="sw" style="background:#7ee787"></i> kitchen run9 (átomo)</span>
-    <span><i class="sw" style="background:#6ea8fe"></i> bonsai run8 (átomo)</span>
+    <span><i class="sw" style="background:#7ee787"></i> kitchen — <b>continua</b> run9 átomo · <b>discontinua</b> run78 tent</span>
+    <span><i class="sw" style="background:#6ea8fe"></i> bonsai — <b>continua</b> run8 átomo · <b>discontinua</b> run76 tent</span>
     <span><i class="sw" style="background:#ff7b72"></i> umbral τ = 2,0·10⁻⁴</span>
   </div>
-  <figcaption>Izquierda: N durante la fase de densificación (500→15.000). Derecha: el
-  <b>p90 del gradiente de posición</b> contra el umbral, en escala logarítmica. Datos reales de
-  <code>logs/kitchen9.log</code> y <code>logs/bonsai8.log</code>, submuestreados ×3.</figcaption>
+  <figcaption>Los cuatro brazos. Izquierda: N durante la fase de densificación (500→15.000).
+  Derecha: el <b>p90 del gradiente de posición</b> contra el umbral, en escala logarítmica. El color
+  es la <b>escena</b>; el trazo, el <b>kernel</b>. Datos reales de <code>logs/kitchen9.log</code>,
+  <code>logs/kitchen78.log</code>, <code>logs/bonsai8.log</code> y <code>logs/bonsai76.log</code>,
+  submuestreados ×3.</figcaption>
 </figure>
 
-<p>Se ve el efecto que predice el §4: el p90 arranca <b>por encima</b> del umbral (2,3–2,5·10⁻⁴ en la
-primera densificación, con τ = 2,0·10⁻⁴) y cae hasta <b>3,5 veces por debajo</b> al final. Cuando el
-modelo ajusta bien, casi nadie cruza τ y N se estanca — kitchen se queda plano en ~1,73 M desde la
-iteración 8.000. <b>La densificación se apaga sola</b>, y por eso el kernel que ajusta mejor termina
-con menos primitivas.</p>
+<p>Lo que sí se confirma es la parte del §4 sobre el <b>régimen</b>: el p90 arranca por encima del
+umbral (2,3–2,8·10⁻⁴ en la primera densificación, con τ = 2,0·10⁻⁴) y cae hasta <b>3,5 veces por
+debajo</b> al final, en los cuatro brazos. <b>La densificación se apaga sola.</b> Lo que no se
+sostiene es la atribución: no se apaga <i>antes</i> en el átomo por tener menos gradiente.</p>
 
-<div class="note ok-box">
-<b>Lo que falta para cerrar el A/B</b> es la misma curva en el brazo tent, y son dos comandos:
-<pre style="margin:8px 0 6px"><code>cd logs && ./cpsh.sh 76 bonsai && ./cpsh.sh 78 kitchen</code></pre>
-Si el p90 del tent va <b>por encima</b> del p90 del átomo durante toda la fase de densificación, el
-mecanismo queda confirmado y el experimento del §7 está bien planteado. Si van pegados —o si el del
-tent va por debajo—, el −10 % de N sale de otro sitio (prune, opacidad, splits) y conviene saberlo
-<b>antes</b> de diseñar el run.
+<figure>
+  <canvas id="c_ratio" height="270"></canvas>
+  <div class="legend">
+    <span><i class="sw" style="background:#7ee787"></i> kitchen (run78 ÷ run9)</span>
+    <span><i class="sw" style="background:#6ea8fe"></i> bonsai (run76 ÷ run8)</span>
+    <span><i class="sw" style="background:#ff7b72"></i> cociente = 1</span>
+  </div>
+  <figcaption>El cociente que decide la comprobación. Solo el arranque queda por encima de 1
+  —12 densificaciones de 144 en bonsai y 10 de 144 en kitchen, cuando los dos brazos todavía son
+  casi el mismo modelo porque <code>a=0</code> arranca siendo el tent exacto—; a partir de ahí se
+  queda <b>por debajo</b> el resto de la densificación: 0,94–0,96 en bonsai y 0,83–0,91 en kitchen.
+  (La curva dibujada va submuestreada ×3; los conteos son sobre las 144.)</figcaption>
+</figure>
+
+<p><b>Validación de paso:</b> en la primera densificación N es idéntico dígito a dígito en los dos
+brazos de cada escena (206.613 en bonsai, 241.367 en kitchen). Es la confirmación empírica de que el
+pedestal hace lo que promete: con <code>a=0</code> el átomo <i>es</i> el tent.</p>
+
+<h3>Entonces, ¿de dónde sale el −10 %?</h3>
+
+<p>Del canal de <b>añadir</b>, pero por la <b>cola lejana</b> de la distribución, no por su grueso.
+Normalizado por N y promediado sobre las 144 densificaciones:</p>
+
+<table>
+<thead><tr><th>por densificación, en % de N</th><th>bonsai tent</th><th>bonsai átomo</th>
+<th>kitchen tent</th><th>kitchen átomo</th></tr></thead>
+<tbody>
+<tr><td><b>añade</b> (clones + splits)</td><td>1,707 %</td><td>1,602 % <span class="hi">(−6,2 %)</span></td>
+<td>1,679 %</td><td>1,578 % <span class="hi">(−6,0 %)</span></td></tr>
+<tr><td><b>poda</b></td><td>0,315 %</td><td>0,294 % (−6,6 %)</td><td>0,222 %</td><td>0,206 % (−7,1 %)</td></tr>
+<tr><td>neto</td><td>+1,393 %</td><td>+1,308 %</td><td>+1,457 %</td><td>+1,372 %</td></tr>
+</tbody>
+</table>
+
+<p>Verificado que <code>clones + splits == splats que cruzan τ</code> exactamente, en los cuatro
+brazos: todo lo que cruza el umbral se clona o se parte, así que el canal de añadir <i>es</i> el
+conteo de cruces. Y los dos contrafactuales, recomponiendo N con el canal del otro brazo:</p>
+
+<ul>
+<li>átomo con <b>la poda del tent</b> → N <b>baja</b> a 1,30 M en bonsai: la poda empuja
+<i>en contra</i>, porque el tent poda más.</li>
+<li>átomo con <b>el añade del tent</b> → N <b>sube</b> a 1,56 M, por encima del tent real:
+<b>el canal de añadir lo explica todo</b>.</li>
+</ul>
+
+<p>Los dos canales van en el mismo sentido (−6 % los dos) y se cancelarían, pero añadir es 5-8×
+mayor en valor absoluto y gana. Y el −10 % final es un <b>−6 % por densificación compuesto 144
+veces</b>, no un efecto grande de una vez.</p>
+
+<p><b>La reconciliación:</b> τ = 2·10⁻⁴ y el p90 tardío anda por 5-8·10⁻⁵, así que el umbral vive
+<b>muy por delante del p90</b>, en zona p99+. El átomo tiene el grueso de la distribución más alto y
+la cola lejana más fina. Las dos cosas a la vez, sin contradicción.</p>
+
+<div class="note">
+<b>Aviso de rigor.</b> La diferencia en la fracción que cruza τ es <b>pequeña y no del todo
+consistente</b>. En kitchen el átomo cruza <i>más</i> que el tent en la fase tardía (cocientes 1,125
+/ 1,083 / 1,357 a 11 k, 13 k y 14,9 k) y solo cruza menos en <b>74 de 144</b> densificaciones, apenas
+por encima de la mitad; en bonsai sí es consistente (122/144). Y <b>por qué</b> el gradiente del
+átomo es más alto queda abierto: aquí solo está la medida.
 </div>
 
 <div class="card">
@@ -525,14 +595,17 @@ tent va por debajo—, el −10 % de N sale de otro sitio (prune, opacidad, spli
 <ol style="margin-bottom:0">
 <li>Los A/B de bonsai y kitchen llevan <b>dos</b> deltas: el kernel y un −10 % de N. Flowers, el único
 con N igualado, es el único que da empate limpio.</li>
-<li>El −10 % tiene mecanismo: menos residuo → menos gradiente de posición → menos splats cruzan τ.
-Pero compite con un término de forma que empuja al revés, y <b>solo gana en régimen bien ajustado</b>
-— que es el nuestro (§4).</li>
+<li><s>El −10 % tiene mecanismo: menos residuo → menos gradiente de posición → menos splats cruzan
+τ.</s> <b class="hi">REFUTADO (§9, 2026-08-03):</b> el átomo tiene el gradiente <b>más alto</b> que
+el tent en el 93 % de las densificaciones. El −10 % sale del canal de añadir, pero por la
+<b>cola lejana</b> (τ vive en zona p99+), no por el grueso de la distribución.</li>
 <li>Donde la onda no actúa (flowers, 93 % apagados) N no cambia; donde actúa, baja ~10 %. La
-correlación es la que predice el mecanismo.</li>
+correlación existe; la explicación que se le daba, no.</li>
 <li>Un ±20 % de N vale 0,2–0,3 dB en datos propios: el mismo orden que los 0,296 dB a explicar.</li>
-<li>Se arregla con <b>MCMC + <code>cap_max</code> idéntico</b> (2 runs, N exacto) o bajando τ en
-clásico (1 run largo + calibración corta). Antes, la comprobación gratis de las curvas N(iter).</li>
+<li><b class="hi">MEDIDO (run13, 2026-08-03): era el KERNEL, no la capacidad.</b> Con τ = 1,5e-4 el
+átomo de kitchen llegó a 2.549.930 splats —un <b>40 % MÁS</b> que el tent— y siguió perdiendo
+−0,281 dB. La curva calidad-vs-N está <b>plana</b>: +56,5 % de splats = +0,015 dB. Desenlace 2 de
+los tres del §8.</li>
 </ol>
 </div>
 
@@ -872,7 +945,7 @@ function drawCap(){
 
 
 /* ---------- FIGURA 5: datos reales de la densificación ---------- */
-const REAL={"k":[[600,0.2414,0.000233],[900,0.3503,0.000203],[1200,0.4563,0.000185],[1500,0.5671,0.000167],[1800,0.6799,0.000153],[2100,0.7874,0.000135],[2400,0.8895,0.000122],[2700,0.9807,0.000114],[3000,1.0695,0.000109],[3300,1.1315,9.7e-05],[3600,1.2093,9.26e-05],[3900,1.2802,8.75e-05],[4200,1.3454,8.46e-05],[4500,1.4101,8.12e-05],[4800,1.4683,7.8e-05],[5100,1.5211,7.6e-05],[5400,1.5709,7.32e-05],[5700,1.5589,7.48e-05],[6000,1.5944,7.12e-05],[6300,1.6183,6.82e-05],[6600,1.6501,6.62e-05],[6900,1.6771,6.55e-05],[7200,1.7011,6.74e-05],[7500,1.7268,6.79e-05],[7800,1.7526,6.47e-05],[8100,1.7717,6.38e-05],[8400,1.7895,6.36e-05],[8700,1.7013,6.53e-05],[9000,1.7119,6.44e-05],[9300,1.7189,6.24e-05],[9600,1.7288,6.28e-05],[9900,1.727,6.14e-05],[10200,1.726,6.05e-05],[10500,1.7264,6.12e-05],[10800,1.729,5.9e-05],[11100,1.7304,5.89e-05],[11400,1.7322,6.12e-05],[11700,1.6773,6.08e-05],[12000,1.672,6.27e-05],[12300,1.6739,5.83e-05],[12600,1.6773,5.74e-05],[12900,1.6801,5.85e-05],[13200,1.6835,5.78e-05],[13500,1.6865,5.84e-05],[13800,1.6899,5.71e-05],[14100,1.6924,5.75e-05],[14400,1.6942,5.82e-05],[14700,1.6315,5.71e-05]],"b":[[600,0.2066,0.000248],[900,0.3245,0.000243],[1200,0.4621,0.000207],[1500,0.5982,0.000167],[1800,0.7108,0.000144],[2100,0.8031,0.000131],[2400,0.8784,0.000121],[2700,0.9423,0.000114],[3000,0.9945,0.000111],[3300,1.0351,9.8e-05],[3600,1.0861,9.79e-05],[3900,1.1348,9.54e-05],[4200,1.1743,8.95e-05],[4500,1.2088,9.03e-05],[4800,1.2405,8.9e-05],[5100,1.2684,8.69e-05],[5400,1.2941,8.15e-05],[5700,1.2035,8.69e-05],[6000,1.217,8.67e-05],[6300,1.2322,8.11e-05],[6600,1.2581,7.99e-05],[6900,1.277,8.21e-05],[7200,1.2955,8.14e-05],[7500,1.3171,8.05e-05],[7800,1.3372,8.32e-05],[8100,1.353,8.03e-05],[8400,1.3671,7.97e-05],[8700,1.2629,8.13e-05],[9000,1.2691,7.99e-05],[9300,1.2825,7.57e-05],[9600,1.2981,7.59e-05],[9900,1.2944,7.66e-05],[10200,1.2959,7.62e-05],[10500,1.2989,7.67e-05],[10800,1.3047,7.53e-05],[11100,1.3103,7.7e-05],[11400,1.3169,7.59e-05],[11700,1.2434,7.8e-05],[12000,1.2448,7.86e-05],[12300,1.2549,7.71e-05],[12600,1.2711,7.21e-05],[12900,1.2817,7.3e-05],[13200,1.2902,7.43e-05],[13500,1.2978,7.45e-05],[13800,1.3051,7.32e-05],[14100,1.3119,7.39e-05],[14400,1.3184,7.21e-05],[14700,1.2349,7.59e-05]]};
+const REAL={"k":[[600,0.2414,0.000233],[900,0.3503,0.000203],[1200,0.4563,0.000185],[1500,0.5671,0.000167],[1800,0.6799,0.000153],[2100,0.7874,0.000135],[2400,0.8895,0.000122],[2700,0.9807,0.000114],[3000,1.0695,0.000109],[3300,1.1315,9.7e-05],[3600,1.2093,9.26e-05],[3900,1.2802,8.75e-05],[4200,1.3454,8.46e-05],[4500,1.4101,8.12e-05],[4800,1.4683,7.8e-05],[5100,1.5211,7.6e-05],[5400,1.5709,7.32e-05],[5700,1.5589,7.48e-05],[6000,1.5944,7.12e-05],[6300,1.6183,6.82e-05],[6600,1.6501,6.62e-05],[6900,1.6771,6.55e-05],[7200,1.7011,6.74e-05],[7500,1.7268,6.79e-05],[7800,1.7526,6.47e-05],[8100,1.7717,6.38e-05],[8400,1.7895,6.36e-05],[8700,1.7013,6.53e-05],[9000,1.7119,6.44e-05],[9300,1.7189,6.24e-05],[9600,1.7288,6.28e-05],[9900,1.727,6.14e-05],[10200,1.726,6.05e-05],[10500,1.7264,6.12e-05],[10800,1.729,5.9e-05],[11100,1.7304,5.89e-05],[11400,1.7322,6.12e-05],[11700,1.6773,6.08e-05],[12000,1.672,6.27e-05],[12300,1.6739,5.83e-05],[12600,1.6773,5.74e-05],[12900,1.6801,5.85e-05],[13200,1.6835,5.78e-05],[13500,1.6865,5.84e-05],[13800,1.6899,5.71e-05],[14100,1.6924,5.75e-05],[14400,1.6942,5.82e-05],[14700,1.6315,5.71e-05]],"kt":[[600,0.2414,0.00025],[900,0.367,0.000209],[1200,0.4889,0.00019],[1500,0.6207,0.000168],[1800,0.7569,0.000149],[2100,0.8842,0.000126],[2400,1.0017,0.000111],[2700,1.1057,0.000101],[3000,1.206,9.52e-05],[3300,1.2783,8.43e-05],[3600,1.3668,7.98e-05],[3900,1.4477,7.37e-05],[4200,1.5216,7.08e-05],[4500,1.593,6.81e-05],[4800,1.6586,6.48e-05],[5100,1.718,6.3e-05],[5400,1.7734,6.08e-05],[5700,1.7567,6.2e-05],[6000,1.7975,5.93e-05],[6300,1.8224,5.76e-05],[6600,1.8607,5.53e-05],[6900,1.894,5.42e-05],[7200,1.9237,5.82e-05],[7500,1.9545,5.84e-05],[7800,1.9852,5.59e-05],[8100,2.0074,5.55e-05],[8400,2.0285,5.52e-05],[8700,1.9212,5.74e-05],[9000,1.9292,5.7e-05],[9300,1.9358,5.57e-05],[9600,1.946,5.55e-05],[9900,1.9342,5.48e-05],[10200,1.9263,5.43e-05],[10500,1.9234,5.54e-05],[10800,1.925,5.32e-05],[11100,1.927,5.31e-05],[11400,1.9308,5.53e-05],[11700,1.8691,5.54e-05],[12000,1.8636,5.69e-05],[12300,1.8649,5.34e-05],[12600,1.8689,5.21e-05],[12900,1.8713,5.33e-05],[13200,1.8749,5.23e-05],[13500,1.8778,5.31e-05],[13800,1.8813,5.18e-05],[14100,1.8844,5.24e-05],[14400,1.8878,5.28e-05],[14700,1.8179,5.18e-05]],"b":[[600,0.2066,0.000248],[900,0.3245,0.000243],[1200,0.4621,0.000207],[1500,0.5982,0.000167],[1800,0.7108,0.000144],[2100,0.8031,0.000131],[2400,0.8784,0.000121],[2700,0.9423,0.000114],[3000,0.9945,0.000111],[3300,1.0351,9.8e-05],[3600,1.0861,9.79e-05],[3900,1.1348,9.54e-05],[4200,1.1743,8.95e-05],[4500,1.2088,9.03e-05],[4800,1.2405,8.9e-05],[5100,1.2684,8.69e-05],[5400,1.2941,8.15e-05],[5700,1.2035,8.69e-05],[6000,1.217,8.67e-05],[6300,1.2322,8.11e-05],[6600,1.2581,7.99e-05],[6900,1.277,8.21e-05],[7200,1.2955,8.14e-05],[7500,1.3171,8.05e-05],[7800,1.3372,8.32e-05],[8100,1.353,8.03e-05],[8400,1.3671,7.97e-05],[8700,1.2629,8.13e-05],[9000,1.2691,7.99e-05],[9300,1.2825,7.57e-05],[9600,1.2981,7.59e-05],[9900,1.2944,7.66e-05],[10200,1.2959,7.62e-05],[10500,1.2989,7.67e-05],[10800,1.3047,7.53e-05],[11100,1.3103,7.7e-05],[11400,1.3169,7.59e-05],[11700,1.2434,7.8e-05],[12000,1.2448,7.86e-05],[12300,1.2549,7.71e-05],[12600,1.2711,7.21e-05],[12900,1.2817,7.3e-05],[13200,1.2902,7.43e-05],[13500,1.2978,7.45e-05],[13800,1.3051,7.32e-05],[14100,1.3119,7.39e-05],[14400,1.3184,7.21e-05],[14700,1.2349,7.59e-05]],"bt":[[600,0.2066,0.000279],[900,0.3469,0.00025],[1200,0.4982,0.000208],[1500,0.6469,0.000168],[1800,0.7743,0.000143],[2100,0.8797,0.000127],[2400,0.9635,0.00012],[2700,1.0363,0.000111],[3000,1.0963,0.000108],[3300,1.1457,9.54e-05],[3600,1.205,9.43e-05],[3900,1.2616,9.21e-05],[4200,1.3072,8.56e-05],[4500,1.346,8.57e-05],[4800,1.3821,8.44e-05],[5100,1.4135,8.2e-05],[5400,1.443,7.66e-05],[5700,1.3285,8.21e-05],[6000,1.3426,8.19e-05],[6300,1.3602,7.77e-05],[6600,1.3893,7.56e-05],[6900,1.4094,7.73e-05],[7200,1.4295,7.9e-05],[7500,1.456,7.84e-05],[7800,1.4815,7.99e-05],[8100,1.5019,7.8e-05],[8400,1.5213,7.69e-05],[8700,1.4073,7.79e-05],[9000,1.4164,7.63e-05],[9300,1.4321,7.31e-05],[9600,1.4515,7.3e-05],[9900,1.4524,7.28e-05],[10200,1.4564,7.22e-05],[10500,1.4608,7.31e-05],[10800,1.4678,7.08e-05],[11100,1.4748,7.3e-05],[11400,1.4829,7.23e-05],[11700,1.3902,7.44e-05],[12000,1.3949,7.54e-05],[12300,1.4085,7.46e-05],[12600,1.4288,6.83e-05],[12900,1.4422,6.92e-05],[13200,1.4529,7.11e-05],[13500,1.4618,7.03e-05],[13800,1.4699,7e-05],[14100,1.4785,7.07e-05],[14400,1.4862,6.79e-05],[14700,1.37,7.27e-05]],"rb":[[600,1.125],[900,1.0288],[1200,1.0048],[1500,1.006],[1800,0.9931],[2100,0.9695],[2400,0.9917],[2700,0.9737],[3000,0.973],[3300,0.9735],[3600,0.9632],[3900,0.9654],[4200,0.9564],[4500,0.9491],[4800,0.9483],[5100,0.9436],[5400,0.9399],[5700,0.9448],[6000,0.9446],[6300,0.9581],[6600,0.9462],[6900,0.9415],[7200,0.9705],[7500,0.9739],[7800,0.9603],[8100,0.9714],[8400,0.9649],[8700,0.9582],[9000,0.9549],[9300,0.9657],[9600,0.9618],[9900,0.9504],[10200,0.9475],[10500,0.9531],[10800,0.9402],[11100,0.9481],[11400,0.9526],[11700,0.9538],[12000,0.9593],[12300,0.9676],[12600,0.9473],[12900,0.9479],[13200,0.9569],[13500,0.9436],[13800,0.9563],[14100,0.9567],[14400,0.9417],[14700,0.9578]],"rk":[[600,1.073],[900,1.0296],[1200,1.027],[1500,1.006],[1800,0.9739],[2100,0.9333],[2400,0.9098],[2700,0.886],[3000,0.8734],[3300,0.8691],[3600,0.8618],[3900,0.8423],[4200,0.8369],[4500,0.8387],[4800,0.8308],[5100,0.8289],[5400,0.8306],[5700,0.8289],[6000,0.8329],[6300,0.8446],[6600,0.8353],[6900,0.8275],[7200,0.8635],[7500,0.8601],[7800,0.864],[8100,0.8699],[8400,0.8679],[8700,0.879],[9000,0.8851],[9300,0.8926],[9600,0.8838],[9900,0.8925],[10200,0.8975],[10500,0.9052],[10800,0.9017],[11100,0.9015],[11400,0.9036],[11700,0.9112],[12000,0.9075],[12300,0.916],[12600,0.9077],[12900,0.9111],[13200,0.9048],[13500,0.9092],[13800,0.9072],[14100,0.9113],[14400,0.9072],[14700,0.9072]]};
 function drawReal(){
   const {ctx,W,H}=setup(el("c_real"));
   const half=W/2-12;
@@ -881,13 +954,16 @@ function drawReal(){
     const L=54,R=half-6,T=26,B=H-44;
     ctx.fillStyle=C.ink;ctx.font="12px -apple-system,sans-serif";ctx.textAlign="left";
     ctx.fillText("N durante la densificación",6,16);
-    const px=i=>L+(R-L)*(i-500)/(15000-500), py=n=>B-(B-T)*n/1.9;
+    const px=i=>L+(R-L)*(i-500)/(15000-500), py=n=>B-(B-T)*n/2.15;
     axes(ctx,L,R,T,B,"iteración","N (M)");
     ctx.strokeStyle="#1b2030";ctx.fillStyle=C.muted;ctx.font="10px ui-monospace,monospace";
-    for(let n=0.5;n<=1.5;n+=0.5){const yy=py(n);ctx.beginPath();ctx.moveTo(L,yy);ctx.lineTo(R,yy);ctx.stroke();
+    for(let n=0.5;n<=2.0;n+=0.5){const yy=py(n);ctx.beginPath();ctx.moveTo(L,yy);ctx.lineTo(R,yy);ctx.stroke();
       ctx.textAlign="right";ctx.fillText(n.toFixed(1),L-5,yy+3);}
     ctx.textAlign="center";
     for(const i of [2500,7500,12500]) ctx.fillText((i/1000)+"k",px(i),B+15);
+    // discontinua = tent, continua = átomo. El color sigue siendo la ESCENA.
+    poly(ctx,REAL.kt.map(d=>[px(d[0]),py(d[1])]),C.accent2,1.6,[5,4]);
+    poly(ctx,REAL.bt.map(d=>[px(d[0]),py(d[1])]),C.accent,1.6,[5,4]);
     poly(ctx,REAL.k.map(d=>[px(d[0]),py(d[1])]),C.accent2,2);
     poly(ctx,REAL.b.map(d=>[px(d[0]),py(d[1])]),C.accent,2);
   }
@@ -907,6 +983,8 @@ function drawReal(){
     poly(ctx,[[L,py(2e-4)],[R,py(2e-4)]],C.danger,1.6,[6,4]);
     ctx.fillStyle=C.danger;ctx.font="10px ui-monospace,monospace";ctx.textAlign="left";
     ctx.fillText("τ = 2,0e-04",L+6,py(2e-4)-6);
+    poly(ctx,REAL.kt.map(d=>[px(d[0]),py(d[2])]),C.accent2,1.6,[5,4]);
+    poly(ctx,REAL.bt.map(d=>[px(d[0]),py(d[2])]),C.accent,1.6,[5,4]);
     poly(ctx,REAL.k.map(d=>[px(d[0]),py(d[2])]),C.accent2,2);
     poly(ctx,REAL.b.map(d=>[px(d[0]),py(d[2])]),C.accent,2);
     ctx.fillStyle=C.muted;ctx.textAlign="right";
@@ -914,7 +992,32 @@ function drawReal(){
   }
 }
 
-function all(){ refresh1(); drawConf(); drawCap(); drawReal(); }
+// El gráfico que cierra la comprobación: el COCIENTE p90(tent)/p90(átomo).
+// Por encima de 1 = el tent tiene más gradiente (lo que predecía el §3-4).
+// Por debajo = lo contrario, que es lo que sale.
+function drawRatio(){
+  const {ctx,W,H}=setup(el("c_ratio"));
+  const L=62,R=W-16,T=26,B=H-44;
+  ctx.fillStyle=C.ink;ctx.font="12px -apple-system,sans-serif";ctx.textAlign="left";
+  ctx.fillText("p90 del tent ÷ p90 del átomo",6,16);
+  const px=i=>L+(R-L)*(i-500)/(15000-500), py=r=>B-(B-T)*(r-0.78)/(1.18-0.78);
+  axes(ctx,L,R,T,B,"iteración","cociente");
+  ctx.strokeStyle="#1b2030";ctx.fillStyle=C.muted;ctx.font="10px ui-monospace,monospace";
+  for(const r of [0.8,0.9,1.0,1.1]){const yy=py(r);ctx.beginPath();ctx.moveTo(L,yy);ctx.lineTo(R,yy);ctx.stroke();
+    ctx.textAlign="right";ctx.fillText(r.toFixed(1),L-5,yy+3);}
+  ctx.textAlign="center";
+  for(const i of [2500,7500,12500]) ctx.fillText((i/1000)+"k",px(i),B+15);
+  // la línea que decide: cociente = 1
+  poly(ctx,[[L,py(1)],[R,py(1)]],C.danger,1.8);
+  ctx.fillStyle=C.danger;ctx.font="10px ui-monospace,monospace";ctx.textAlign="left";
+  ctx.fillText("1,0 — mismo gradiente en los dos brazos",L+6,py(1)-6);
+  poly(ctx,REAL.rk.map(d=>[px(d[0]),py(d[1])]),C.accent2,2);
+  poly(ctx,REAL.rb.map(d=>[px(d[0]),py(d[1])]),C.accent,2);
+  ctx.fillStyle=C.muted;ctx.textAlign="left";ctx.font="10px ui-monospace,monospace";
+  ctx.fillText("por DEBAJO de 1: el átomo tiene MÁS gradiente que el tent",L+6,py(0.83));
+}
+
+function all(){ refresh1(); drawConf(); drawCap(); drawReal(); drawRatio(); }
 window.addEventListener("resize",all);
 all(); buildCurve(0); buildGrad();
 </script>

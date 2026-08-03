@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comparador de runs — 2DGS · tent · Gabor</title>
+<style>
+  :root{
+    color-scheme: light;
+    --page:#f9f9f7; --surface:#fcfcfb;
+    --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+    --good:#0ca30c; --bad:#d03b3b; --warn:#fab219;
+    --wash:rgba(11,11,11,.04);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:where(:not([data-theme="light"])){
+      color-scheme: dark;
+      --page:#0d0d0d; --surface:#1a1a19;
+      --ink:#ffffff; --ink-2:#c3c2b7; --ink-3:#898781;
+      --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+      --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+      --good:#0ca30c; --bad:#d03b3b; --warn:#fab219;
+      --wash:rgba(255,255,255,.05);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --page:#0d0d0d; --surface:#1a1a19;
+    --ink:#ffffff; --ink-2:#c3c2b7; --ink-3:#898781;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+    --wash:rgba(255,255,255,.05);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--page); color:var(--ink);
+    font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:32px 20px 80px}
+  h1{font-size:26px; line-height:1.25; margin:0 0 6px; letter-spacing:-.01em}
+  h2{font-size:18px; margin:44px 0 4px; letter-spacing:-.005em}
+  h3{font-size:14px; margin:0 0 2px; font-weight:600}
+  p.sub{color:var(--ink-2); margin:0 0 4px; font-size:14px}
+  .lede{color:var(--ink-2); font-size:14.5px; max-width:76ch; margin:0 0 8px}
+  .hint{color:var(--ink-3); font-size:12.5px; margin:6px 0 0}
+  code{font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; background:var(--wash); padding:1px 5px; border-radius:4px}
+
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px 20px}
+  .grid3{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-top:14px}
+
+  /* ── resumen por escena ───────────────────────────────────────────── */
+  .scene-head{display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:10px}
+  .scene-head .tipo{color:var(--ink-3); font-size:12px}
+  table.mini{width:100%; border-collapse:collapse; font-size:13px}
+  table.mini th{text-align:left; font-weight:500; color:var(--ink-3); font-size:11.5px;
+    text-transform:uppercase; letter-spacing:.04em; padding:0 0 6px; border-bottom:1px solid var(--grid)}
+  table.mini td{padding:7px 0; border-bottom:1px solid var(--grid); font-variant-numeric:tabular-nums}
+  table.mini tr:last-child td{border-bottom:none}
+  table.mini td.name{font-variant-numeric:normal}
+  .num{text-align:right}
+  .dot{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; vertical-align:-1px}
+  .dia{display:inline-block; width:9px; height:9px; margin-right:7px; vertical-align:-1px; transform:rotate(45deg)}
+  .rule-key{display:inline-block; width:11px; height:0; border-top:2px solid currentColor; margin-right:7px; vertical-align:4px}
+  .tag{font-size:10.5px; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-3); margin-left:6px}
+  .delta{font-variant-numeric:tabular-nums; font-size:12.5px; white-space:nowrap}
+  .delta.up{color:var(--good)} .delta.dn{color:var(--bad)} .delta.eq{color:var(--ink-3)}
+  .note{color:var(--ink-2); font-size:12.5px; margin:12px 0 0; padding-top:11px; border-top:1px solid var(--grid)}
+
+  /* ── filtros ──────────────────────────────────────────────────────── */
+  .filters{display:flex; flex-wrap:wrap; gap:18px; align-items:center; margin:14px 0 4px;
+    padding:12px 14px; background:var(--surface); border:1px solid var(--border); border-radius:10px}
+  .fgroup{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .flabel{font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-3)}
+  .seg{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden}
+  .seg button{appearance:none; border:0; background:transparent; color:var(--ink-2);
+    font:inherit; font-size:13px; padding:6px 12px; cursor:pointer; min-height:32px}
+  .seg button+button{border-left:1px solid var(--border)}
+  .seg button[aria-pressed="true"]{background:var(--wash); color:var(--ink); font-weight:600}
+  .chip{appearance:none; font:inherit; font-size:12.5px; padding:5px 11px; min-height:30px; cursor:pointer;
+    border:1px solid var(--border); border-radius:999px; background:transparent; color:var(--ink-2);
+    display:inline-flex; align-items:center; gap:6px}
+  .chip[aria-pressed="true"]{background:var(--wash); color:var(--ink)}
+  .chip[aria-pressed="false"] .dot,.chip[aria-pressed="false"] .dia{opacity:.28}
+
+  /* ── charts ───────────────────────────────────────────────────────── */
+  #strips{position:relative}
+  .chart{position:relative; margin-top:6px}
+  .chart svg{display:block; width:100%; height:auto; overflow:visible}
+  .ctitle{font-size:13px; font-weight:600; margin:16px 0 0}
+  .cdesc{font-size:12px; color:var(--ink-3); margin:0 0 2px}
+  .legend{display:flex; flex-wrap:wrap; gap:14px; margin:10px 0 0; font-size:12.5px; color:var(--ink-2)}
+  .legend span{display:inline-flex; align-items:center}
+  .tip{position:absolute; pointer-events:none; z-index:9; opacity:0; transition:opacity .1s;
+    background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 11px;
+    font-size:12.5px; box-shadow:0 6px 22px rgba(0,0,0,.13); min-width:180px}
+  .tip b{font-size:13px} .tip .row{display:flex; justify-content:space-between; gap:16px; color:var(--ink-2)}
+  .tip .row span:last-child{font-variant-numeric:tabular-nums; color:var(--ink)}
+
+  /* ── tabla ────────────────────────────────────────────────────────── */
+  .tablewrap{overflow-x:auto; border:1px solid var(--border); border-radius:10px; background:var(--surface); margin-top:12px}
+  table.full{width:100%; border-collapse:collapse; font-size:12.5px; white-space:nowrap}
+  table.full th{position:sticky; top:0; background:var(--surface); text-align:left; font-weight:500;
+    color:var(--ink-3); font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    padding:10px 12px; border-bottom:1px solid var(--grid); cursor:pointer; user-select:none}
+  table.full th:hover{color:var(--ink)}
+  table.full th[data-dir]::after{content:" ▲"; font-size:9px}
+  table.full th[data-dir="desc"]::after{content:" ▼"}
+  table.full td{padding:8px 12px; border-bottom:1px solid var(--grid); font-variant-numeric:tabular-nums}
+  table.full td.name{font-variant-numeric:normal}
+  table.full tbody tr{cursor:pointer}
+  table.full tbody tr:hover{background:var(--wash)}
+  table.full tbody tr[aria-selected="true"]{background:var(--wash)}
+  .best{font-weight:600}
+  .muted{color:var(--ink-3)}
+
+  /* ── detalle ──────────────────────────────────────────────────────── */
+  #detail{margin-top:14px}
+  #detail .card{padding:18px 20px}
+  #detail h3{font-size:15px; margin-bottom:8px}
+  .kv{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px 22px; margin:12px 0}
+  .kv div{font-size:12.5px}
+  .kv dt{color:var(--ink-3); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin:0}
+  .kv dd{margin:2px 0 0; font-variant-numeric:tabular-nums}
+  details.long{margin-top:12px; border-top:1px solid var(--grid); padding-top:11px}
+  details.long summary{cursor:pointer; font-size:12.5px; color:var(--ink-2); font-weight:500}
+  details.long p{font-size:12.5px; color:var(--ink-2); line-height:1.6; margin:9px 0 0; white-space:pre-wrap}
+
+  /* ── carga del json ───────────────────────────────────────────────── */
+  #loader{margin:20px 0; padding:16px 18px; border:1px solid var(--border); border-radius:10px; background:var(--surface)}
+  #loader.err{border-color:var(--bad)}
+  #loader input[type=file]{margin-top:10px; font:inherit; font-size:13px}
+  .themebtn{position:fixed; top:14px; right:14px; z-index:20; appearance:none; cursor:pointer;
+    border:1px solid var(--border); background:var(--surface); color:var(--ink-2);
+    border-radius:999px; width:36px; height:36px; font-size:15px; line-height:1}
+  @media print{ .themebtn,.filters{display:none} }
+</style>
+</head>
+<body>
+<button class="themebtn" id="themebtn" title="Cambiar tema" aria-label="Cambiar tema">◐</button>
+<div class="wrap">
+
+  <h1>Comparador de runs — 2DGS oficial · tent · Gabor</h1>
+  <p class="lede">Todas las métricas son <strong>honestas</strong> (<code>metrics.py</code> sobre un
+  modelo entrenado con <code>--eval</code>), nunca el eval in-train de <code>train.py</code>.
+  Los datos viven en <code>docs/runs.json</code>; esta página solo los pinta.</p>
+
+  <div id="loader" hidden></div>
+  <main id="app" hidden>
+
+    <h2>El A/B que importa: átomo contra tent</h2>
+    <p class="sub">Cada escena tiene su brazo de control —un run clásico con kernel tent y la
+    <em>misma</em> configuración que el brazo Gabor— y su baseline oficial del 2DGS.</p>
+    <div class="grid3" id="scenes"></div>
+
+    <h2>Explorador</h2>
+    <p class="sub">Cada punto es un run. Las dos reglas verticales son las referencias:
+    2DGS oficial y el tent del A/B.</p>
+    <div class="filters" id="filters"></div>
+    <div class="card">
+      <div id="strips"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+
+    <div class="tablewrap"><table class="full" id="tbl">
+      <thead><tr id="thead"></tr></thead><tbody id="tbody"></tbody>
+    </table></div>
+    <p class="hint" id="tblhint"></p>
+    <div id="detail"></div>
+
+    <h2>El régimen de la onda contra el resultado</h2>
+    <p class="sub">Solo los runs del kernel átomo. Eje X: la mediana de <code>f·W</code> —cuántas
+    anchuras de onda caben en la huella del splat—. Eje Y: lo que ese run gana o pierde contra su
+    propio tent. La línea horizontal es el tent.</p>
+    <div class="card">
+      <div id="wave"></div>
+      <div class="legend" id="wavelegend"></div>
+      <p class="note" id="wavenote"></p>
+    </div>
+
+  </main>
+</div>
+
+<script>
+/* ══ utilidades ═══════════════════════════════════════════════════════ */
+const SVGNS = 'http://www.w3.org/2000/svg';
+const el = (t, a = {}, kids = []) => {
+  const n = document.createElementNS(SVGNS, t);
+  for (const k in a) if (a[k] !== null && a[k] !== undefined) n.setAttribute(k, a[k]);
+  for (const c of [].concat(kids)) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  return n;
+};
+const h = (t, a = {}, kids = []) => {
+  const n = document.createElement(t);
+  for (const k in a) {
+    if (k === 'class') n.className = a[k];
+    else if (k === 'html') n.innerHTML = a[k];
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), a[k]);
+    else if (a[k] !== null && a[k] !== undefined) n.setAttribute(k, a[k]);
+  }
+  for (const c of [].concat(kids)) if (c) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  return n;
+};
+const fmt = (v, d = 4) => v === null || v === undefined ? '—' : v.toFixed(d);
+const miles = v => v === null || v === undefined ? '—' : v.toLocaleString('es-ES');
+const signo = (v, d = 3) => (v > 0 ? '+' : v < 0 ? '−' : '±') + Math.abs(v).toFixed(d);
+// ticks "bonitos" sobre un rango
+function ticks(lo, hi, n = 5) {
+  const span = hi - lo || 1, raw = span / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || 10 * mag;
+  const out = []; for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-12; t += step) out.push(+t.toFixed(10));
+  return out;
+}
+
+/* ══ configuración de las tres métricas ═══════════════════════════════ */
+// mejor: +1 = sube mejor (PSNR, SSIM), -1 = baja mejor (LPIPS)
+const METRICAS = [
+  { k: 'psnr',  label: 'PSNR',  unidad: 'dB', dec: 3, mejor: +1, desc: 'más alto es mejor' },
+  { k: 'ssim',  label: 'SSIM',  unidad: '',   dec: 4, mejor: +1, desc: 'más alto es mejor' },
+  { k: 'lpips', label: 'LPIPS', unidad: '',   dec: 4, mejor: -1, desc: 'más BAJO es mejor' },
+];
+// color por familia: 3 slots categóricos (validados all-pairs en claro y oscuro).
+// tent y MCMC comparten hue y se separan por FORMA — codificación compuesta.
+const FAM = {
+  gabor_atomo:  { color: 'var(--s1)', forma: 'circulo', label: 'Gabor átomo' },
+  gabor_legacy: { color: 'var(--s2)', forma: 'circulo', label: 'Gabor legacy' },
+  tent:         { color: 'var(--s3)', forma: 'circulo', label: 'Clásico (tent)' },
+  mcmc:         { color: 'var(--s3)', forma: 'rombo',   label: 'MCMC' },
+};
+const ESC_COLOR = { flowers: 'var(--s1)', bonsai: 'var(--s2)', kitchen: 'var(--s3)' };
+
+let DATA = null, ESTADO = { escena: 'kitchen', familias: new Set(Object.keys(FAM)), orden: { col: 'psnr', dir: 'desc' }, sel: null };
+
+/* ══ carga del json ═══════════════════════════════════════════════════ */
+const loader = document.getElementById('loader');
+async function cargar() {
+  try {
+    const r = await fetch('runs.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    arrancar(await r.json());
+  } catch (e) {
+    loader.hidden = false; loader.className = 'err';
+    loader.innerHTML =
+      '<strong>No se pudo leer <code>runs.json</code></strong>' +
+      '<p class="hint">El navegador bloquea <code>fetch()</code> sobre <code>file://</code>. ' +
+      'Dos salidas: servir la carpeta con <code>cd docs &amp;&amp; python -m http.server 8000</code> ' +
+      'y abrir <code>localhost:8000/comparador_runs.html</code>, o cargar el fichero a mano aquí abajo.</p>';
+    const inp = h('input', { type: 'file', accept: '.json', onchange: async ev => {
+      const f = ev.target.files[0]; if (!f) return;
+      try { arrancar(JSON.parse(await f.text())); loader.hidden = true; }
+      catch (err) { loader.innerHTML += '<p class="hint">JSON inválido: ' + err.message + '</p>'; }
+    }});
+    loader.appendChild(inp);
+  }
+}
+function arrancar(d) {
+  DATA = d;
+  // solo entran en los gráficos los runs con métricas honestas
+  DATA.honestos = d.runs.filter(r => r.metricas.honesto);
+  document.getElementById('app').hidden = false;
+  pintarEscenas(); pintarFiltros(); redibujar(); pintarOnda();
+}
+
+/* ══ helpers de dominio ═══════════════════════════════════════════════ */
+const porId = id => DATA.runs.find(r => r.id === id);
+const tentDe = escena => { const t = DATA.escenas[escena]?.tent_ab; return t ? porId(t) : null; };
+const base2dgs = escena => DATA.escenas[escena]?.baseline_2dgs || null;
+const mejorDe = (lista, m) => {
+  const c = lista.filter(r => r.metricas[m.k] !== null);
+  if (!c.length) return null;
+  return c.reduce((a, b) => (m.mejor * (b.metricas[m.k] - a.metricas[m.k]) > 0 ? b : a));
+};
+// delta orientado: positivo SIEMPRE = mejor, sea cual sea la métrica
+const deltaChip = (valor, ref, m) => {
+  if (valor === null || ref === null || ref === undefined) return h('span', { class: 'delta eq' }, '—');
+  const bruto = valor - ref, orientado = bruto * m.mejor;
+  const umbral = m.k === 'psnr' ? 0.02 : 0.0006;
+  const cls = orientado > umbral ? 'up' : orientado < -umbral ? 'dn' : 'eq';
+  const glifo = orientado > umbral ? '▲ ' : orientado < -umbral ? '▼ ' : '≈ ';
+  return h('span', { class: 'delta ' + cls }, glifo + signo(bruto, m.dec === 3 ? 3 : 4));
+};
+
+/* ══ 1 · tarjetas por escena ══════════════════════════════════════════ */
+function pintarEscenas() {
+  const cont = document.getElementById('scenes'); cont.innerHTML = '';
+  for (const nombre of ['flowers', 'bonsai', 'kitchen']) {
+    const esc = DATA.escenas[nombre], tent = tentDe(nombre), of = base2dgs(nombre);
+    const dela = DATA.honestos.filter(r => r.escena === nombre);
+    const atomo = mejorDe(dela.filter(r => r.familia === 'gabor_atomo'), METRICAS[0]);
+    const mejor = mejorDe(dela, METRICAS[0]);
+
+    const filas = [
+      of   ? { nombre: '2DGS oficial', tag: 'baseline', m: of,             ref: true } : null,
+      tent ? { nombre: tent.etiqueta,  tag: 'tent',     m: tent.metricas,  ref: true, id: tent.id } : null,
+      atomo? { nombre: atomo.etiqueta, tag: 'átomo',    m: atomo.metricas, fam: 'gabor_atomo', id: atomo.id } : null,
+      mejor && mejor.id !== atomo?.id && mejor.id !== tent?.id
+           ? { nombre: mejor.etiqueta, tag: 'mejor propio', m: mejor.metricas, fam: mejor.familia, id: mejor.id } : null,
+    ].filter(Boolean);
+
+    const tb = h('tbody');
+    for (const f of filas) {
+      const marca = f.ref
+        ? h('span', { class: 'rule-key', style: 'color:' + (f.tag === 'baseline' ? 'var(--ink)' : 'var(--ink-3)') })
+        : h('span', { class: FAM[f.fam].forma === 'rombo' ? 'dia' : 'dot', style: 'background:' + FAM[f.fam].color });
+      tb.appendChild(h('tr', {}, [
+        h('td', { class: 'name' }, [marca, f.nombre, h('span', { class: 'tag' }, f.tag)]),
+        ...METRICAS.map(m => h('td', { class: 'num' }, fmt(f.m[m.k], m.dec))),
+      ]));
+    }
+    // fila de deltas átomo − tent
+    if (atomo && tent) {
+      tb.appendChild(h('tr', {}, [
+        h('td', { class: 'name muted' }, 'Δ átomo − tent'),
+        ...METRICAS.map(m => h('td', { class: 'num' }, [deltaChip(atomo.metricas[m.k], tent.metricas[m.k], m)])),
+      ]));
+    }
+
+    cont.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'scene-head' }, [
+        h('h3', {}, esc.nombre), h('span', { class: 'tipo' }, esc.tipo),
+      ]),
+      h('table', { class: 'mini' }, [
+        h('thead', {}, h('tr', {}, [h('th', {}, ''), ...METRICAS.map(m => h('th', { class: 'num' }, m.label))])),
+        tb,
+      ]),
+      h('p', { class: 'note' }, esc.nota),
+    ]));
+  }
+}
+
+/* ══ 2 · filtros ══════════════════════════════════════════════════════ */
+function pintarFiltros() {
+  const cont = document.getElementById('filters'); cont.innerHTML = '';
+  const escenas = [...new Set(DATA.honestos.map(r => r.escena))];
+  const seg = h('div', { class: 'seg' });
+  for (const e of escenas) {
+    seg.appendChild(h('button', {
+      'aria-pressed': String(ESTADO.escena === e),
+      onclick: () => { ESTADO.escena = e; ESTADO.sel = null; pintarFiltros(); redibujar(); },
+    }, e));
+  }
+  cont.appendChild(h('div', { class: 'fgroup' }, [h('span', { class: 'flabel' }, 'Escena'), seg]));
+
+  const fg = h('div', { class: 'fgroup' }, [h('span', { class: 'flabel' }, 'Familia')]);
+  for (const [k, v] of Object.entries(FAM)) {
+    const n = DATA.honestos.filter(r => r.escena === ESTADO.escena && r.familia === k).length;
+    if (!n) continue;
+    fg.appendChild(h('button', {
+      class: 'chip', 'aria-pressed': String(ESTADO.familias.has(k)),
+      onclick: () => {
+        ESTADO.familias.has(k) ? ESTADO.familias.delete(k) : ESTADO.familias.add(k);
+        if (!ESTADO.familias.size) ESTADO.familias = new Set(Object.keys(FAM));
+        pintarFiltros(); redibujar();
+      },
+    }, [
+      h('span', { class: v.forma === 'rombo' ? 'dia' : 'dot', style: 'background:' + v.color }),
+      v.label + ' (' + n + ')',
+    ]));
+  }
+  cont.appendChild(fg);
+}
+
+const visibles = () => DATA.honestos.filter(r =>
+  r.escena === ESTADO.escena && ESTADO.familias.has(r.familia));
+
+/* ══ 3 · strip plots ══════════════════════════════════════════════════ */
+function stripPlot(metrica, runs, escena) {
+  // MT deja sitio a TRES filas por encima del plot: título, etiqueta del 2DGS y
+  // etiqueta del tent. Cada regla tiene su fila porque las dos referencias pueden
+  // caer casi encima (en kitchen se llevan 0,05 dB) y sus etiquetas se pisarían.
+  const W = 1000, H = 140, ML = 12, MR = 12, MT = 52, MB = 26;
+  const FILA_2DGS = 28, FILA_TENT = 41;
+  const plotW = W - ML - MR, banda = H - MT - MB;
+  const tent = tentDe(escena), of = base2dgs(escena);
+
+  const vals = runs.map(r => r.metricas[metrica.k]).filter(v => v !== null);
+  const refs = [tent?.metricas[metrica.k], of?.[metrica.k]].filter(v => v !== null && v !== undefined);
+  if (!vals.length && !refs.length) return null;
+  const todos = vals.concat(refs);
+  let lo = Math.min(...todos), hi = Math.max(...todos);
+  const pad = (hi - lo || Math.abs(hi) * .02 || 1) * .08; lo -= pad; hi += pad;
+  const x = v => ML + (v - lo) / (hi - lo) * plotW;
+
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img',
+    'aria-label': `${metrica.label} de los runs de ${escena} contra el 2DGS oficial y el tent` });
+
+  // rejilla + eje
+  const tk = ticks(lo, hi, 6);
+  for (const t of tk) {
+    svg.appendChild(el('line', { x1: x(t), x2: x(t), y1: MT - 8, y2: MT + banda, stroke: 'var(--grid)', 'stroke-width': 1 }));
+    svg.appendChild(el('text', { x: x(t), y: MT + banda + 16, 'text-anchor': 'middle',
+      fill: 'var(--ink-3)', 'font-size': 11, style: 'font-variant-numeric:tabular-nums' },
+      t.toFixed(metrica.dec === 3 ? (hi - lo > 3 ? 1 : 2) : 3)));
+  }
+  svg.appendChild(el('line', { x1: ML, x2: W - MR, y1: MT + banda, y2: MT + banda, stroke: 'var(--axis)', 'stroke-width': 1 }));
+
+  // reglas de referencia (sólidas: nunca discontinuas), cada una en su fila
+  const regla = (v, texto, grosor, tinta, fila) => {
+    if (v === null || v === undefined) return;
+    svg.appendChild(el('line', { x1: x(v), x2: x(v), y1: fila + 4, y2: MT + banda, stroke: tinta, 'stroke-width': grosor }));
+    const anchor = x(v) > ML + plotW * .82 ? 'end' : 'start';
+    svg.appendChild(el('text', { x: x(v) + (anchor === 'end' ? -5 : 5), y: fila, 'text-anchor': anchor,
+      fill: tinta, 'font-size': 11.5, 'font-weight': 600 }, texto));
+  };
+  regla(of?.[metrica.k], '2DGS oficial', 2, 'var(--ink)', FILA_2DGS);
+  regla(tent?.metricas[metrica.k], 'tent ' + (tent?.etiqueta || ''), 1.5, 'var(--ink-3)', FILA_TENT);
+
+  // puntos, con dispersión vertical determinista para que no se tapen
+  const cy0 = MT + banda / 2;
+  const puntos = [];
+  runs.forEach((r, i) => {
+    const v = r.metricas[metrica.k]; if (v === null) return;
+    const jit = ((i * 2654435761) % 1000) / 1000 - 0.5;    // hash estable → siempre igual
+    const cy = cy0 + jit * (banda * .52);
+    const f = FAM[r.familia], sel = ESTADO.sel === r.id;
+    const g = el('g', { class: 'pt', 'data-id': r.id, style: 'cursor:pointer' });
+    const comun = { fill: f.color, stroke: 'var(--surface)', 'stroke-width': 2, opacity: ESTADO.sel && !sel ? .35 : 1 };
+    if (f.forma === 'rombo') {
+      g.appendChild(el('rect', { x: x(v) - 5, y: cy - 5, width: 10, height: 10, rx: 1.5,
+        transform: `rotate(45 ${x(v)} ${cy})`, ...comun }));
+    } else {
+      g.appendChild(el('circle', { cx: x(v), cy, r: sel ? 7 : 5.5, ...comun }));
+    }
+    if (sel) g.appendChild(el('circle', { cx: x(v), cy, r: 11, fill: 'none', stroke: f.color, 'stroke-width': 1.5 }));
+    svg.appendChild(g);
+    puntos.push({ r, cx: x(v), cy, v });
+  });
+
+  // etiqueta directa del mejor run visible (etiquetado selectivo, nunca en todos)
+  const best = mejorDe(runs, metrica);
+  if (best) {
+    const p = puntos.find(q => q.r.id === best.id);
+    if (p) {
+      const anchor = p.cx > ML + plotW * .8 ? 'end' : 'start';
+      svg.appendChild(el('text', { x: p.cx + (anchor === 'end' ? -12 : 12), y: p.cy + 4,
+        'text-anchor': anchor, fill: 'var(--ink)', 'font-size': 11.5, 'font-weight': 600 },
+        best.etiqueta + ' ' + fmt(best.metricas[metrica.k], metrica.dec)));
+    }
+  }
+
+  // título y aclaración en UN solo <text>: el tspan lo coloca el navegador, así
+  // que no hay que estimar el ancho del título a ojo (y estimarlo mal)
+  svg.appendChild(el('text', { x: ML, y: 12, fill: 'var(--ink)', 'font-size': 13, 'font-weight': 600 }, [
+    metrica.label + (metrica.unidad ? ' (' + metrica.unidad + ')' : ''),
+    el('tspan', { dx: 10, fill: 'var(--ink-3)', 'font-size': 11.5, 'font-weight': 400 }, metrica.desc),
+  ]));
+
+  return { svg, puntos, W, H };
+}
+
+function redibujar() {
+  const cont = document.getElementById('strips'); cont.innerHTML = '';
+  const runs = visibles();
+  const tip = h('div', { class: 'tip' });
+  cont.appendChild(tip);
+
+  for (const m of METRICAS) {
+    const p = stripPlot(m, runs, ESTADO.escena);
+    if (!p) continue;
+    const box = h('div', { class: 'chart' }, [p.svg]);
+    // hover: punto más cercano dentro de un radio generoso (objetivo ≥24 px)
+    const mover = ev => {
+      const rect = p.svg.getBoundingClientRect();
+      const sx = (ev.clientX - rect.left) / rect.width * p.W;
+      const sy = (ev.clientY - rect.top) / rect.height * p.H;
+      let best = null, bd = Infinity;
+      for (const q of p.puntos) {
+        const d = ((q.cx - sx) / 1.6) ** 2 + (q.cy - sy) ** 2;   // pesa más el eje X
+        if (d < bd) { bd = d; best = q; }
+      }
+      if (!best || bd > 900) { tip.style.opacity = 0; return; }
+      const r = best.r, tent = tentDe(ESTADO.escena), of = base2dgs(ESTADO.escena);
+      tip.innerHTML = '';
+      tip.appendChild(h('b', {}, r.etiqueta + ' · ' + FAM[r.familia].label));
+      for (const mm of METRICAS) {
+        tip.appendChild(h('div', { class: 'row' }, [h('span', {}, mm.label), h('span', {}, fmt(r.metricas[mm.k], mm.dec))]));
+      }
+      tip.appendChild(h('div', { class: 'row' }, [h('span', {}, 'N splats'), h('span', {}, miles(r.modelo.n_splats))]));
+      if (tent && tent.id !== r.id) {
+        const d = r.metricas[m.k] - tent.metricas[m.k];
+        tip.appendChild(h('div', { class: 'row' }, [h('span', {}, 'Δ ' + m.label + ' vs tent'), h('span', {}, signo(d, m.dec))]));
+      }
+      if (of) {
+        const d = r.metricas[m.k] - of[m.k];
+        tip.appendChild(h('div', { class: 'row' }, [h('span', {}, 'Δ ' + m.label + ' vs 2DGS'), h('span', {}, signo(d, m.dec))]));
+      }
+      tip.style.opacity = 1;
+      // el tooltip cuelga de #strips, así que se posiciona contra ESE rect,
+      // no contra el de la gráfica concreta que tiene el ratón encima
+      const bx = cont.getBoundingClientRect();
+      let left = ev.clientX - bx.left + 16;
+      if (left + 220 > bx.width) left = ev.clientX - bx.left - 236;
+      tip.style.left = Math.max(0, left) + 'px';
+      tip.style.top = Math.max(0, ev.clientY - bx.top - 10) + 'px';
+    };
+    p.svg.addEventListener('mousemove', mover);
+    p.svg.addEventListener('mouseleave', () => tip.style.opacity = 0);
+    p.svg.addEventListener('click', ev => {
+      const rect = p.svg.getBoundingClientRect();
+      const sx = (ev.clientX - rect.left) / rect.width * p.W, sy = (ev.clientY - rect.top) / rect.height * p.H;
+      let best = null, bd = Infinity;
+      for (const q of p.puntos) { const d = ((q.cx - sx) / 1.6) ** 2 + (q.cy - sy) ** 2; if (d < bd) { bd = d; best = q; } }
+      if (best && bd < 900) seleccionar(best.r.id);
+    });
+    cont.appendChild(box);
+  }
+
+  // leyenda: identidad nunca por color solo — color + forma + texto
+  const lg = document.getElementById('legend'); lg.innerHTML = '';
+  for (const [k, v] of Object.entries(FAM)) {
+    if (!runs.some(r => r.familia === k)) continue;
+    lg.appendChild(h('span', {}, [h('span', { class: v.forma === 'rombo' ? 'dia' : 'dot', style: 'background:' + v.color }), v.label]));
+  }
+  lg.appendChild(h('span', {}, [h('span', { class: 'rule-key', style: 'color:var(--ink)' }), '2DGS oficial']));
+  lg.appendChild(h('span', {}, [h('span', { class: 'rule-key', style: 'color:var(--ink-3)' }), 'tent del A/B']));
+
+  pintarTabla(runs);
+  pintarDetalle();
+}
+
+/* ══ 4 · tabla (la vista accesible de todo lo anterior) ═══════════════ */
+const COLS = [
+  { k: 'etiqueta', t: 'Run',    tipo: 'txt' },
+  { k: 'familia',  t: 'Familia', tipo: 'txt', get: r => FAM[r.familia].label },
+  { k: 'psnr',     t: 'PSNR',   tipo: 'num', get: r => r.metricas.psnr,  dec: 4 },
+  { k: 'ssim',     t: 'SSIM',   tipo: 'num', get: r => r.metricas.ssim,  dec: 4 },
+  { k: 'lpips',    t: 'LPIPS',  tipo: 'num', get: r => r.metricas.lpips, dec: 4 },
+  { k: 'dtent',    t: 'Δ PSNR vs tent', tipo: 'num', dec: 3,
+    get: r => { const t = tentDe(r.escena); return t && t.id !== r.id ? r.metricas.psnr - t.metricas.psnr : null; } },
+  { k: 'd2dgs',    t: 'Δ PSNR vs 2DGS', tipo: 'num', dec: 3,
+    get: r => { const o = base2dgs(r.escena); return o ? r.metricas.psnr - o.psnr : null; } },
+  { k: 'n',        t: 'N splats', tipo: 'num', get: r => r.modelo.n_splats, miles: true },
+  { k: 'modo',     t: 'Modo',   tipo: 'txt', get: r => r.modelo.modo },
+  { k: 'tau',      t: 'τ',      tipo: 'num', get: r => r.optim.tau, exp: true },
+  { k: 'kernel',   t: 'Kernel', tipo: 'txt', get: r => r.gabor ? r.gabor.kernel : 'tent' },
+  { k: 'f1',       t: 'f1',     tipo: 'num', get: r => r.gabor?.f1 ?? null, dec: 4 },
+  { k: 'f1o',      t: 'f1 de',  tipo: 'txt', get: r => r.gabor?.f1_origen ?? '' },
+  { k: 'apag',     t: 'Apagados %', tipo: 'num', get: r => r.diagnostico?.apagados ?? null, dec: 2 },
+  { k: 'fw',       t: 'f·W p50', tipo: 'num', get: r => r.diagnostico?.fw_p50 ?? null, dec: 3 },
+];
+
+function valorCol(c, r) { return c.get ? c.get(r) : r[c.k]; }
+
+function pintarTabla(runs) {
+  const thead = document.getElementById('thead'); thead.innerHTML = '';
+  for (const c of COLS) {
+    const th = h('th', { class: c.tipo === 'num' ? 'num' : '', onclick: () => {
+      ESTADO.orden = ESTADO.orden.col === c.k
+        ? { col: c.k, dir: ESTADO.orden.dir === 'desc' ? 'asc' : 'desc' }
+        : { col: c.k, dir: c.tipo === 'num' ? 'desc' : 'asc' };
+      redibujar();
+    }}, c.t);
+    if (ESTADO.orden.col === c.k) th.setAttribute('data-dir', ESTADO.orden.dir);
+    thead.appendChild(th);
+  }
+
+  const col = COLS.find(c => c.k === ESTADO.orden.col) || COLS[2];
+  const dir = ESTADO.orden.dir === 'desc' ? -1 : 1;
+  // "run 10" antes que "run 2" si se ordena como texto: la columna Run va por número
+  const clave = r => col.k === 'etiqueta' ? (parseInt(String(r.etiqueta).replace(/\D/g, ''), 10) || 0) : valorCol(col, r);
+  const orden = runs.slice().sort((a, b) => {
+    const va = clave(a), vb = clave(b);
+    if (va === null || va === undefined || va === '') return 1;
+    if (vb === null || vb === undefined || vb === '') return -1;
+    return (typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb))) * dir;
+  });
+
+  // el mejor de cada métrica se marca en negrita (relief para los hues de bajo contraste)
+  const mejores = {}; for (const m of METRICAS) mejores[m.k] = mejorDe(runs, m)?.id;
+
+  const tb = document.getElementById('tbody'); tb.innerHTML = '';
+  for (const r of orden) {
+    const tr = h('tr', { 'aria-selected': String(ESTADO.sel === r.id), onclick: () => seleccionar(r.id) });
+    for (const c of COLS) {
+      let v = valorCol(c, r), txt;
+      if (v === null || v === undefined || v === '') txt = '—';
+      else if (c.tipo === 'num') txt = c.miles ? miles(v) : c.exp ? v.toExponential(1) : v.toFixed(c.dec ?? 3);
+      else txt = String(v);
+      if (c.tipo === 'num' && (c.k === 'dtent' || c.k === 'd2dgs') && typeof v === 'number') txt = signo(v, c.dec);
+      const td = h('td', { class: c.tipo === 'num' ? 'num' : 'name' });
+      if (c.k === 'etiqueta') {
+        const f = FAM[r.familia];
+        td.appendChild(h('span', { class: f.forma === 'rombo' ? 'dia' : 'dot', style: 'background:' + f.color }));
+        td.appendChild(document.createTextNode(txt));
+        if (r.tent_ab) td.appendChild(h('span', { class: 'tag' }, 'tent A/B'));
+      } else {
+        td.textContent = txt;
+        if (mejores[c.k] === r.id) td.className += ' best';
+      }
+      tr.appendChild(td);
+    }
+    tb.appendChild(tr);
+  }
+  document.getElementById('tblhint').textContent =
+    orden.length + ' runs con métricas honestas en ' + ESTADO.escena +
+    ' · clic en una fila (o en un punto) para ver el cambio clave y el veredicto · clic en una cabecera para ordenar';
+}
+
+/* ══ 5 · panel de detalle ════════════════════════════════════════════ */
+function seleccionar(id) { ESTADO.sel = ESTADO.sel === id ? null : id; redibujar(); }
+
+function pintarDetalle() {
+  const cont = document.getElementById('detail'); cont.innerHTML = '';
+  if (!ESTADO.sel) return;
+  const r = porId(ESTADO.sel); if (!r) return;
+  const tent = tentDe(r.escena), of = base2dgs(r.escena);
+
+  const kv = [];
+  const add = (t, v) => { if (v !== null && v !== undefined && v !== '') kv.push(h('div', {}, [h('dt', {}, t), h('dd', {}, String(v))])); };
+  add('Escena', r.escena); add('Familia', FAM[r.familia].label);
+  add('N splats', miles(r.modelo.n_splats)); add('Iteraciones', miles(r.modelo.iters));
+  add('Modo', r.modelo.modo); add('cap_max', r.modelo.cap_max ? miles(r.modelo.cap_max) : null);
+  add('τ (densify_grad_threshold)', r.optim.tau ? r.optim.tau.toExponential(1) : null);
+  add('Prune de tamaño', r.optim.prune_tam);
+  if (r.gabor) {
+    add('Kernel', r.gabor.kernel); add('freq', r.gabor.freq);
+    add('γ', r.gabor.gamma); add('κ', r.gabor.kappa);
+    add('f1', r.gabor.f1 !== null ? r.gabor.f1 + ' (' + r.gabor.f1_origen + ')' : null);
+    add('Σaₙ ≤', r.gabor.sum_a_max);
+  }
+  if (r.diagnostico) {
+    const d = r.diagnostico;
+    add('f·W p50 / p90', d.fw_p50 + ' / ' + d.fw_p90);
+    add('Apagados / encendidos', d.apagados + ' % / ' + d.encendidos + ' %');
+    add('Σaₙ medio', d.suma_a); add('Casi planos', d.casi_planos + ' %');
+    if (d.a1 !== null) add('a₁ / a₂ / a₃', [d.a1, d.a2, d.a3].map(x => x.toFixed(4)).join(' / '));
+  }
+  add('PSNR in-train', r.metricas.psnr_intrain);
+
+  const deltas = h('table', { class: 'mini' }, [
+    h('thead', {}, h('tr', {}, [h('th', {}, ''), ...METRICAS.map(m => h('th', { class: 'num' }, m.label))])),
+    h('tbody', {}, [
+      h('tr', {}, [h('td', { class: 'name' }, 'este run'), ...METRICAS.map(m => h('td', { class: 'num' }, fmt(r.metricas[m.k], m.dec)))]),
+      tent && tent.id !== r.id ? h('tr', {}, [h('td', { class: 'name muted' }, 'Δ vs tent ' + tent.etiqueta),
+        ...METRICAS.map(m => h('td', { class: 'num' }, [deltaChip(r.metricas[m.k], tent.metricas[m.k], m)]))]) : null,
+      of ? h('tr', {}, [h('td', { class: 'name muted' }, 'Δ vs 2DGS oficial'),
+        ...METRICAS.map(m => h('td', { class: 'num' }, [deltaChip(r.metricas[m.k], of[m.k], m)]))]) : null,
+    ].filter(Boolean)),
+  ]);
+
+  cont.appendChild(h('div', { class: 'card' }, [
+    h('h3', {}, r.etiqueta + ' — ' + r.escena),
+    deltas,
+    h('dl', { class: 'kv' }, kv),
+    r.cambio_clave ? h('details', { class: 'long', open: '' }, [h('summary', {}, 'Cambio clave'), h('p', {}, r.cambio_clave)]) : null,
+    r.veredicto ? h('details', { class: 'long' }, [h('summary', {}, 'Veredicto'), h('p', {}, r.veredicto)]) : null,
+  ]));
+}
+
+/* ══ 6 · régimen de la onda vs resultado ═════════════════════════════ */
+function pintarOnda() {
+  const cont = document.getElementById('wave'); cont.innerHTML = '';
+  const pts = DATA.honestos
+    .filter(r => r.familia === 'gabor_atomo' && r.diagnostico && tentDe(r.escena))
+    .map(r => ({ r, x: r.diagnostico.fw_p50, y: r.metricas.psnr - tentDe(r.escena).metricas.psnr }));
+  if (!pts.length) return;
+
+  const W = 1000, H = 330, ML = 62, MR = 22, MT = 22, MB = 46;
+  const pw = W - ML - MR, ph = H - MT - MB;
+  const lx = v => Math.log10(v);
+  const xlo = lx(Math.min(...pts.map(p => p.x))) - .12, xhi = lx(Math.max(...pts.map(p => p.x))) + .12;
+  const ymax = Math.max(...pts.map(p => Math.abs(p.y))) * 1.35;
+  const X = v => ML + (lx(v) - xlo) / (xhi - xlo) * pw;
+  const Y = v => MT + (ymax - v) / (2 * ymax) * ph;
+
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img',
+    'aria-label': 'Régimen de la onda contra la diferencia de PSNR frente al tent, por run del kernel átomo' });
+
+  for (const t of ticks(-ymax, ymax, 6)) {
+    svg.appendChild(el('line', { x1: ML, x2: W - MR, y1: Y(t), y2: Y(t), stroke: 'var(--grid)', 'stroke-width': 1 }));
+    svg.appendChild(el('text', { x: ML - 10, y: Y(t) + 4, 'text-anchor': 'end', fill: 'var(--ink-3)', 'font-size': 11,
+      style: 'font-variant-numeric:tabular-nums' }, t.toFixed(2)));
+  }
+  for (const d of [0.1, 0.2, 0.5, 1, 2]) {
+    if (lx(d) < xlo || lx(d) > xhi) continue;
+    svg.appendChild(el('line', { x1: X(d), x2: X(d), y1: MT, y2: MT + ph, stroke: 'var(--grid)', 'stroke-width': 1 }));
+    svg.appendChild(el('text', { x: X(d), y: MT + ph + 18, 'text-anchor': 'middle', fill: 'var(--ink-3)', 'font-size': 11 }, String(d)));
+  }
+  // la línea del tent: y = 0
+  svg.appendChild(el('line', { x1: ML, x2: W - MR, y1: Y(0), y2: Y(0), stroke: 'var(--ink)', 'stroke-width': 2 }));
+  svg.appendChild(el('text', { x: W - MR, y: Y(0) - 8, 'text-anchor': 'end', fill: 'var(--ink)', 'font-size': 11.5, 'font-weight': 600 },
+    'el tent de cada escena'));
+
+  svg.appendChild(el('text', { x: ML, y: 12, fill: 'var(--ink-3)', 'font-size': 11.5 }, 'Δ PSNR contra el tent (dB)'));
+  svg.appendChild(el('text', { x: ML + pw / 2, y: H - 6, 'text-anchor': 'middle', fill: 'var(--ink-3)', 'font-size': 11.5 },
+    'f·W mediano — anchuras de onda dentro de la huella del splat (escala log)'));
+
+  // identidad con una etiqueta corta por punto; el VALOR va al tooltip, no
+  // impreso sobre cada marca (un número en cada punto no se lee y se solapa)
+  for (const p of pts) {
+    const c = ESC_COLOR[p.r.escena] || 'var(--s1)';
+    p.cx = X(p.x); p.cy = Y(p.y);
+    svg.appendChild(el('circle', { cx: p.cx, cy: p.cy, r: 7, fill: c, stroke: 'var(--surface)', 'stroke-width': 2 }));
+    svg.appendChild(el('text', { x: p.cx, y: p.cy - 14, 'text-anchor': 'middle', fill: 'var(--ink)', 'font-size': 11,
+      'font-weight': 600 }, p.r.etiqueta.replace('run ', 'r')));
+  }
+
+  const tip = h('div', { class: 'tip' });
+  const box = h('div', { class: 'chart' }, [tip, svg]);
+  svg.addEventListener('mousemove', ev => {
+    const rect = svg.getBoundingClientRect();
+    const sx = (ev.clientX - rect.left) / rect.width * W, sy = (ev.clientY - rect.top) / rect.height * H;
+    let best = null, bd = Infinity;
+    for (const p of pts) { const d = (p.cx - sx) ** 2 + (p.cy - sy) ** 2; if (d < bd) { bd = d; best = p; } }
+    if (!best || bd > 1200) { tip.style.opacity = 0; return; }
+    const t = tentDe(best.r.escena), d = best.r.diagnostico;
+    tip.innerHTML = '';
+    tip.appendChild(h('b', {}, best.r.etiqueta + ' · ' + best.r.escena));
+    const fila = (a, b) => tip.appendChild(h('div', { class: 'row' }, [h('span', {}, a), h('span', {}, b)]));
+    fila('Δ PSNR vs ' + t.etiqueta, signo(best.y, 3) + ' dB');
+    fila('f·W p50 / p90', d.fw_p50 + ' / ' + d.fw_p90);
+    fila('Apagados', d.apagados + ' %');
+    fila('f1', best.r.gabor.f1 + ' (' + best.r.gabor.f1_origen + ')');
+    fila('N splats', miles(best.r.modelo.n_splats));
+    tip.style.opacity = 1;
+    const bx = box.getBoundingClientRect();
+    let left = ev.clientX - bx.left + 16;
+    if (left + 220 > bx.width) left = ev.clientX - bx.left - 236;
+    tip.style.left = Math.max(0, left) + 'px';
+    tip.style.top = Math.max(0, ev.clientY - bx.top - 10) + 'px';
+  });
+  svg.addEventListener('mouseleave', () => tip.style.opacity = 0);
+  cont.appendChild(box);
+
+  const lg = document.getElementById('wavelegend'); lg.innerHTML = '';
+  for (const e of ['flowers', 'bonsai', 'kitchen']) {
+    if (!pts.some(p => p.r.escena === e)) continue;
+    lg.appendChild(h('span', {}, [h('span', { class: 'dot', style: 'background:' + ESC_COLOR[e] }), e]));
+  }
+  lg.appendChild(h('span', {}, [h('span', { class: 'rule-key', style: 'color:var(--ink)' }), 'empate con el tent']));
+
+  document.getElementById('wavenote').textContent =
+    'Los puntos de una misma escena se mueven en horizontal y no en vertical: kitchen recorre 8× de f·W ' +
+    '(de 0,185 a 1,600) sin salir de −0,3 dB, y flowers 4× sin salir del empate. El régimen de la onda no ' +
+    'es lo que separa ganar de perder — lo que lo separa es la escena.';
+}
+
+/* ══ tema ═════════════════════════════════════════════════════════════ */
+document.getElementById('themebtn').addEventListener('click', () => {
+  const actual = document.documentElement.getAttribute('data-theme');
+  const oscuro = actual ? actual === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.setAttribute('data-theme', oscuro ? 'light' : 'dark');
+  if (DATA) { redibujar(); pintarOnda(); pintarEscenas(); }
+});
+
+cargar();
+</script>
+</body>
+</html>
